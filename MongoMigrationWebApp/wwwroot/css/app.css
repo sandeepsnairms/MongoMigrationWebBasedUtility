@@ -1,0 +1,58 @@
+﻿.tooltip-text {
+    text-decoration: underline; /* Add underline to indicate interactivity */
+    color: #007bff; /* Optional: Add a blue color similar to a link */
+}
+
+.tooltip-text:hover {
+    text-decoration: none; /* Remove underline on hover for a clean look */
+    color: #0056b3; /* Darker blue on hover for a subtle effect */
+}
+
+.modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.75); /* Adjust opacity if needed */
+}
+
+/* Console output table styles */
+.table.console-output {
+    background-color: black;
+    color: white;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px; /* Adjust font size here */
+}
+
+.table.message-output {
+    background-color: grey;
+    color: black;
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px; /* Adjust font size here */
+}
+
+
+.table.console-output th,.table.message-output th {
+    border: 1px solid gray;
+    padding: 8px;
+}
+
+.table.console-output td, .table.message-output td {
+    border: 0px solid gray;
+    padding: 8px;
+}
+
+.table.console-output th, .table.message-output th {
+    background-color: #333;
+}
+
+.table.console-output tr.error-row, .table.message-output tr.error-row {
+    color: red;
+}
+
+.table.console-output tr.warning-row, .table.message-output tr.error-row {
+    color: yellow;
+}

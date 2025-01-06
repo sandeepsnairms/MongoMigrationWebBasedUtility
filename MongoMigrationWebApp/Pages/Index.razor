@@ -1,0 +1,266 @@
+﻿@page "/"
+@inject Service.JobManager JobManager
+
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JS
+@inject Service.FileService FileService
+@inject HttpClient HttpClient
+
+@using MongoMigrationWebApp.Components
+@using OnlineMongoMigrationProcessor
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3 class="mb-0">
+        <button class="btn btn-light" title="Download Jobs JSON" @onclick="DownloadFile" style="border: none; background: transparent;">
+            <i class="bi bi-download"></i>
+        </button>
+        Migration Jobs</h3>
+    <div class="d-flex align-items-center mb-3">
+        <button class="btn btn-primary" title="New Job" @onclick="StartMigrationAsync">New Job</button>
+        <button class="btn btn-light" title="Edit Migration Settings" @onclick="OpenConfig" style="border: none; background: transparent;">
+            <i class="bi bi-gear"></i>
+        </button>
+    </div>
+
+</div>
+@if (_loadingComplete==true)
+{
+    @if (migrationJobs?.Count == 0)
+    {
+        <div>No migrations could be found</div>
+    }
+    else
+    {
+        <table class="table">
+            <thead>
+                <tr>
+                    <th> &nbsp;&nbsp;&nbsp;&nbsp;</th>
+                    <th>Name</th>
+                    <th>Started On</th>
+                    <th>Endpoints</th>
+                    <th>Is Online</th>
+                    <th>Is Completed</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var migration in JobManager.GetMigrations())
+                {
+                    <tr>
+                        <td>
+                            @if (migration.CurrentlyActive == true && JobManager.migrationWorker!=null && JobManager.migrationWorker.ProcessRunning)
+                            {
+                                <i class="bi bi-star-fill text-warning"></i>
+                            }        
+                        </td>                        
+                        <td>@migration.Name</td>
+                        <td>@migration.StartedOn</td>
+                        <td class="tooltip-text" title="@migration.NameSpaces">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
+                        <td>@migration.IsOnline</td>
+                        <td>@migration.IsCompleted</td>
+                        <td>                            
+                            <button class="btn btn-primary" title="View Job" @onclick="() => ViewMigration(migration.Id)">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                            <button class="btn btn-secondary" title="Delete Job" @onclick="() => RemoveMigration(migration.Id)" >
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+
+        <script>
+            function downloadFile(fileBytes, fileName, contentType) {
+            const blob = new Blob([new Uint8Array(fileBytes)], { type: contentType });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = fileName;
+            link.click();
+            URL.revokeObjectURL(link.href);
+            }
+        </script>
+    }
+}
+
+@if (_MigrationDetailsPopUpOpen)
+{    
+    <MigrationDetails NewMode=true OnSubmit="@OnMigrationDetailsPopUpSubmit" />   
+}
+
+
+@if (_YesNoDialogOpen)
+{
+    <YesNoDialog Type="YesNoDialog.Category.DeleteNot" Caption="Confirm Delete" Message="@_Message" OnClose="@YesNoDialogSubmit"  />
+}
+
+@if (_MessageDialogOpen)
+{
+    <YesNoDialog Type="YesNoDialog.Category.Okay" Caption="Message" Message="@_Message" OnClose="@YesNoDialogSubmit"  />
+}
+
+@if (_EditSettingsOpen)
+{
+    <MigrationSettings Configuration="@GetConfig()" OnConfigurationSaved="HandleConfigurationSaved" />
+}
+
+@code {
+
+    #pragma warning disable CS8603
+#pragma warning disable CS8604
+
+    private bool _MigrationDetailsPopUpOpen;
+    private bool _YesNoDialogOpen;
+    private bool _MessageDialogOpen;
+    private bool _EditSettingsOpen;
+
+    private string _Message=string.Empty;
+
+    private OnlineMongoMigrationProcessor.MigrationJob? _SelectedMigrationJob;
+
+    private List<OnlineMongoMigrationProcessor.MigrationJob>?  migrationJobs;
+
+    private bool _loadingComplete;
+
+#pragma warning disable CS1998
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadingComplete == true)
+            return;
+
+        _loadingComplete = false;
+
+        migrationJobs = JobManager.GetMigrations();
+
+        _loadingComplete = true;
+
+    }
+#pragma warning restore CS1998
+#pragma warning disable CS8602
+
+    private async Task DownloadFile()
+    {
+
+        var url = $"/api/File/download/Jobs"; 
+        var response = await HttpClient.GetAsync(url);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var fileBytes = await response.Content.ReadAsByteArrayAsync();
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+
+            // Use JavaScript to trigger the file download
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, "MigrationJobs.json", contentType);
+        }
+        else
+        {
+            Console.Error.WriteLine($"Failed to download log file: Jobs.json");
+        }
+    }
+
+    private void RemoveMigration(string? id)
+    {
+        var migrationJob = JobManager.GetMigrations().Find(m => m.Id == id);
+        _SelectedMigrationJob = migrationJob;
+        if (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.ProcessRunning)
+        {
+            _Message = "Are you sure you want to delete " + _SelectedMigrationJob.Name + " ?";
+            _YesNoDialogOpen = true;
+        }
+        else
+        {
+            _Message = "Can't delete active job" + _SelectedMigrationJob.Name + ". Please stop the job and try again.";
+            _MessageDialogOpen = true;
+        }
+    }
+
+
+    private void YesNoDialogSubmit(bool approved)
+    {
+        if (_MessageDialogOpen)
+        {
+            _MessageDialogOpen = false;
+            return;
+        }
+        else
+        {
+            _YesNoDialogOpen = false;
+
+            if (approved && (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.ProcessRunning))
+            {
+                if (_SelectedMigrationJob != null)
+                {
+                    // try
+                    // {
+                    //     Task.Run(() =>
+                    //        {
+                    //            JobManager.ClearJobFiles(_SelectedMigrationJob.Id);
+                    //        });
+                    // }
+                    // catch { }
+                }
+                JobManager.GetMigrations().Remove(_SelectedMigrationJob);
+
+            }
+
+
+
+            _SelectedMigrationJob = null;
+        }
+    }
+
+    private OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
+    {
+        if (JobManager.migrationWorker.Config == null)
+        {
+            JobManager.migrationWorker.Config = new  OnlineMongoMigrationProcessor.MigrationSettings();
+            JobManager.migrationWorker.Config.Load();
+        }
+
+        return JobManager.migrationWorker.Config;
+    }
+    private async Task OpenConfig()
+    {
+        _EditSettingsOpen = true;
+    }
+
+    private void HandleConfigurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
+    {
+
+        _EditSettingsOpen = false;
+
+        if (updatedConfig != null)
+        {
+            JobManager.migrationWorker.Config = updatedConfig;
+            JobManager.migrationWorker.Config.Save();
+            Console.WriteLine($"Configuration updated: {updatedConfig.MongoToolsDownloadURL}");
+        }
+    }
+
+    private void ViewMigration(string? id)
+    {
+        NavigationManager.NavigateTo($"/migrationjobviewer/{id}");
+    }
+
+    private void StartMigrationAsync()
+    {
+        _SelectedMigrationJob = null;
+        _MigrationDetailsPopUpOpen = true;
+
+    }
+
+    private void OnMigrationDetailsPopUpSubmit(OnlineMongoMigrationProcessor.MigrationJob job)
+    {
+        _MigrationDetailsPopUpOpen = false;
+        if(job!=null)
+        {
+            if (_SelectedMigrationJob == null)
+            {
+                JobManager.GetMigrations().Add(job);
+                JobManager.Save();
+                ViewMigration(job.Id);
+            }
+        }
+    }
+}

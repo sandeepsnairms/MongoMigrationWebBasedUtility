@@ -1,0 +1,83 @@
+﻿@using OnlineMongoMigrationProcessor
+@using System.Text.RegularExpressions;
+
+<div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
+    <div class="modal-dialog bg-dark">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title">Edit Configuration Settings</h4>
+                <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button> 
+            </div>
+            <div class="modal-body">  
+                <div class="mb-3">
+                    <label for="mongo-url" class="form-label">Mongo Tools Download URL:</label>
+                    <input type="text" id="mongo-url" class="form-control" @bind="Configuration.MongoToolsDownloadURL" />
+                </div>
+                <div class="mb-3">
+                    <label for="has-uuid" class="form-label">UUID used in _id :</label>
+                    <input type="checkbox" id="has-uuid" @bind="Configuration.HasUUID" />
+                </div>
+                <div class="mb-3">
+                    <label for="chunk-size" class="form-label">Chunk Size (in MB):</label>
+                    <input type="number" id="chunk-size" class="form-control" @bind="Configuration.ChunkSizeInMB" />
+                </div>
+
+                @if (!string.IsNullOrEmpty(ErrorMessage))
+                {
+                    <div class="alert alert-danger mt-2">@ErrorMessage</div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary"
+                @onclick=@HandleSubmit>
+                    Ok
+                </button>
+                <button type="button" class="btn btn-secondary"
+                @onclick="@Cancel">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code
+{
+    [Parameter]
+    public OnlineMongoMigrationProcessor.MigrationSettings? Configuration { get; set; } 
+
+    [Parameter]
+    public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings> OnConfigurationSaved { get; set; }
+
+    private string ErrorMessage = string.Empty;
+
+    private void HandleSubmit()
+    {
+        if(Configuration.ChunkSizeInMB<2 || Configuration.ChunkSizeInMB>5120)
+        {
+            ErrorMessage = "Chunk Size (in MB) should be between 2 and 5120.";
+            return;
+        }
+
+        if (!Regex.Match(Configuration.MongoToolsDownloadURL, @"^https://.*\.zip$").Success)
+        {
+            ErrorMessage = "URL must start with 'https://' and end with '.zip'.";
+            return;
+        }
+
+        if (OnConfigurationSaved.HasDelegate)
+        {
+            OnConfigurationSaved.InvokeAsync(Configuration);
+        }
+    }
+
+    private void Cancel()
+    {
+        if (OnConfigurationSaved.HasDelegate)
+        {
+            OnConfigurationSaved.InvokeAsync(null);
+        }
+    }
+}
+
+

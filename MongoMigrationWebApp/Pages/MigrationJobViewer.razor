@@ -1,0 +1,404 @@
+﻿@page "/migrationjobviewer/{jobId}"
+
+@using OnlineMongoMigrationProcessor;
+@using MongoMigrationWebApp.Components
+@inject Service.JobManager JobManager
+@inject NavigationManager NavigationManager
+@inject IJSRuntime JS
+@inject Service.FileService FileService
+@inject HttpClient HttpClient
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h3>
+        <button class="btn btn-light" @onclick="GoBack" title="Back to Job List" style="border: none; background: transparent;">
+            <i class="bi bi-arrow-left"></i>
+        </button> @migrationJob?.Name - Job Status
+    </h3>
+    <div class="d-flex align-items-center mb-3">
+        @if (migrationJob !=null && !migrationJob.IsCompleted && !migrationJob.CurrentlyActive && (migrationJob.IsStarted || (JobManager.migrationWorker != null && !JobManager.migrationWorker.ProcessRunning)))
+        {
+            <button class="btn btn-primary mx-2" title="Resume Job" @onclick="ResumeJob">Resume Job</button>
+        }
+
+        @if (migrationJob!=null && !migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && JobManager.migrationWorker != null && JobManager.migrationWorker.ProcessRunning)
+        {
+            <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
+            @if (migrationJob.IsOnline)
+            {
+                <button class="btn btn-warning mx-2" title="Perform Cut Over" @onclick="CompleteJob" disabled="@(!CheckCutoverReadiness())">Cut Over</button>
+            }
+            <button class="btn btn-toolbar" title="Refresh" @onclick="Refresh">
+                <i class="bi bi-arrow-repeat"></i>
+            </button>
+        }
+
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="alert alert-danger mt-2">@ErrorMessage</div>
+}
+
+
+@if (_MigrationDetailsPopUpOpen && migrationJob!=null)
+{
+    <MongoMigrationWebApp.Components.MigrationDetails NewMode=false Name="@migrationJob?.Name"
+    IsOnline="@migrationJob.IsOnline"
+    SourceEndpoint="@migrationJob.SourceEndpoint"
+    TargetEndpoint="@migrationJob.TargetEndpoint"
+    NameSpaces="@migrationJob.NameSpaces"
+    OnSubmit="@OnMigrationDetailsPopUpSubmit" />
+
+}
+
+@if (_YesNoDialogOpen)
+{
+    <YesNoDialog Type="YesNoDialog.Category.CutoverNot" Caption="Confirmation Required"  Message="@_Message" OnClose="@YesNoDialogSubmit"  />
+}
+
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Database Name</th>
+            <th>Collection Name</th>
+            <th>Download Status</th>
+            <th>Upload Status</th>
+            <th>Time Since Update</th>
+        </tr>
+    </thead>
+    <tbody>
+        @if (migrationJob!=null && migrationJob.MigrationUnits != null)
+        {
+            @foreach (var unit in migrationJob.MigrationUnits)
+            {
+                <tr>
+                    <td>@unit.DatabaseName</td>
+                    <td>@unit.CollectionName</td>
+                    <td>
+                        @(unit.DumpComplete ? "Sucess" : $"{unit.DumpPercent:F1}%")
+                    </td>
+                    <td>
+                        @(unit.RestoreComplete || unit.RestorePercent==100 ? "Sucess" : $"{unit.RestorePercent:F1}%")
+                    </td>
+                    <td>
+                        @GetChangeStreamLag(unit.cursorUtcTimestamp)
+                    </td>
+                </tr>
+            }
+        }
+    </tbody>
+</table>
+
+<h5 class="pt-4">
+    Monitor
+</h5>
+<div>
+    <table class="table message-output">
+        <tbody>
+            @if (LogBucket !=null && LogBucket.GetVerboseMessages() != null && LogBucket.GetVerboseMessages().Count > 0)
+            {
+                @foreach (var logObject in LogBucket.GetVerboseMessages())
+                {
+                    <tr class="@GetRowClass(logObject.Type.ToString(), logObject.Message)">
+                        <td>
+                            @if(string.IsNullOrEmpty(logObject.Message))
+                            {
+                                <span>&nbsp;</span>
+                            }
+                            else
+                            {
+                                <span>@logObject.Datetime - @logObject.Message</span>
+                            }
+                        </td>
+                    </tr>
+                }
+
+            }
+        </tbody>
+    </table>
+</div>
+
+
+@if (LogBucket!=null && LogBucket.Logs != null)
+{
+    <h5 class=" pt-4">
+        <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
+            <i class="bi bi-download"></i>
+        </button> Logs
+    </h5>
+
+
+    <table class="table console-output">
+        <thead>
+            <tr>
+                <th style="width: 150px;">Date Time</th>
+                <th>Message</th>
+            </tr>
+        </thead>
+        <tbody>
+
+            @foreach (var logObject in LogBucket.Logs.Skip(Math.Max(0, LogBucket.Logs.Count - 200)).Reverse())  // Reverse the last 200 items 
+            {
+                <tr class="@GetRowClass(logObject.Type.ToString(),logObject.Message)">
+                    <td>@logObject.Datetime</td>
+                    <td>@logObject.Message</td>
+                </tr>
+            }                
+
+            @if (LogBucket.Logs.Count > 250)
+            {
+                <tr>
+                    <td> ....</td>
+                    <td> ..... </td>
+                </tr>
+
+                @foreach (var logObject in LogBucket.Logs.Take(10).Reverse()) // Reverse the top 10 items
+                {
+                    <tr class="@GetRowClass(logObject.Type.ToString(),logObject.Message)">
+                        <td style="width: 120px;">@logObject.Datetime</td>
+                        <td>@logObject.Message</td>
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+
+    <script>
+        function downloadFile(fileBytes, fileName, contentType) {
+            const blob = new Blob([new Uint8Array(fileBytes)], { type: contentType });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = fileName;
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }
+    </script>
+}
+@code {
+
+#pragma warning disable CS8602
+#pragma warning disable CS8603
+#pragma warning disable CS8604
+
+
+    [Parameter]
+    public string? JobId { get; set; }
+
+    [Parameter]
+    public MigrationJob? migrationJob { get; set; }
+
+    [Parameter]
+    public LogBucket? LogBucket { get; set; }
+
+    private string ErrorMessage=string.Empty;
+
+    private bool _MigrationDetailsPopUpOpen;
+
+    private Timer? RefreshTimer;
+
+    private string _Message=string.Empty;
+
+    private bool _YesNoDialogOpen;
+       
+
+    private string GetRowClass(string type, string message)
+    {
+        string rowClass = string.Empty;
+
+        if (message.Contains("warning") || message.Contains("failure") || message.Contains("error") || message.Contains("failed"))
+        {
+            rowClass = "warning-row"; // Change to warning-row if any condition matches
+        }
+
+        if (type == "Error")
+            rowClass = "error-row"; // Assign the default row class
+
+        return rowClass;
+    }
+
+
+    private void GoBack()
+    {
+        NavigationManager.NavigateTo("/"); // Navigate back to the previous page
+    }
+
+
+    private void StartAutoRefresh()
+    {
+        RefreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
+    }
+
+ 
+    private async Task DownloadFile()
+    {
+     
+        var url = $"/api/File/download/log/{JobId}"; // Adjust the API URL if needed
+        var response = await HttpClient.GetAsync(url);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var fileBytes = await response.Content.ReadAsByteArrayAsync();
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+
+            // Use JavaScript to trigger the file download
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{JobId}.json", contentType);
+        }
+        else
+        {
+            Console.Error.WriteLine($"Failed to download log file: {JobId}.json");
+        }
+    }
+
+    private void Refresh(object? state)
+    {
+        migrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
+        LogBucket = JobManager.GetLogBucket(JobId);
+
+        InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
+    }
+
+    private string GetChangeStreamLag(DateTime cursorUtcTimestamp)
+    {
+        if (cursorUtcTimestamp == DateTime.MinValue)
+        {
+            return "NA";
+        }
+
+        var currentUtc = DateTime.UtcNow;
+        var lag = currentUtc - cursorUtcTimestamp;
+
+        if(lag.TotalSeconds < 0)
+        {
+            return "Invalid";
+        }
+
+        return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+    }
+
+
+    private bool CheckCutoverReadiness()
+    {
+        if (migrationJob.MigrationUnits == null) return false;
+        foreach (var item in migrationJob.MigrationUnits)
+        {
+            if (item.DumpPercent != 100 || item.RestorePercent != 100)
+                return false;
+        }
+        return true;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        migrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
+        LogBucket = JobManager.GetLogBucket(JobId);
+
+        if (!migrationJob.IsStarted || (!migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && !IsJobRunning()))
+        {
+            ResumeJob();
+        }
+        if (!migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && IsJobRunning())
+        {
+            StartAutoRefresh();
+        }
+    }
+
+
+    private async Task OnMigrationDetailsPopUpSubmit(OnlineMongoMigrationProcessor.MigrationJob job)
+    {
+        _MigrationDetailsPopUpOpen = false;
+        Thread.Sleep(100);
+        if (job != null)
+        {
+
+            migrationJob.SourceConnectionString = job.SourceConnectionString;
+            migrationJob.TargetConnectionString = job.TargetConnectionString;
+
+            migrationJob.CurrentlyActive = true;
+            migrationJob.IsCancelled = false;
+
+
+            if (!migrationJob.StartedOn.HasValue)
+                migrationJob.StartedOn = System.DateTime.Now;
+
+            migrationJob.IsStarted = true;
+
+            StartAutoRefresh();
+
+            JobManager.Save();
+
+
+            // Run the long task on a separate thread
+            await Task.Run(() =>
+            {
+                JobManager.DisposeLogs();
+#pragma warning disable CS4014
+                JobManager.migrationWorker.StartMigrationAsync(migrationJob, migrationJob.SourceConnectionString, migrationJob.TargetConnectionString, migrationJob.NameSpaces, true, migrationJob.IsOnline);
+            });
+        }
+        else
+            migrationJob.CurrentlyActive = false;
+    }
+
+
+    private async Task ResumeJob()
+    {
+        if (!JobManager.migrationWorker.ProcessRunning && NoOtherActiveJobs())
+        {
+            if (string.IsNullOrEmpty(migrationJob.SourceConnectionString) || string.IsNullOrEmpty(migrationJob.TargetConnectionString))
+                _MigrationDetailsPopUpOpen = true;
+            else
+                await OnMigrationDetailsPopUpSubmit(migrationJob);
+        }
+        else
+        {
+            ErrorMessage = "Please stop active job, before starting/resuming a job.";
+        }
+    }
+
+    private bool IsJobRunning()
+    {
+        return JobManager.migrationWorker.ProcessRunning;
+    }
+
+    private void CompleteJob()
+    {
+        _Message = "You  can't resume a job after its cutover. Are you sure you want to cutover ?";
+        _YesNoDialogOpen = true;        
+    }
+    private void YesNoDialogSubmit(bool approved)
+    {
+        _YesNoDialogOpen = false;
+        if (approved)
+        {           
+            JobManager.migrationWorker.StopMigration();
+            migrationJob.IsCancelled = true;
+            migrationJob.IsCompleted = true;
+            migrationJob.CurrentlyActive = false;
+            JobManager.Save();
+            RefreshTimer = null;
+        }
+    }
+
+    private void PauseJob()
+    {   
+        JobManager.migrationWorker.StopMigration();
+        migrationJob.IsCancelled = true;
+        migrationJob.CurrentlyActive = false;
+        JobManager.Save();
+        RefreshTimer = null;
+    }
+
+    private bool NoOtherActiveJobs()
+    {
+        foreach(var job in JobManager.GetMigrations())
+        {
+            if (job.CurrentlyActive == true && job.Id != JobId)
+            return false;
+        }
+        return true;
+    }
+
+
+}
