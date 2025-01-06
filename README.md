@@ -49,8 +49,7 @@ Clone the repository:
 
 1. Open PowerShell.
 2. Navigate to the cloned project folder.
-3. Refer to [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
-4. Run the following commands in PowerShell:
+3. Run the following commands in PowerShell:
 
    ```powershell
    # Variables to be updated
@@ -88,7 +87,8 @@ Clone the repository:
    Write-Host "Deployment completed successfully!"
    ```
 
-5. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
+4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
+5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
 ## Steps to Enable Private Endpoint on the Azure Web App (Optional)
 
