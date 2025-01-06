@@ -1,6 +1,6 @@
 # Migration Tool for Azure Cosmos DB for MongoDB (vCore-Based)
 
-Simplify your migration journey to **Azure Cosmos DB for MongoDB (vCore-based)** with a tool designed for efficiency, reliability, and ease of use. Whether migrating data online or offline, this tool provides a seamless experience tailored to your needs.
+Streamline your migration to Azure Cosmos DB for MongoDB (vCore-based) with a tool built for efficiency, reliability, and ease of use. Whether you're migrating data online or offline, this tool delivers a seamless experience tailored to your requirements. While it leverages `mongodump` and `mongorestore` internally for data transfer, you don’t need to learn or use these command-line tools yourself.
 
 ## Key Features
 
@@ -31,12 +31,19 @@ Simplify your migration journey to **Azure Cosmos DB for MongoDB (vCore-based)**
 
 Effortlessly migrate your MongoDB collections while maintaining control, security, and scalability. Begin your migration today and unlock the full potential of Azure Cosmos DB!
 
-## Deployment Steps
+### Deployment Steps
+
+#### Prerequisites
+
+1. Azure Subscription
+1. Azure CLI Installed
+1. PowerShell
+1. .NET SDK
 
 ### Clone the GitHub Repository
 
 Clone the repository:  
-`https://github.com/sandeepsnairms/cosmos-mongo-migrate-tovcore`
+`https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
 
 ### Deploy the App to Azure Web App
 
