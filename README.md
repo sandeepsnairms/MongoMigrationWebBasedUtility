@@ -38,7 +38,7 @@ Effortlessly migrate your MongoDB collections while maintaining control, securit
 1. Azure Subscription
 1. Azure CLI Installed
 1. PowerShell
-1. .NET SDK
+1. [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0)
 
 ### Clone the GitHub Repository
 
@@ -72,6 +72,11 @@ Clone the repository:
    # Deploy Azure Web App
    Write-Host "Deploying Azure Web App..."
    az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
+
+
+   # Configure Nuget Path. Execute only once on a machine
+   dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
+
 
    # Build the Blazor app
    Write-Host "Building Blazor app..."
