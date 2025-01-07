@@ -80,7 +80,8 @@ Clone the repository:
 
    # Build the Blazor app
    Write-Host "Building Blazor app..."
-   dotnet publish $projectFilePath -c Release -o $publishFolder
+   dotnet publish $projectFilePath -c Release -o $publishFolder -warnaserror:none --nologo
+
 
    # Archive published files
    Compress-Archive -Path "$publishFolder\*" -DestinationPath $zipPath -Update
