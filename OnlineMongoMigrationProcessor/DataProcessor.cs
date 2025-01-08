@@ -60,6 +60,7 @@ namespace OnlineMongoMigrationProcessor
 
             bool restoreInvoked = false;
 
+
             DateTime MigrationJobStartTime = DateTime.Now;
 
             Log.WriteLine($"{dbName}.{colName} Downloader started");
@@ -136,8 +137,7 @@ namespace OnlineMongoMigrationProcessor
                                 var task = Task.Run(() => PExecutor.Execute(Jobs, item, item.MigrationChunks[i], initialPercent, contributionfactor, docCount, $"{toolsLaunchFolder}\\mongodump.exe", args));
                                 task.Wait(); // Wait for the task to complete
                                 bool result = task.Result; // Capture the result after the task completes
-
-                                //if (ProcessExecutor.Execute(Jobs, item, item.MigrationChunks[i], initialPercent, contributionfactor, docCount, $"{toolsLaunchFolder}\\mongodump.exe", args))
+                                                                
                                 if (result)
                                 {
                                     continueProcessing = false;
@@ -213,6 +213,16 @@ namespace OnlineMongoMigrationProcessor
                 item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
                 item.DumpPercent = 100;
                 item.DumpComplete = true;
+            }
+            else if (item.DumpComplete && !ExecutionCancelled)
+            {
+                if (!restoreInvoked)
+                {
+                    Log.WriteLine($"{dbName}.{colName} Uploader invoked");
+
+                    restoreInvoked = true;
+                    Task.Run(() => Upload(item, targetConnectionstring));
+                }
             }
         }
 
