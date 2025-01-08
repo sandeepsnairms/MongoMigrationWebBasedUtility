@@ -18,6 +18,8 @@ namespace OnlineMongoMigrationProcessor
 
         private string filePath=string.Empty;
 
+        private static readonly object _fileLock = new object();
+
         public Joblist()
         {
             if (!System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
@@ -51,10 +53,15 @@ namespace OnlineMongoMigrationProcessor
 
         public bool Save()
         {
+
             try
             {
-                string json = JsonConvert.SerializeObject(this);
-                File.WriteAllText(filePath, json);
+                lock (_fileLock)
+                {
+                    string json = JsonConvert.SerializeObject(this);
+                    File.WriteAllText(filePath, json);                    
+                }
+
                 return true;
             }
             catch (Exception ex)
