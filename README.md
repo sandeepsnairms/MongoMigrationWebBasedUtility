@@ -33,21 +33,22 @@ Effortlessly migrate your MongoDB collections while maintaining control, securit
 
 ### Deployment Steps
 
+You can deploy the utility either by compiling the source files or by using the precompiled binaries.
+
 #### Prerequisites
 
 1. Azure Subscription
 1. Azure CLI Installed
 1. PowerShell
-1. [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0)
 
-### Clone the GitHub Repository
 
-Clone the repository:  
-`https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
+### Deploy using Source Files (option 1)
 
-### Deploy the App to Azure Web App
+This option involves cloning the repository and building the C# project source files locally. If you’re not comfortable working with code, consider using Option 2 below.
 
-1. Open PowerShell.
+1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0)
+2. Clone the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
+2. Open PowerShell.
 2. Navigate to the cloned project folder.
 3. Run the following commands in PowerShell:
 
@@ -69,7 +70,7 @@ Clone the repository:
    # Set subscription (optional)
    # az account set --subscription "your-subscription-id"
 
-   # Deploy Azure Web App
+   # Deploy Azure Web App using Source Code (Option 1)
    Write-Host "Deploying Azure Web App..."
    az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
 
@@ -95,6 +96,39 @@ Clone the repository:
 
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
+
+### Deploy using precompiled binaries (Option 2)
+
+1. Download `app.zip` from the latest release at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`
+2. Open PowerShell.
+3. Run the following commands in PowerShell:
+
+   ```powershell
+   # Variables to be updated
+   $resourceGroupName = <Replace with Existing Resource Group Name>
+   $webAppName = <Replace with Web App Name>
+   $zipPath = <Replace with full path of downloaded zip file on local>
+
+   # Login to Azure
+   az login
+
+   # Set subscription (optional)
+   # az account set --subscription "your-subscription-id"
+
+   # Deploy Azure Web App using Source Code (Option 1)
+   Write-Host "Deploying Azure Web App..."
+   az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
+
+   # Deploy files to Azure Web App
+   Write-Host "Deploying to Azure Web App..."
+   az webapp deploy --resource-group $resourceGroupName --name $webAppName --src-path $zipPath --type zip
+
+   Write-Host "Deployment completed successfully!"
+   ```
+
+4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
+5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
+
 
 ## Steps to Enable Private Endpoint on the Azure Web App (Optional)
 
