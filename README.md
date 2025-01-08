@@ -31,11 +31,11 @@ Streamline your migration to Azure Cosmos DB for MongoDB (vCore-based) with a to
 
 Effortlessly migrate your MongoDB collections while maintaining control, security, and scalability. Begin your migration today and unlock the full potential of Azure Cosmos DB!
 
-### Deployment Steps
+## Deployment Steps
 
 You can deploy the utility either by compiling the source files or by using the precompiled binaries.
 
-#### Prerequisites
+### Prerequisites
 
 1. Azure Subscription
 1. Azure CLI Installed
@@ -97,7 +97,7 @@ This option involves cloning the repository and building the C# project source f
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
-### Deploy using precompiled binaries (Option 2)
+### Deploy using precompiled binaries (option 2)
 
 1. Download `app.zip` from the latest release at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`
 2. Open PowerShell.
