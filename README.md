@@ -44,7 +44,7 @@ You can deploy the utility either by compiling the source files or by using the 
 
 ### Deploy using Source Files (option 1)
 
-This option involves cloning the repository and building the C# project source files locally. If you’re not comfortable working with code, consider using Option 2 below.
+This option involves cloning the repository and building the C# project source files locally on a Windows machine. If you’re not comfortable working with code, consider using Option 2 below.
 
 1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0)
 2. Clone the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
