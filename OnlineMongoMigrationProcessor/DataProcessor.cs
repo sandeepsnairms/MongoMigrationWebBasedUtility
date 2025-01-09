@@ -415,6 +415,7 @@ namespace OnlineMongoMigrationProcessor
 
                             migrationJob.IsCompleted = true;
                             migrationJob.CurrentlyActive = false;
+                            Job.CurrentlyActive = false;
                             ProcessRunning = false;
                             Jobs?.Save();
                         }
