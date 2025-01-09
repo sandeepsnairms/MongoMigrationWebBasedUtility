@@ -192,11 +192,7 @@ This option involves cloning the repository and building the C# project source f
 
 #### 4. Test the Configuration
 
-1. **Verify Outbound IP**:
-   - Use tools like `curl` or custom logging to verify that the outgoing requests use the NAT Gateway's IP.
-   
-2. **Ensure Connectivity**:
-   - Test access to external resources that have been configured with the new IP in their firewall rules.
+   - Test access to MongoDB Source and Destination that have been configured with the new IP in their firewall rules.
 
 
 
