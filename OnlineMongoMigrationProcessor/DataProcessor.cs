@@ -6,6 +6,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
+#pragma warning disable CS8602
+#pragma warning disable CS8604
+#pragma warning disable CS8600
+
 namespace OnlineMongoMigrationProcessor
 {
     internal class DataProcessor
@@ -453,7 +457,7 @@ namespace OnlineMongoMigrationProcessor
             {
 
                 ChangeStreamOptions options;
-                if (item.resumeToken != null)
+                if (item.resumeToken != null || !Job.StartedOn.HasValue)
                 {
                     options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
                 }
@@ -461,6 +465,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
                     options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
+                    
                 }
                 // Open a Change Stream
                 using (var cursor = sourceCollection.Watch(options))

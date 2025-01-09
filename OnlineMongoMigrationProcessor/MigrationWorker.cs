@@ -55,7 +55,7 @@ namespace OnlineMongoMigrationProcessor
         //private MongoClient? targetClient;
 
         MigrationJob? Job;
-        DataProcessor DProcessor;
+        DataProcessor? DProcessor;
 
 
         public string? CurrentJobId { get; set; }
@@ -193,8 +193,8 @@ namespace OnlineMongoMigrationProcessor
                             DProcessor.Download(migrationUnit, sourceConnectionString, targetConnectionString);
                         }
                     }
-                    else
-                        Log.WriteLine("Skipping Bulk Copy");
+                    //else
+                    //    Log.WriteLine("Skipping Bulk Copy");
 
                     continueProcessing = false;
                 }
