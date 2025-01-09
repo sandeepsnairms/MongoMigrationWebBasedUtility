@@ -70,7 +70,7 @@ This option involves cloning the repository and building the C# project source f
    # Set subscription (optional)
    # az account set --subscription "your-subscription-id"
 
-   # Deploy Azure Web App using Source Code (Option 1)
+   # Deploy Azure Web App
    Write-Host "Deploying Azure Web App..."
    az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
 
@@ -115,7 +115,7 @@ This option involves cloning the repository and building the C# project source f
    # Set subscription (optional)
    # az account set --subscription "your-subscription-id"
 
-   # Deploy Azure Web App using Source Code (Option 1)
+   # Deploy Azure Web App 
    Write-Host "Deploying Azure Web App..."
    az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
 
