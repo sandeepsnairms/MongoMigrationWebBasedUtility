@@ -135,22 +135,20 @@ This option involves cloning the repository and building the C# project source f
 
 #### 1. Create a VNet (If Not Already Existing)
 
-1. **Go to the Azure Portal**:
-   - Navigate to the **Create a resource** section.
-
-2. **Create a Virtual Network**:
+1. **Create a Virtual Network**:
+   - Go to **Create a resource** in the Azure Portal.
    - Search for **Virtual Network** and click **Create**.
    - Provide a **Name** for the VNet.
    - Choose the desired **Region** (ensure it matches the Web App's region for integration).
    - Define the **Address Space** (e.g., `10.0.0.0/16`).
 
-3. **Add a Subnet**:
+2. **Add a Subnet**:
    - In the **Subnet** section, create a new subnet.
    - Provide a **Name** (e.g., `WebAppSubnet`).
    - Define the **Subnet Address Range** (e.g., `10.0.1.0/24`).
    - Set the **Subnet Delegation** to `Microsoft.Web` for VNet integration.
 
-4. **Create the VNet**:
+3. **Create the VNet**:
    - Click **Review + Create** and then **Create**.
 
 #### 1. Enable VNet Integration for the Web App
@@ -182,17 +180,9 @@ This option involves cloning the repository and building the C# project source f
 
 3. **Save** the configuration.
 
-#### 3. Configure Outbound IP Rules
+#### 3. Update Firewall Rules
 
-1. **Identify Web App Outbound IPs**:
-   - In the Web App's **Properties** section, note the **Outbound IP Addresses**.
-
-2. **Update Firewall Rules**:
-   - In your firewall (e.g., Azure Firewall, third-party), allow traffic from the single public IP address used by the NAT Gateway.
-
-
-#### 4. Test the Configuration
-
+  - In your firewall (e.g., Azure Firewall, third-party), allow traffic from the single public IP address used by the NAT Gateway.
    - Test access to MongoDB Source and Destination that have been configured with the new IP in their firewall rules.
 
 
