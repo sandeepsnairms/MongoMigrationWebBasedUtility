@@ -175,7 +175,8 @@ This option involves cloning the repository and building the C# project source f
    - Complete the setup.
 
 2. **Create a NAT Gateway**:
-   - Navigate to **Create a resource** > **Networking** > **NAT Gateway**.
+   - Go to **Create a resource** in the Azure Portal.
+   - Search for **NAT Gateway** and click **Create**.
    - Assign a name and link it to the **Public IP Address** created earlier.
    - Attach the NAT Gateway to the same subnet used for the Web App.
 
