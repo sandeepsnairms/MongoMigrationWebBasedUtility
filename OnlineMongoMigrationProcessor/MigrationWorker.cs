@@ -45,8 +45,6 @@ namespace OnlineMongoMigrationProcessor
         //bool BulkCopy = true;
         bool MigrationCancelled = false;
 
-        public bool ProcessRunning { get; set; }
-
         private Joblist? Jobs;
 
         public MigrationSettings? Config;
@@ -60,6 +58,14 @@ namespace OnlineMongoMigrationProcessor
 
         public string? CurrentJobId { get; set; }
 
+        public bool IsProcessRunning()
+        {
+            if (DProcessor == null)
+                return false;
+
+            return DProcessor.ProcessRunning;
+        }
+
         public MigrationWorker(Joblist jobs)
         {
             this.Jobs= jobs;            
@@ -69,7 +75,7 @@ namespace OnlineMongoMigrationProcessor
         {
             MigrationCancelled = true;
             DProcessor.StopProcessing();
-            ProcessRunning = false;
+            DProcessor.ProcessRunning = false;
 
             DProcessor = null;
         }
@@ -102,7 +108,7 @@ namespace OnlineMongoMigrationProcessor
 
             Job = _job;
 
-            ProcessRunning = true;
+
             MigrationCancelled = false;
             CurrentJobId = Job.Id;
 
@@ -164,6 +170,8 @@ namespace OnlineMongoMigrationProcessor
                     if(DProcessor==null)
                         DProcessor = new DataProcessor(Jobs, Job, toolsLaunchFolder, sourceClient);
 
+                    DProcessor.ProcessRunning = true;
+
                     foreach (var unit in Job.MigrationUnits)
                     {
                         if (MigrationCancelled)
@@ -206,11 +214,11 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
                         Log.Save();
-
+                    
                         Job.CurrentlyActive = false;
                         Jobs?.Save();
 
-                        ProcessRunning = false;
+                        DProcessor.ProcessRunning = false;
                     }
 
                     // Wait for the backoff duration before retrying
@@ -230,7 +238,7 @@ namespace OnlineMongoMigrationProcessor
                     Job.CurrentlyActive = false;
                     Jobs?.Save();
                     continueProcessing = false;
-                    ProcessRunning = false;
+                    DProcessor.ProcessRunning = false;
                 }
 
             }

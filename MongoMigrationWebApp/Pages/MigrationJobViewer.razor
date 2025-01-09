@@ -15,12 +15,12 @@
         </button> @migrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (migrationJob !=null && !migrationJob.IsCompleted && !migrationJob.CurrentlyActive && (migrationJob.IsStarted || (JobManager.migrationWorker != null && !JobManager.migrationWorker.ProcessRunning)))
+        @if (migrationJob !=null && !migrationJob.IsCompleted && !migrationJob.CurrentlyActive && (migrationJob.IsStarted || (JobManager.migrationWorker != null && !JobManager.migrationWorker.IsProcessRunning())))
         {
             <button class="btn btn-primary mx-2" title="Resume Job" @onclick="ResumeJob">Resume Job</button>
         }
 
-        @if (migrationJob!=null && !migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && JobManager.migrationWorker != null && JobManager.migrationWorker.ProcessRunning)
+        @if (migrationJob!=null && !migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && JobManager.migrationWorker != null && JobManager.migrationWorker.IsProcessRunning())
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
             @if (migrationJob.IsOnline)
@@ -335,7 +335,7 @@
 
     private async Task ResumeJob()
     {
-        if (!JobManager.migrationWorker.ProcessRunning && NoOtherActiveJobs())
+        if (!JobManager.migrationWorker.IsProcessRunning() && NoOtherActiveJobs())
         {
             if (string.IsNullOrEmpty(migrationJob.SourceConnectionString) || string.IsNullOrEmpty(migrationJob.TargetConnectionString))
                 _MigrationDetailsPopUpOpen = true;
@@ -350,7 +350,7 @@
 
     private bool IsJobRunning()
     {
-        return JobManager.migrationWorker.ProcessRunning;
+        return JobManager.migrationWorker.IsProcessRunning();
     }
 
     private void CompleteJob()

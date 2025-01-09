@@ -48,7 +48,7 @@
                 {
                     <tr>
                         <td>
-                            @if (migration.CurrentlyActive == true && JobManager.migrationWorker!=null && JobManager.migrationWorker.ProcessRunning)
+                            @if (migration.CurrentlyActive == true && JobManager.migrationWorker!=null && JobManager.migrationWorker.IsProcessRunning())
                             {
                                 <i class="bi bi-star-fill text-warning"></i>
                             }        
@@ -154,7 +154,7 @@
     {
         var migrationJob = JobManager.GetMigrations().Find(m => m.Id == id);
         _SelectedMigrationJob = migrationJob;
-        if (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.ProcessRunning)
+        if (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.IsProcessRunning())
         {
             _Message = "Are you sure you want to delete " + _SelectedMigrationJob.Name + " ?";
             _YesNoDialogOpen = true;
@@ -178,7 +178,7 @@
         {
             _YesNoDialogOpen = false;
 
-            if (approved && (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.ProcessRunning))
+            if (approved && (!_SelectedMigrationJob.CurrentlyActive || !JobManager.migrationWorker.IsProcessRunning()))
             {
                 if (_SelectedMigrationJob != null)
                 {
