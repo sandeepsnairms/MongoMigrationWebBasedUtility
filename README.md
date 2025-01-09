@@ -95,7 +95,7 @@ This option involves cloning the repository and building the C# project source f
    ```
 
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
-5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
+5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
 ### Deploy using precompiled binaries (option 2)
 
@@ -127,7 +127,57 @@ This option involves cloning the repository and building the C# project source f
    ```
 
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
-5. [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
+5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
+
+## Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)
+
+### Steps
+
+#### 1. Enable VNet Integration for the Web App
+
+1. **Go to the Web App**:
+   - Navigate to your Azure Web App in the Azure Portal.
+   
+2. **Enable VNet Integration**:
+   - In the left-hand menu, select **Networking**.
+   - Under **Outbound Traffic**, click **VNet Integration**.
+   - Click **Add VNet** and choose an existing VNet and subnet.
+   - Ensure the subnet is delegated to **Microsoft.Web**.
+
+3. **Save** the configuration.
+
+#### 2. Configure a NAT Gateway for the VNet
+
+1. **Create a Public IP Address**:
+   - Go to **Create a resource** in the Azure Portal.
+   - Search for **Public IP Address** and click **Create**.
+   - Assign a name and ensure it's set to **Static**.
+   - Complete the setup.
+
+2. **Create a NAT Gateway**:
+   - Navigate to **Create a resource** > **Networking** > **NAT Gateway**.
+   - Assign a name and link it to the **Public IP Address** created earlier.
+   - Attach the NAT Gateway to the same subnet used for the Web App.
+
+3. **Save** the configuration.
+
+#### 3. Configure Outbound IP Rules
+
+1. **Identify Web App Outbound IPs**:
+   - In the Web App's **Properties** section, note the **Outbound IP Addresses**.
+
+2. **Update Firewall Rules**:
+   - In your firewall (e.g., Azure Firewall, third-party), allow traffic from the single public IP address used by the NAT Gateway.
+
+
+#### 4. Test the Configuration
+
+1. **Verify Outbound IP**:
+   - Use tools like `curl` or custom logging to verify that the outgoing requests use the NAT Gateway's IP.
+   
+2. **Ensure Connectivity**:
+   - Test access to external resources that have been configured with the new IP in their firewall rules.
+
 
 
 ## Steps to Enable Private Endpoint on the Azure Web App (Optional)
