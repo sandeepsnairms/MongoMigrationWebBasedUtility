@@ -133,11 +133,31 @@ This option involves cloning the repository and building the C# project source f
 
 ### Steps
 
+#### 1. Create a VNet (If Not Already Existing)
+
+1. **Go to the Azure Portal**:
+   - Navigate to the **Create a resource** section.
+
+2. **Create a Virtual Network**:
+   - Search for **Virtual Network** and click **Create**.
+   - Provide a **Name** for the VNet.
+   - Choose the desired **Region** (ensure it matches the Web App's region for integration).
+   - Define the **Address Space** (e.g., `10.0.0.0/16`).
+
+3. **Add a Subnet**:
+   - In the **Subnet** section, create a new subnet.
+   - Provide a **Name** (e.g., `WebAppSubnet`).
+   - Define the **Subnet Address Range** (e.g., `10.0.1.0/24`).
+   - Set the **Subnet Delegation** to `Microsoft.Web` for VNet integration.
+
+4. **Create the VNet**:
+   - Click **Review + Create** and then **Create**.
+
 #### 1. Enable VNet Integration for the Web App
 
 1. **Go to the Web App**:
    - Navigate to your Azure Web App in the Azure Portal.
-   
+
 2. **Enable VNet Integration**:
    - In the left-hand menu, select **Networking**.
    - Under **Outbound Traffic**, click **VNet Integration**.
