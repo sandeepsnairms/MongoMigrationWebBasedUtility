@@ -165,11 +165,11 @@
         </tbody>
     </table>
 
-    
+
 }
 @code {
 
-#pragma warning disable CS8602
+    #pragma warning disable CS8602
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 
@@ -192,13 +192,14 @@
     private string _Message=string.Empty;
 
     private bool _YesNoDialogOpen;
-       
+
 
     private string GetRowClass(string type, string message)
     {
         string rowClass = string.Empty;
 
-        if (message.Contains("warning") || message.Contains("failure") || message.Contains("error") || message.Contains("failed"))
+        string lwrMessage = message.ToLower();
+        if (lwrMessage.Contains("warning") || lwrMessage.Contains("failure") || lwrMessage.Contains("error") || lwrMessage.Contains("failed"))
         {
             rowClass = "warning-row"; // Change to warning-row if any condition matches
         }
