@@ -478,7 +478,7 @@ namespace OnlineMongoMigrationProcessor
                         var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
 
                         // Output change details to the console
-                        Log.AddVerboseMessage($"Change detected at {timestamp}");
+                        Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for {change.DocumentKey["_id"]} with TS: {timestamp}");
                         ProcessChange(change, targetCollection);
 
                         item.resumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
