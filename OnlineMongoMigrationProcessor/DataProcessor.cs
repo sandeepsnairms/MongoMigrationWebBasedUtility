@@ -497,25 +497,33 @@ namespace OnlineMongoMigrationProcessor
 
         private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection)
         {
-            switch (change.OperationType)
+            try
             {
-                case ChangeStreamOperationType.Insert:
-                    targetCollection.InsertOne(change.FullDocument);
-                    break;
-                case ChangeStreamOperationType.Update:
-                case ChangeStreamOperationType.Replace:
-                    var filter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
-                    targetCollection.ReplaceOne(filter, change.FullDocument, new ReplaceOptions { IsUpsert = true });
-                    break;
+                switch (change.OperationType)
+                {
+                    case ChangeStreamOperationType.Insert:
+                        targetCollection.InsertOne(change.FullDocument);
+                        break;
+                    case ChangeStreamOperationType.Update:
+                    case ChangeStreamOperationType.Replace:
+                        var filter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                        targetCollection.ReplaceOne(filter, change.FullDocument, new ReplaceOptions { IsUpsert = true });
+                        break;
 
-                case ChangeStreamOperationType.Delete:
-                    var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
-                    targetCollection.DeleteOne(deleteFilter);
-                    break;
+                    case ChangeStreamOperationType.Delete:
+                        var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                        targetCollection.DeleteOne(deleteFilter);
+                        break;
 
-                default:
-                    Log.WriteLine($"Unhandled operation type: {change.OperationType}");
-                    break;
+                    default:
+                        Log.WriteLine($"Unhandled operation type: {change.OperationType}");
+                        break;
+                }
+            }
+            catch(Exception ex)
+            {
+               Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.Message}",LogType.Error);
+               Log.Save();
             }
         }
     }
