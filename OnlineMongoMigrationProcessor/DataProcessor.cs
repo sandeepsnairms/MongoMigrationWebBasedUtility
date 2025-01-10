@@ -443,54 +443,62 @@ namespace OnlineMongoMigrationProcessor
 
         private void ProcessCollectionChangeStream(MigrationUnit item)
         {
-            string databaseName = item.DatabaseName;
-            string collectionName = item.CollectionName;
-
-            var sourceDb = sourceClient.GetDatabase(databaseName);
-            var sourceCollection = sourceDb.GetCollection<BsonDocument>(collectionName);
-
-            var targetDb = targetClient.GetDatabase(databaseName);
-            var targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
-
-            Log.WriteLine($"Replaying change stream for {databaseName}.{collectionName}");
-
-            while (!ExecutionCancelled)
+            try
             {
+                string databaseName = item.DatabaseName;
+                string collectionName = item.CollectionName;
 
-                ChangeStreamOptions options;
-                if (item.resumeToken != null || !Job.StartedOn.HasValue)
+                var sourceDb = sourceClient.GetDatabase(databaseName);
+                var sourceCollection = sourceDb.GetCollection<BsonDocument>(collectionName);
+
+                var targetDb = targetClient.GetDatabase(databaseName);
+                var targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
+
+                Log.WriteLine($"Replaying change stream for {databaseName}.{collectionName}");
+
+                while (!ExecutionCancelled)
                 {
-                    options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
-                }
-                else
-                {
-                    var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
-                    options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
-                    
-                }
-                // Open a Change Stream
-                using (var cursor = sourceCollection.Watch(options))
-                {
-                    // Continuously monitor the change stream
-                    foreach (var change in cursor.ToEnumerable())
+
+                    ChangeStreamOptions options;
+                    if (item.resumeToken != null || !Job.StartedOn.HasValue)
                     {
-                        // Access the ClusterTime (timestamp) from the ChangeStreamDocument
-                        var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
-
-                        // Output change details to the console
-                        Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for {change.DocumentKey["_id"]} with TS: {timestamp}");
-                        ProcessChange(change, targetCollection);
-
-                        item.resumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
-                        item.cursorUtcTimestamp =  MongoHelper.BsonTimestampToUtcDateTime(timestamp);
-                        Jobs?.Save(); //persists state
-
-                        if (ExecutionCancelled) break;
+                        options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
                     }
-                    Log.Save();
-                }
+                    else
+                    {
+                        var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
+                        options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
 
-                System.Threading.Thread.Sleep(100);
+                    }
+                    // Open a Change Stream
+                    using (var cursor = sourceCollection.Watch(options))
+                    {
+                        // Continuously monitor the change stream
+                        foreach (var change in cursor.ToEnumerable())
+                        {
+                            // Access the ClusterTime (timestamp) from the ChangeStreamDocument
+                            var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
+
+                            // Output change details to the console
+                            Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for {change.DocumentKey["_id"]} with TS: {timestamp}");
+                            ProcessChange(change, targetCollection);
+
+                            item.resumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
+                            item.cursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                            Jobs?.Save(); //persists state
+
+                            if (ExecutionCancelled) break;
+                        }
+                        Log.Save();
+                    }
+
+                    System.Threading.Thread.Sleep(100);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error processing change stream. Details : {ex.Message}", LogType.Error);
+                Log.Save();
             }
         }
 
