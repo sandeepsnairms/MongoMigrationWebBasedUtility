@@ -39,10 +39,7 @@ namespace OnlineMongoMigrationProcessor
 
         string toolsDestinationFolder=$"{Path.GetTempPath()}mongo-tools";
         string toolsLaunchFolder=string.Empty;
-        //string MongoDumpOutputFolder= $"{Path.GetTempPath()}mongodump";
-        //DateTime MigrationJobStartTime = DateTime.Now;
-        //bool Online = true;
-        //bool BulkCopy = true;
+
         bool MigrationCancelled = false;
 
         private Joblist? Jobs;
@@ -50,7 +47,7 @@ namespace OnlineMongoMigrationProcessor
         public MigrationSettings? Config;
 
         private MongoClient? sourceClient;
-        //private MongoClient? targetClient;
+
 
         MigrationJob? Job;
         DataProcessor? DProcessor;
@@ -168,7 +165,7 @@ namespace OnlineMongoMigrationProcessor
                     Log.Save();
 
                     if(DProcessor==null)
-                        DProcessor = new DataProcessor(Jobs, Job, toolsLaunchFolder, sourceClient);
+                        DProcessor = new DataProcessor(Jobs, Job, toolsLaunchFolder, sourceClient, Config);
 
                     DProcessor.ProcessRunning = true;
 

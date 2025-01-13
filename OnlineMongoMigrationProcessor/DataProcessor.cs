@@ -21,20 +21,22 @@ namespace OnlineMongoMigrationProcessor
         string MongoDumpOutputFolder = $"{Path.GetTempPath()}mongodump";
         private MongoClient? sourceClient;
         private MongoClient? targetClient;
+        MigrationSettings? Config;
+        private BsonValue lastInsertedDocId;
 
         public bool ProcessRunning { get; set; }
 
         ProcessExecutor PExecutor;
 
-        public DataProcessor(Joblist _Jobs,MigrationJob _Job, string _toolsLaunchFolder, MongoClient _sourceClient)
+        public DataProcessor(Joblist _Jobs,MigrationJob _Job, string _toolsLaunchFolder, MongoClient _sourceClient, MigrationSettings _config)
         {
             Jobs = _Jobs;
             Job = _Job;
             toolsLaunchFolder = _toolsLaunchFolder;
             sourceClient = _sourceClient;
+            Config= _config;
 
             PExecutor = new ProcessExecutor();
-
         }
 
         public void StopProcessing()
@@ -459,40 +461,96 @@ namespace OnlineMongoMigrationProcessor
                 while (!ExecutionCancelled)
                 {
 
-                    ChangeStreamOptions options;
-                    if (item.resumeToken != null || !Job.StartedOn.HasValue)
+                    try
                     {
-                        options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
-                    }
-                    else
-                    {
-                        var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
-                        options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
+                        ChangeStreamOptions options = new ChangeStreamOptions { };
 
-                    }
-                    // Open a Change Stream
-                    using (var cursor = sourceCollection.Watch(options))
-                    {
-                        // Continuously monitor the change stream
-                        foreach (var change in cursor.ToEnumerable())
+                        if (item.cursorUtcTimestamp> DateTime.MinValue)
                         {
-                            // Access the ClusterTime (timestamp) from the ChangeStreamDocument
-                            var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
+                            var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp(item.cursorUtcTimestamp.ToLocalTime());
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
 
-                            // Output change details to the console
-                            Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for {change.DocumentKey["_id"]} with TS: {timestamp}");
-                            ProcessChange(change, targetCollection);
-
-                            item.resumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
-                            item.cursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
-                            Jobs?.Save(); //persists state
-
-                            if (ExecutionCancelled) break;
                         }
+                        else if (item.resumeToken != null)
+                        {
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
+                        }
+                        else if (Job.StartedOn.HasValue)
+                        {
+                            var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
+
+                        }
+                        
+
+                        // Create a CancellationTokenSource with a timeout (e.g.,   5 minutes)
+                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                        CancellationToken cancellationToken = cancellationTokenSource.Token;
+
+                        // Open a Change Stream
+                        using (var cursor = sourceCollection.Watch(options))
+                        {
+                            int counter = 0;
+
+                            // Continuously monitor the change stream
+                            while (cursor.MoveNext(cancellationToken))
+                            {
+                                foreach (var change in cursor.Current)
+                                {
+                                    // Access the ClusterTime (timestamp) from the ChangeStreamDocument
+                                    var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
+
+                                    // Output change details to the console
+                                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
+                                    ProcessChange(change, targetCollection);
+
+                                    item.resumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
+                                    item.cursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                                    Jobs?.Save(); // persists state
+
+                                    counter++;
+
+                                    // Break if batch size is reached
+                                    if (counter > Config.ChangeStreamBatchSize)
+                                        break;
+
+                                    // Break if execution is cancelled
+                                    if (ExecutionCancelled)
+                                        break;
+                                }
+
+                                // Break the outer loop if conditions are met
+                                if (counter > Config.ChangeStreamBatchSize || ExecutionCancelled)
+                                    break;
+                            }
+                            Log.Save();
+                        }
+
+                        // Pause briefly before next iteration (optional)
+                        System.Threading.Thread.Sleep(100);
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        // Handle cancellation gracefully
+                        Log.AddVerboseMessage($"CS Batch duration expired while monitoring {targetCollection.CollectionNamespace}. CS will resume automatically");
+                    }
+                    catch (MongoCommandException ex) when (ex.Message.Contains("Resume of change stream was not possible"))
+                    {
+                        // Handle other potential exceptions
+                        Log.WriteLine($"Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.Message}", LogType.Error);
+                        Log.Save();
+                        System.Threading.Thread.Sleep(1000*300);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Handle other potential exceptions
+                        Log.WriteLine($"Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.Message}", LogType.Error);
                         Log.Save();
                     }
-
-                    System.Threading.Thread.Sleep(100);
+                    finally
+                    {
+                        Log.Save();
+                    }
                 }
             }
             catch (Exception ex)
@@ -503,6 +561,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
+        
         private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection)
         {
             try
@@ -510,7 +569,12 @@ namespace OnlineMongoMigrationProcessor
                 switch (change.OperationType)
                 {
                     case ChangeStreamOperationType.Insert:
-                        targetCollection.InsertOne(change.FullDocument);
+                        //check if document already processed in the immediate previous run. To avoid DuplicateKey error.
+                        if (lastInsertedDocId != change.DocumentKey["_id"])
+                        {
+                            lastInsertedDocId = change.DocumentKey["_id"];
+                            targetCollection.InsertOne(change.FullDocument);
+                        }
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
