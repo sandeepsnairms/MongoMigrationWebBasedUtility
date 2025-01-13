@@ -122,7 +122,7 @@ namespace OnlineMongoMigrationProcessor
         {
             Message = message;
             Type = type;
-            Datetime = System.DateTime.Now;
+            Datetime = System.DateTime.Now.ToUniversalTime();
         }
 
         public string Message { get; set; }
@@ -138,6 +138,7 @@ namespace OnlineMongoMigrationProcessor
         public string? MongoToolsDownloadURL { get; set; }
         public bool HasUUID { get; set; }
         public long ChunkSizeInMB { get; set; }
+        public int ChangeStreamBatchSize { get; set; }
 
         private string filePath=string.Empty;
 
@@ -159,6 +160,7 @@ namespace OnlineMongoMigrationProcessor
                     HasUUID = loadedObject.HasUUID;
                     MongoToolsDownloadURL = loadedObject.MongoToolsDownloadURL;
                     ChunkSizeInMB = loadedObject.ChunkSizeInMB;
+                    ChangeStreamBatchSize = loadedObject.ChangeStreamBatchSize;
                     initialized = true;
                 }
             }
@@ -167,6 +169,7 @@ namespace OnlineMongoMigrationProcessor
                 HasUUID = false;
                 MongoToolsDownloadURL = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMB = 5120;
+                ChangeStreamBatchSize = 10000;
             }
         }
 
