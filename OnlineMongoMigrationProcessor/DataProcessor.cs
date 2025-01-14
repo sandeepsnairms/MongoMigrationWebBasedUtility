@@ -22,7 +22,6 @@ namespace OnlineMongoMigrationProcessor
         private MongoClient? sourceClient;
         private MongoClient? targetClient;
         MigrationSettings? Config;
-        private BsonValue lastInsertedDocId;
 
         public bool ProcessRunning { get; set; }
 
@@ -569,12 +568,7 @@ namespace OnlineMongoMigrationProcessor
                 switch (change.OperationType)
                 {
                     case ChangeStreamOperationType.Insert:
-                        //check if document already processed in the immediate previous run. To avoid DuplicateKey error.
-                        if (lastInsertedDocId != change.DocumentKey["_id"])
-                        {
-                            lastInsertedDocId = change.DocumentKey["_id"];
-                            targetCollection.InsertOne(change.FullDocument);
-                        }
+                        targetCollection.InsertOne(change.FullDocument);
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
@@ -592,7 +586,11 @@ namespace OnlineMongoMigrationProcessor
                         break;
                 }
             }
-            catch(Exception ex)
+            catch(MongoException mex) when (change.OperationType== ChangeStreamOperationType.Insert && mex.Message.Contains("DuplicateKey"))
+            {
+                //ignore do nothing as insert  is duplicated, typically casused  by reprocessing of same change stream
+            }
+            catch (Exception ex)
             {
                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.Message}",LogType.Error);
                Log.Save();

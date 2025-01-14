@@ -66,5 +66,36 @@ namespace OnlineMongoMigrationProcessor
                 return string.Empty;
             }
         }
+
+        public static Tuple<bool, string> ValidateNameSpaceFormat(string input)
+        {
+            // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
+            string pattern = @"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$";
+
+            // Split the input by commas
+            string[] items = input.Split(',');
+
+            // Use a HashSet to ensure no duplicates
+            HashSet<string> validItems = new HashSet<string>();
+
+            foreach (string item in items)
+            {
+                string trimmedItem = item.Trim(); // Remove any extra whitespace
+                if (System.Text.RegularExpressions.Regex.IsMatch(trimmedItem, pattern))
+                {
+                    Console.WriteLine($"'{trimmedItem}' matches the pattern.");
+                    validItems.Add(trimmedItem); // HashSet ensures uniqueness
+                }
+                else
+                {
+                    return new Tuple<bool, string>(false, string.Empty);
+                }
+            }
+
+            // Join valid items into a cleaned comma-separated list
+            var cleanedNamespace = string.Join(",", validItems);
+            return new Tuple<bool, string>(true, cleanedNamespace);
+        }
+
     }
 }

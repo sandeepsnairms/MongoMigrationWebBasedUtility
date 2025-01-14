@@ -1,0 +1,162 @@
+﻿@using OnlineMongoMigrationProcessor
+@using System.Text.RegularExpressions;
+
+<div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
+    <div class="modal-dialog bg-dark">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title">Add/Remove Collections</h4>
+                <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button> 
+            </div>
+            <div class="modal-body">
+                <table class="table table-borderless">
+                    <thead>
+                        <tr>
+                            <th>Collection</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+
+                        @foreach (var mu in LoadUpdatedMigrationUnits())
+                        {
+                            <tr>
+                                <td>@mu.DatabaseName.@mu.CollectionName</td>
+                                <td>
+                                    <button class="btn btn-danger btn-sm" @onclick="() => RemoveCollection(mu)">Remove</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <div class="mt-3">
+                    <label for="nameSpaces" class="form-label">Collections To Add</label>
+                    <input id="nameSpaces"  type="text" @bind="newCollection" placeholder="e.g. db1.col1,db1.col2" class="form-control" />
+                    <button class="btn btn-primary btn-sm mt-2" @onclick="AddCollection">Add</button>
+                </div>
+                               
+
+                @if (CollectionRemoved)
+                {
+                    <div class="alert alert-warning mt-2">If a collection is removed from the job, it will need to be migrated as new, and all migration and change stream details will be lost. Select Cancel if you wish to keep the collection.</div>
+                }
+
+                @if (!string.IsNullOrEmpty(ErrorMessage))
+                {
+                    <div class="alert alert-danger mt-2">@ErrorMessage</div>
+                }
+
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary"
+                @onclick=@HandleSubmit>
+                    Ok
+                </button>
+                <button type="button" class="btn btn-secondary"
+                @onclick="@Cancel">
+                    Cancel
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code
+{
+    [Parameter]
+    public List<MigrationUnit>? MigrationUnits { get; set; }
+
+    [Parameter]
+    public EventCallback<List<MigrationUnit>> OnConllectionsUpdated { get; set; }
+
+    private string ErrorMessage = string.Empty;
+
+    private string newCollection=string.Empty;
+
+    private List<MigrationUnit> UpdatedMigrationUnits;
+    private bool CollectionRemoved=false;
+
+    private List<MigrationUnit> LoadUpdatedMigrationUnits()
+    {
+        if (UpdatedMigrationUnits == null)
+        {
+            UpdatedMigrationUnits = new List<MigrationUnit>();        
+            UpdatedMigrationUnits = MigrationUnits.ToList();
+        }
+
+        return UpdatedMigrationUnits;
+    }
+
+    private void AddCollection()
+    {
+        ErrorMessage = string.Empty;
+        if (!string.IsNullOrWhiteSpace(newCollection))
+        {
+            Tuple<bool, string> retValue = Helper.ValidateNameSpaceFormat(newCollection);
+            if (!retValue.Item1)
+            {
+                ErrorMessage = "Invalid collection name. Please provide the collection name in the format 'database.collection'";
+                return;
+            }
+
+            // Get list of collections
+            string[] collectionsInput = retValue.Item2
+                .Split(',')
+                .Select(item => item.Trim())
+                .ToArray();
+
+            // Process collections one by one
+            foreach (var fullName in collectionsInput)
+            {
+                string[] parts = fullName.Split('.');
+                if (parts.Length != 2) continue;
+
+                string dbName = parts[0].Trim();
+                string colName = parts[1].Trim();
+
+                var mu = new MigrationUnit(dbName, colName, null);
+
+                // Ensure no duplicates based on DatabaseName.CollectionName
+                if (!UpdatedMigrationUnits.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
+                {
+                    UpdatedMigrationUnits.Add(mu);
+                }
+            }
+
+            newCollection = string.Empty;
+        }
+    }
+
+
+    private void RemoveCollection(MigrationUnit mu)
+    {
+        ErrorMessage = string.Empty;
+        if (UpdatedMigrationUnits.Count == 1)
+        {
+            ErrorMessage = "At least one collection is required for migration.";
+            return;
+        }
+        UpdatedMigrationUnits.Remove(mu);
+        CollectionRemoved = true;
+    }
+
+    private void HandleSubmit()
+    {       
+
+        if (OnConllectionsUpdated.HasDelegate)
+        {
+            OnConllectionsUpdated.InvokeAsync(UpdatedMigrationUnits);
+        }
+    }
+
+    private void Cancel()
+    {
+        if (OnConllectionsUpdated.HasDelegate)
+        {
+            OnConllectionsUpdated.InvokeAsync(null);
+        }
+    }
+}
+
+
