@@ -270,9 +270,24 @@ If using a private DNS zone:
 3. In the “New Job Details” pop-up, provide the necessary details and select **OK**.  
 4. The job will automatically start if no other jobs are running.  
 
- 
+#### Migrations modes
+
+Migrations can be done in two ways:
+
+- Offline Migration: A snapshot based bulk copy from source to target. New data added/updated/deleted on the source after the snapshot isn't copied to the target. The application downtime required depends on the time taken for the bulk copy activity to complete.
+
+- Online Migration: Apart from the bulk data copy activity done in the offline migration, a change stream monitors all additions/updates/deletes. After the bulk data copy is completed, the data in the change stream is copied to the target to ensure that all updates made during the migration process are also transferred to the target. The application downtime required is minimal.
+
+#### Oplog retention size
+
+For online jobs, ensure that the oplog retention size of the source MongoDB is large enough to store operations for at least the duration of both the download and upload activities. If the oplog retention size is too small and there is a high volume of write operations, the online migration may fail or be unable to read all documents from the change stream in time.
+
+#### Sequencing your collections
+
+The job processes collections in the order they are added. Since larger collections take more time to migrate, it’s best to arrange the collections in descending order of their size or document count.
 
 ### View a Job
+
 1. From the home page  
 2. Select the **eye icon** corresponding to the job you want to view.  
 3. On the **Job Details** page, you will see the collections to be migrated and their status in a tabular format.
@@ -287,12 +302,14 @@ If using a private DNS zone:
 
 **Note**: An offline job will automatically terminate once the data is copied. However, an online job requires a manual cut over to complete.
 
-##### Change Stream Lag
+#### Change Stream Lag
 
 Change Stream Lag refers to the time difference between the timestamp of the last processed change and the current time. During an online migration, the lag will be high immediately after the upload completes, but it should decrease as change stream processing starts, eventually reaching zero. If the lag does not reduce, consider the following:
 
 - Ensure the job is not paused and is processing requests. Resume the job if necessary.
 - Check if the transactions per second on the source are very high; in this case, you may need a larger app service plan or a dedicated web app for the collection.
+
+
 
 ### Remove a Job
 1. From the home page  
