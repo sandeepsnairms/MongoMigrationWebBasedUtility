@@ -261,3 +261,43 @@ If using a private DNS zone:
 2. From the VM, access the web app via its URL (e.g., `https://<WebAppName>.azurewebsites.net`).
 3. Confirm that the web app is accessible only within the VNet.
 
+
+## How to Use
+
+### Add a New Job
+1. From the home page  (`https://<WebAppName>.azurewebsites.net`)
+2. Select **New Job**.  
+3. In the “New Job Details” pop-up, provide the necessary details and select **OK**.  
+4. The job will automatically start if no other jobs are running.  
+
+ 
+
+### View a Job
+1. From the home page  
+2. Select the **eye icon** corresponding to the job you want to view.  
+3. On the **Job Details** page, you will see the collections to be migrated and their status in a tabular format.
+ 
+1. Depending on the job's status, one or more of the following buttons will be visible:  
+   - **Resume Job**: Visible if the migration is paused. Select this to resume the current job. The app may prompt you to provide the connection strings if the cache has expired.
+   - **Pause Job**: Visible if the current job is running. Select this to pause the current job. You can resume it later.  
+   - **Update Collections**: Select this to add/remove collections in the current job. You can only update collections for a paused job. Removing a collection that is partially or fully migrated will lead to the loss of its migration details, and you will need to remigrate it from the start.  
+   - **Cut Over**: Select this to cut over an online job when the source and target are completely synced. Before cutting over, ensure to stop write traffic to the source and wait for the Change Stream Lag to become zero for all collections. Once cut over is performed, there is no rollback.  
+1. The **Monitor** section lists the current actions being performed.  
+1. The **Logs** section displays system-generated logs for debugging. You can download the logs by selecting the **download icon** next to the header.  
+
+**Note**: An offline job will automatically terminate once the data is copied. However, an online job requires a manual cut over to complete.
+
+##### Change Stream Lag
+
+Change Stream Lag refers to the time difference between the timestamp of the last processed change and the current time. During an online migration, the lag will be high immediately after the upload completes, but it should decrease as change stream processing starts, eventually reaching zero. If the lag does not reduce, consider the following:
+
+- Ensure the job is not paused and is processing requests. Resume the job if necessary.
+- Check if the transactions per second on the source are very high; in this case, you may need a larger app service plan or a dedicated web app for the collection.
+
+### Remove a Job
+1. From the home page  
+2. Select the **bin icon** corresponding to the job you want to remove.  
+
+### Download Job Details
+1. From the home page  
+2. Select the **download icon** next to the job title to download the job details as JSON. This may be used for debugging purposes. 
