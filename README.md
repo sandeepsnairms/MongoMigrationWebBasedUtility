@@ -307,6 +307,7 @@ The job processes collections in the order they are added. Since larger collecti
 Change Stream Lag refers to the time difference between the timestamp of the last processed change and the current time. During an online migration, the lag will be high immediately after the upload completes, but it should decrease as change stream processing starts, eventually reaching zero. If the lag does not reduce, consider the following:
 
 - Ensure the job is not paused and is processing requests. Resume the job if necessary.
+- Monitor for new write operations on the source. If no new changes are detected, the lag will increase. However, this is not an issue since all changes have already been processed.
 - Check if the transactions per second on the source are very high; in this case, you may need a larger app service plan or a dedicated web app for the collection.
 
 
