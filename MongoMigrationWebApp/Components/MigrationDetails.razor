@@ -1,4 +1,5 @@
 ﻿@inject Service.JobManager JobManager
+@using OnlineMongoMigrationProcessor
 
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
@@ -88,38 +89,7 @@
 
     private string ErrorMessage=string.Empty;
 
-    public Tuple<bool, string> ValidateNameSpaceFormat(string input)
-    {
-        // // Regular expression pattern to match db1.col1,db2.col2,db3.col4 format
-        // string pattern = @"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$";
-        // System.Text.RegularExpressions.Regex regex = new System.Text.RegularExpressions.Regex(pattern);
-        // return regex.IsMatch(input);
-
-        string pattern = @"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$";
-
-        // Split the input by commas
-        string[] items = input.Split(',');
-
-        List<string> validItems = new List<string>();
-
-        foreach (string item in items)
-        {
-            string trimmedItem = item.Trim(); // Remove any extra whitespace
-            if (System.Text.RegularExpressions.Regex.IsMatch(trimmedItem, pattern))
-            {
-                Console.WriteLine($"'{trimmedItem}' matches the pattern.");
-                validItems.Add(trimmedItem);
-            }
-            else
-            {
-                return new Tuple<bool,string>(false,string.Empty);
-            }
-        }
-
-        // Join valid items into a cleaned comma-separated list
-        var cleanedNamespace = string.Join(",", validItems);
-        return new Tuple<bool, string>(true, cleanedNamespace);
-    }
+    
 
     private void HandleSubmit()
     {
@@ -151,7 +121,7 @@
 
         if(NewMode)
         {
-            Tuple<bool, string> retValue = ValidateNameSpaceFormat(Namespaces);
+            Tuple<bool, string> retValue = Helper.ValidateNameSpaceFormat(Namespaces);
             if (retValue.Item1 == false)
             {
                 ErrorMessage = "Namespaces Format is invalid.";

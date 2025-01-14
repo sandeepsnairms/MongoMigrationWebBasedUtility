@@ -17,7 +17,7 @@
     <div class="d-flex align-items-center mb-3">
         @if (migrationJob !=null && !migrationJob.IsCompleted && !migrationJob.CurrentlyActive && (migrationJob.IsStarted || (JobManager.migrationWorker != null && !JobManager.migrationWorker.IsProcessRunning())))
         {
-            <button class="btn btn-primary mx-2" title="Resume Job" @onclick="ResumeJob">Resume Job</button>
+            <button class="btn btn-primary mx-2" title="Resume Job" @onclick="ResumeJob">Resume Job</button>            
         }
 
         @if (migrationJob!=null && !migrationJob.IsCancelled && !migrationJob.IsCompleted && migrationJob.CurrentlyActive && JobManager.migrationWorker != null && JobManager.migrationWorker.IsProcessRunning())
@@ -57,6 +57,10 @@
     <YesNoDialog Type="YesNoDialog.Category.CutoverNot" Caption="Confirmation Required"  Message="@_Message" OnClose="@YesNoDialogSubmit"  />
 }
 
+@if (_ManageCollectionDialogOpen && migrationJob != null)
+{
+    <ManageCollections MigrationUnits="@migrationJob.MigrationUnits" OnConllectionsUpdated="@OnConllectionsUpdated" />
+}
 
 <table class="table">
     <thead>
@@ -90,6 +94,9 @@
         }
     </tbody>
 </table>
+<div class="d-flex align-items-center mb-3">
+    <button class="btn btn-primary mx-2" title="Update Collections" @onclick="ManageCollections">Update Collections</button>
+</div>
 
 <h5 class="pt-4">
     Monitor
@@ -193,6 +200,8 @@
 
     private bool _YesNoDialogOpen;
 
+    private bool _ManageCollectionDialogOpen;
+
 
     private string GetRowClass(string type, string message)
     {
@@ -222,10 +231,10 @@
         RefreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
     }
 
- 
+
     private async Task DownloadFile()
     {
-     
+
         var url = $"/api/File/download/log/{JobId}"; // Adjust the API URL if needed
         var response = await HttpClient.GetAsync(url);
 
@@ -333,9 +342,23 @@
             migrationJob.CurrentlyActive = false;
     }
 
+    private async Task ManageCollections()
+    {
+        ErrorMessage = string.Empty;
+        if (!JobManager.migrationWorker.IsProcessRunning() && NoOtherActiveJobs())
+        {
+            _ManageCollectionDialogOpen = true;            
+        }
+        else
+        {
+            ErrorMessage = "Please pause the job, before updating collections.";
+        }
+    }
+
 
     private async Task ResumeJob()
     {
+        ErrorMessage = string.Empty;
         if (!JobManager.migrationWorker.IsProcessRunning() && NoOtherActiveJobs())
         {
             if (string.IsNullOrEmpty(migrationJob.SourceConnectionString) || string.IsNullOrEmpty(migrationJob.TargetConnectionString))
@@ -356,9 +379,22 @@
 
     private void CompleteJob()
     {
-        _Message = "You  can't resume a job after its cutover. Are you sure you want to cutover ?";
+        _Message = "You can't resume a job after its cutover. Are you sure you want to cutover ?";
         _YesNoDialogOpen = true;        
     }
+
+    private void OnConllectionsUpdated(List<MigrationUnit> migrationUnits)
+    {
+        _ManageCollectionDialogOpen = false;
+
+        if (migrationUnits != null)
+        {
+            migrationJob.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
+            migrationJob.MigrationUnits = migrationUnits;
+            JobManager.Save();
+        }
+    }
+
     private void YesNoDialogSubmit(bool approved)
     {
         _YesNoDialogOpen = false;
@@ -374,7 +410,9 @@
     }
 
     private void PauseJob()
-    {   
+    {
+        ErrorMessage = string.Empty;
+
         JobManager.migrationWorker.StopMigration();
         migrationJob.IsCancelled = true;
         migrationJob.CurrentlyActive = false;
