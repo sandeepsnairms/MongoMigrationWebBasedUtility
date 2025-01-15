@@ -111,7 +111,7 @@ namespace OnlineMongoMigrationProcessor
 
             Log.init(Job.Id);
 
-            Log.WriteLine($"{Job.Id} Started on  {Job.StartedOn.ToString()}");
+            Log.WriteLine($"{Job.Id} Started on  {Job.StartedOn.ToString()} (UTC)");
             Log.Save();
 
             string[] collectionsInput = namespacesToMigrate
@@ -182,6 +182,7 @@ namespace OnlineMongoMigrationProcessor
                             Log.Save();
 
                             unit.MigrationChunks = chunks;
+                            unit.ChangeStreamStartedOn= System.DateTime.Now;
                         }
 
                     }

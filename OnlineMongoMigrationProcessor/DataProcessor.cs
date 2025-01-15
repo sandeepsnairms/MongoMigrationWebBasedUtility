@@ -474,9 +474,9 @@ namespace OnlineMongoMigrationProcessor
                         {
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = MongoDB.Bson.BsonDocument.Parse(item.resumeToken) };
                         }
-                        else if (Job.StartedOn.HasValue)
+                        else if (item.ChangeStreamStartedOn.HasValue)
                         {
-                            var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)Job.StartedOn);
+                            var bsonTimStamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimStamp };
 
                         }

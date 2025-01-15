@@ -97,6 +97,7 @@ namespace OnlineMongoMigrationProcessor
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? resumeToken { get; set; }
+        public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime cursorUtcTimestamp { get; set; }
         public Double DumpPercent { get; set; }
         public Double RestorePercent { get; set; }

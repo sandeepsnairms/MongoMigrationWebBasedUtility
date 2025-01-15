@@ -321,7 +321,7 @@
 
 
             if (!migrationJob.StartedOn.HasValue)
-                migrationJob.StartedOn = System.DateTime.Now;
+                migrationJob.StartedOn = System.DateTime.Now.ToUniversalTime();
 
             migrationJob.IsStarted = true;
 
