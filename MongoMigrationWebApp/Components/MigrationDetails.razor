@@ -17,6 +17,14 @@
                 </div>
 
                 <div class="mb-3">
+                    <label for="mongo-options">Data Migration Tool:</label>
+                    <select id="mongo-options" @onchange="OnSelectionChanged">
+                        <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
+                        <option value="Use Mongo Driver">Use Mongo Driver</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
                     <label class="form-label">Online</label>
                     <input type="checkbox" id="isOnline" disabled="@(!NewMode)" @bind="IsOnline" />
                 </div>
@@ -36,6 +44,8 @@
                     <label for="nameSpaces" class="form-label">Collections To Migrate</label>
                     <textarea type="text" id="nameSpaces" disabled="@(!NewMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5" class="form-control" @bind="Namespaces" />
                 </div>
+
+                
 
                 @if (!string.IsNullOrEmpty(ErrorMessage))
                 {
@@ -85,17 +95,44 @@
 
 
     [Parameter]
-    public EventCallback<OnlineMongoMigrationProcessor.MigrationJob> OnSubmit { get; set; }
+    public EventCallback<OnlineMongoMigrationProcessor.MigrationJob> OnSubmit { get; set; } 
 
+    [Parameter]
+    public Func<string, Task<bool>> CheckNameExists { get; set; }
+
+
+  
     private string ErrorMessage=string.Empty;
+    private bool UseMongoDump = true; // Variable to track the selected value
 
-    
+    private string SelectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
 
-    private void HandleSubmit()
+    private void OnSelectionChanged(ChangeEventArgs e)
+    {
+        SelectedOption = e.Value.ToString();
+        UseMongoDump = SelectedOption == "Use MongoDump and MongoRestore"; // Set UseMongoDump based on selection
+    }
+
+    private async void HandleSubmit()
     {
         if (string.IsNullOrEmpty(Name))
         {
             ErrorMessage = "Name can't be empty.";
+            return;
+        }
+        if (CheckNameExists != null) // Ensure callback is provided
+        {
+            var NameExists = await CheckNameExists(Name);
+            if (NameExists)
+            {
+                ErrorMessage = "Name already exists.";
+                return;
+            }
+        }
+
+        if (string.IsNullOrEmpty(SourceConnectionString) || string.IsNullOrEmpty(TargetConnectionString))
+        {
+            ErrorMessage = "Source and Target Connection Strings can't be empty.";
             return;
         }
 
@@ -140,7 +177,7 @@
         job.SourceEndpoint = tmpSrcEndpoint;
         job.TargetEndpoint = tmpTgtEndpoint;
         job.NameSpaces = Namespaces;        
-
+        job.UseMongoDump = UseMongoDump;
         OnSubmit.InvokeAsync(job);
                
     }

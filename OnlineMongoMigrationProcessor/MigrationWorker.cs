@@ -50,17 +50,27 @@ namespace OnlineMongoMigrationProcessor
 
 
         MigrationJob? Job;
-        DataProcessor? DProcessor;
 
+        IMigrationProcessor migrationProcessor;
+        //DumpRestoreProcessor? DRProcessor;
+        //CopyProcessor? CProcessor;
 
         public string? CurrentJobId { get; set; }
 
         public bool IsProcessRunning()
         {
-            if (DProcessor == null)
+            if (Config == null)
+            {
+                Config = new MigrationSettings();
+                Config.Load();
+            }
+
+
+            if (migrationProcessor == null)
                 return false;
 
-            return DProcessor.ProcessRunning;
+            return migrationProcessor.ProcessRunning;
+
         }
 
         public MigrationWorker(Joblist jobs)
@@ -68,13 +78,15 @@ namespace OnlineMongoMigrationProcessor
             this.Jobs= jobs;            
         }
 
-        public  void StopMigration()
+        public void StopMigration()
         {
             MigrationCancelled = true;
-            DProcessor.StopProcessing();
-            DProcessor.ProcessRunning = false;
+ 
+            migrationProcessor.StopProcessing();
+            migrationProcessor.ProcessRunning = false;
 
-            DProcessor = null;
+            migrationProcessor = null;
+
         }
 
 
@@ -93,11 +105,12 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                if (DProcessor != null)
+
+                if (migrationProcessor != null)
                 {
-                    DProcessor.StopProcessing();
-                    DProcessor = null;
-                }
+                    migrationProcessor.StopProcessing();
+                    migrationProcessor = null;
+                }               
             }
             catch { }   
 
@@ -119,9 +132,34 @@ namespace OnlineMongoMigrationProcessor
                 .Select(item => item.Trim())
                 .ToArray();
 
+            // checking if change stream is enabled on source for online job.
+            if (Job.IsOnline)
+            {
+                Log.WriteLine("Checking if Change Stream is enabled on source");
+                Log.Save();
 
-            // Ensure MongoDB tools are available        
-            toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(toolsDestinationFolder, Config.MongoToolsDownloadURL);          
+                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(Job.SourceConnectionString);
+                if (!retValue)
+                {
+                    Job.CurrentlyActive = false;
+                    Job.IsCompleted = true;
+                    Jobs?.Save();
+
+                    if (migrationProcessor != null)
+                    {
+                        migrationProcessor.ProcessRunning = false;
+                    }
+                    return;
+                }
+            }
+
+            if (Job.UseMongoDump)
+            {
+                // Ensure MongoDB tools are available        
+                toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(toolsDestinationFolder, Config);
+            }
+
+
 
             bool continueProcessing =true;   
 
@@ -164,10 +202,27 @@ namespace OnlineMongoMigrationProcessor
                     Log.WriteLine($"Source Connection Sucessfull");
                     Log.Save();
 
-                    if(DProcessor==null)
-                        DProcessor = new DataProcessor(Jobs, Job, toolsLaunchFolder, sourceClient, Config);
+                    if(!Job.UseMongoDump)
+                    {
+                        if (migrationProcessor != null)
+                        {
+                            migrationProcessor.ProcessRunning = false;
+                            migrationProcessor.StopProcessing();
+                            migrationProcessor = null;
+                        }
 
-                    DProcessor.ProcessRunning = true;
+                        migrationProcessor = new CopyProcessor(Jobs, Job, sourceClient, Config);
+
+                        migrationProcessor.ProcessRunning = true;
+                    }
+                    else
+                    {
+                        if (migrationProcessor == null)
+                            migrationProcessor = new DumpRestoreProcessor(Jobs, Job, sourceClient, Config, toolsLaunchFolder);
+
+                        migrationProcessor.ProcessRunning = true;
+                    }
+                     
 
                     foreach (var unit in Job.MigrationUnits)
                     {
@@ -183,6 +238,14 @@ namespace OnlineMongoMigrationProcessor
 
                             unit.MigrationChunks = chunks;
                             unit.ChangeStreamStartedOn= System.DateTime.Now;
+
+                            //mongo restore copies indexes and data, so no need to copy indexes manually.
+                            if (!Job.UseMongoDump)
+                            {
+                                var database = sourceClient.GetDatabase(unit.DatabaseName);
+                                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                                var retValue = await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
+                            }
                         }
 
                     }
@@ -195,8 +258,9 @@ namespace OnlineMongoMigrationProcessor
                         foreach (var migrationUnit in Job.MigrationUnits)
                         {
                             if (MigrationCancelled) break;
-                                                                                    
-                            DProcessor.Download(migrationUnit, sourceConnectionString, targetConnectionString);
+                            
+                            migrationProcessor.Download(migrationUnit, sourceConnectionString, targetConnectionString);
+
                         }
                     }
                     //else
@@ -216,7 +280,10 @@ namespace OnlineMongoMigrationProcessor
                         Job.CurrentlyActive = false;
                         Jobs?.Save();
 
-                        DProcessor.ProcessRunning = false;
+                        if (migrationProcessor != null)
+                        {
+                            migrationProcessor.ProcessRunning = false;
+                        }                        
                     }
 
                     // Wait for the backoff duration before retrying
@@ -236,7 +303,11 @@ namespace OnlineMongoMigrationProcessor
                     Job.CurrentlyActive = false;
                     Jobs?.Save();
                     continueProcessing = false;
-                    DProcessor.ProcessRunning = false;
+
+                    if (migrationProcessor != null)
+                    {
+                        migrationProcessor.ProcessRunning = false;
+                    }                   
                 }
 
             }
@@ -263,7 +334,9 @@ namespace OnlineMongoMigrationProcessor
                         
             int totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
-            if (totalChunks > 1)
+
+            //if using MongoDump/restore, create single epmty chunk, else we may need to segment the chunk also.
+            if (totalChunks > 1 || !Job.UseMongoDump)
             {
                 Log.WriteLine($"Creating Partitions for { databaseName}.{ collectionName}");
                 Log.Save();
@@ -280,36 +353,79 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var dataType in dataTypes)
                 {
                     // Create partitions for the current data type
-                    List<(BsonValue Min, BsonValue Max)> partitions = partitioner.CreatePartitions(idField, totalChunks, dataType, documentCount/ totalChunks);
+                    long docCountByType;
+                    ChunkBoundaries chunkBoundaries = partitioner.CreatePartitions(idField, totalChunks, dataType, documentCount / totalChunks, out docCountByType);
 
-                    if (partitions == null)
-                        continue;
-
-
-                    // Add the partitions to migrationChunks
-                    for (int i = 0; i < partitions.Count; i++)
+                    if (docCountByType == 0)
                     {
-                        string startId;
-                        string endId;
+                        continue;
+                    }
 
-                        if (i == 0) // First partition, no gte
+                    if (chunkBoundaries == null)
+                    {
+                        if (Job.UseMongoDump)
                         {
-                            startId = "";
-                            endId = partitions[0].Max.ToString();
+                            continue;
                         }
-                        else if (i == partitions.Count - 1) // Last partition, no lte
+                        else
                         {
-                            startId = partitions[i].Min.ToString();
-                            endId = "";
-                        }
-                        else // Middle partitions
-                        {
-                            startId = partitions[i].Min.ToString();
-                            endId = partitions[i].Max.ToString();
+                            //single chunk and segment in case of data set being small.
+
+                            var min = BsonNull.Value;
+                            var max = BsonNull.Value;
+
+                            var chunkBoundary = new Boundary
+                            {
+                                StartId = min,
+                                EndId = max,
+                                SegmentBoundaries = new List<Boundary>() // Initialize SegmentBoundaries here
+                            };
+
+                            chunkBoundaries.Boundaries ??= new List<Boundary>(); // Use null-coalescing assignment
+                            chunkBoundaries.Boundaries.Add(chunkBoundary);
+                            var segmentBoundary = new Boundary
+                            {
+                                StartId = min,
+                                EndId = max
+                            };
+                            chunkBoundary.SegmentBoundaries.Add(segmentBoundary);
                         }
 
-                        // Add the current partition as a migration chunk
-                        migrationChunks.Add(new MigrationChunk(startId, endId, dataType, false, false));
+                    }
+
+                    MigrationChunk chunk = null;
+                    // Add the partitions to migrationChunks
+                    for (int i = 0; i < chunkBoundaries.Boundaries.Count; i++)
+                    {
+                        var (startId, endId) = GetStartEnd(true,chunkBoundaries.Boundaries[i], chunkBoundaries.Boundaries.Count, i);
+                        chunk = new MigrationChunk(startId, endId, dataType, false, false);
+                        migrationChunks.Add(chunk);
+
+
+                        if (!Job.UseMongoDump && (chunkBoundaries.Boundaries[i].SegmentBoundaries == null || chunkBoundaries.Boundaries[i].SegmentBoundaries.Count==0))
+                        {
+                            //ensure single segment in  each chunk
+                            if(chunk.Segments == null)
+                                chunk.Segments = new List<Segment>();
+
+                            //use parent chunk boundaries
+                            chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false });
+                        }
+                        // Add the segments   
+                        if (!Job.UseMongoDump && chunkBoundaries.Boundaries[i].SegmentBoundaries.Count>0)
+                        { 
+                            for(int j = 0; j < chunkBoundaries.Boundaries[i].SegmentBoundaries.Count; j++)
+                            {
+                                var segment = chunkBoundaries.Boundaries[i].SegmentBoundaries[j];
+                                var (segemntStartId, segmentEndId) = GetStartEnd(false,segment, chunkBoundaries.Boundaries[i].SegmentBoundaries.Count, j,chunk.Lt, chunk.Gte);
+
+                                if (chunk.Segments == null)
+                                    chunk.Segments = new List<Segment>();
+
+                                chunk.Segments.Add(new Segment { Gte = segemntStartId, Lt = segmentEndId, IsProcessed = false });
+                            }                        
+                            
+                        }
                     }
                 }
 
@@ -317,14 +433,47 @@ namespace OnlineMongoMigrationProcessor
             else
             {
                 //single chunk in case of data set being small.
-                migrationChunks.Add(new MigrationChunk(null, null,DataType.String ,false, false));
+                var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.String, false, false);
+                migrationChunks.Add(chunk);                
             }
 
             return migrationChunks;
         }
 
-        
+        //need chunkLt only IsChunk=false 
+        private Tuple<string, string> GetStartEnd(bool IsChunk, Boundary boundary, int totalBoundaries, int currentIndex, string chunkLt="",string chunkGte="")
+        {
+            string startId;
+            string endId;
 
-       
+            if (currentIndex == 0) // First partition, no gte if its a chunk, else inherit Gte from parent chunk
+            {
+                if (!IsChunk)
+                    startId = chunkGte;
+                else
+                    startId = "";
+                endId = boundary.EndId?.ToString() ?? "";
+            }
+            else if (currentIndex == totalBoundaries - 1) // Last partition, no lte if its a chunk, else inherit lt from parent chunk
+            {
+                startId = boundary.StartId?.ToString() ?? "";
+                if(!IsChunk)
+                    endId = chunkLt;
+                else
+                    endId = "";
+                
+            }
+            else // Middle partitions
+            {
+                startId = boundary.StartId?.ToString() ?? "";
+                endId = boundary.EndId?.ToString() ?? "";
+            }
+
+            return Tuple.Create(startId, endId);
+        }
+
+
+
+
     }
 }

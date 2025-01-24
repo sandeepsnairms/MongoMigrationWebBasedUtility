@@ -67,9 +67,19 @@
         <tr>
             <th>Database Name</th>
             <th>Collection Name</th>
-            <th>Download Status</th>
-            <th>Upload Status</th>
-            <th>Change Stream Lag</th>
+            @if (migrationJob != null && migrationJob.UseMongoDump)
+            {
+                <th>Download Status</th>
+                <th>Upload Status</th>
+            }
+            else
+            {
+                <th>Copy Status</th>
+            }
+            @if (migrationJob != null && migrationJob.IsOnline)
+            {
+                <th>Change Stream Lag</th>
+            }
         </tr>
     </thead>
     <tbody>
@@ -79,16 +89,22 @@
             {
                 <tr>
                     <td>@unit.DatabaseName</td>
-                    <td>@unit.CollectionName</td>
+                    <td>@unit.CollectionName</td>                    
                     <td>
                         @(unit.DumpComplete ? "Sucess" : $"{unit.DumpPercent:F1}%")
                     </td>
-                    <td>
-                        @(unit.RestoreComplete || unit.RestorePercent==100 ? "Sucess" : $"{unit.RestorePercent:F1}%")
-                    </td>
-                    <td>
-                        @GetChangeStreamLag(unit.cursorUtcTimestamp)
-                    </td>
+                    @if (migrationJob != null && migrationJob.UseMongoDump)
+                    {
+                        <td>
+                            @(unit.RestoreComplete || unit.RestorePercent == 100 ? "Sucess" : $"{unit.RestorePercent:F1}%")
+                        </td>
+                    }
+                    @if (migrationJob != null && migrationJob.IsOnline)
+                    {
+                        <td>
+                            @GetChangeStreamLag(unit.cursorUtcTimestamp)
+                        </td>
+                    }
                 </tr>
             }
         }
@@ -208,7 +224,7 @@
         string rowClass = string.Empty;
 
         string lwrMessage = message.ToLower();
-        if (lwrMessage.Contains("warning") || lwrMessage.Contains("failure") || lwrMessage.Contains("error") || lwrMessage.Contains("failed"))
+        if (lwrMessage.Contains("warning") || lwrMessage.Contains("failure") || lwrMessage.Contains("error") || lwrMessage.Contains("failed") || lwrMessage.Contains("canceled"))
         {
             rowClass = "warning-row"; // Change to warning-row if any condition matches
         }

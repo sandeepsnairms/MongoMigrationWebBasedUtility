@@ -79,7 +79,7 @@ namespace OnlineMongoMigrationProcessor
                         if (!string.IsNullOrEmpty(args.Data))
                         {
                             outputBuffer.AppendLine(args.Data);
-                            Log.WriteLine(RedactPII(args.Data));
+                            Log.WriteLine(Helper.RedactPII(args.Data));
                         }
                     };
 
@@ -114,7 +114,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (Exception ex)
                             {
-                                Log.WriteLine($"Error terminating process {pType}: {RedactPII(ex.Message)}", LogType.Error);
+                                Log.WriteLine($"Error terminating process {pType}: {Helper.RedactPII(ex.Message)}", LogType.Error);
                             }
                         }
                     }
@@ -131,7 +131,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error executing process {pType}: {RedactPII(ex.Message)}", LogType.Error);
+                Log.WriteLine($"Error executing process {pType}: {Helper.RedactPII(ex.Message)}", LogType.Error);
                 Log.Save();
                 return false;
             }
@@ -191,19 +191,12 @@ namespace OnlineMongoMigrationProcessor
                 }
                 if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                 {
-                    Log.WriteLine($"{pType} Response: {RedactPII(data)}");
+                    Log.WriteLine($"{pType} Response: {Helper.RedactPII(data)}");
                 }
             }
         }
 
-        private string RedactPII(string input)
-        {
-            string pattern = @"(?<=://)([^:]+):([^@]+)";
-            string replacement = "[REDACTED]:[REDACTED]";
-
-            // Redact the user ID and password
-            return Regex.Replace(input, pattern, replacement);
-        }
+       
 
         private string ExtractPercentage(string input)
         {

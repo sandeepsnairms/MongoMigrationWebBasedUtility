@@ -1,5 +1,4 @@
-﻿using Microsoft.VisualBasic;
-using MongoDB.Bson;
+﻿using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
 using System;
@@ -18,7 +17,7 @@ namespace OnlineMongoMigrationProcessor
             return collection.CountDocuments(Builders<BsonDocument>.Filter.Empty);
         }
 
-        public static long GetDocCount(IMongoCollection<BsonDocument> _collection, BsonValue? gte, BsonValue? lte, DataType dataType)
+        public static FilterDefinition<BsonDocument> GenerateQueryFilter(BsonValue? gte, BsonValue? lte, DataType dataType)
         {
             var filterBuilder = Builders<BsonDocument>.Filter;
 
@@ -49,11 +48,141 @@ namespace OnlineMongoMigrationProcessor
             else
             {
                 filter = typeFilter;
-            }          
+            }
+            return filter;
+        }
+
+        public static long GetDocCount(IMongoCollection<BsonDocument> _collection, BsonValue? gte, BsonValue? lte, DataType dataType)
+        {
+            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType);
 
             // Execute the query and return the count
             var count = _collection.CountDocuments(filter);
             return count;
+        }
+
+        public static long GetDocCount(IMongoCollection<BsonDocument> _collection, FilterDefinition<BsonDocument> filter)
+        {
+            // Execute the query and return the count
+            var count = _collection.CountDocuments(filter);
+            return count;
+        }
+
+        public static async Task<bool> IsChangeStreamEnabledAsync(string connectionString)
+        {
+            try
+            {
+                // Connect to the MongoDB server
+                var client = new MongoClient(connectionString);
+
+                // Check the server status to verify replica set or sharded cluster
+                var adminDatabase = client.GetDatabase("admin");
+                var command = new BsonDocument("isMaster", 1);
+                var isMasterResult = await adminDatabase.RunCommandAsync<BsonDocument>(command);
+
+                // Check if the server is part of a replica set or a sharded cluster
+                if (isMasterResult.Contains("setName") || isMasterResult.GetValue("msg", "").AsString == "isdbgrid")
+                {
+                    Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
+                    Log.Save();
+                    return true;
+                }
+                else
+                {
+                    Log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
+                    Log.Save();
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error checking for change streams: {ex.Message}",LogType.Error);
+                Log.Save();
+                return false;
+            }
+        }
+
+        public static async  Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
+        {
+            
+
+            try
+            {
+                // Extract database and collection details from the source collection
+                var sourceDatabase = sourceCollection.Database;
+                var sourceCollectionName = sourceCollection.CollectionNamespace.CollectionName;
+
+                // Connect to the target database
+                var targetClient = new MongoClient(targetConnectionString);
+                var targetDatabaseName = sourceDatabase.DatabaseNamespace.DatabaseName;
+                var targetDatabase = targetClient.GetDatabase(targetDatabaseName);
+                var targetCollectionName = sourceCollectionName;
+
+
+                Log.WriteLine($"Creating collection with indexes: {targetDatabaseName}.{targetCollectionName}");
+                Log.Save();
+
+                // Check if the target collection exists
+                var collectionNamesCursor = await targetDatabase.ListCollectionNamesAsync();
+                var collectionNames = await collectionNamesCursor.ToListAsync();
+                bool targetCollectionExists = collectionNames.Contains(targetCollectionName);
+
+                // Delete the target collection if it exists
+                if (targetCollectionExists)
+                {
+                    await targetDatabase.DropCollectionAsync(targetCollectionName);
+                    Log.WriteLine($"Deleted target collection: {targetDatabaseName}.{targetCollectionName}");
+                    Log.Save();
+                }
+
+                // Get the indexes from the source collection
+                var indexes = await sourceCollection.Indexes.ListAsync();
+                var indexDocuments = await indexes.ToListAsync();
+
+                // Create the target collection
+                await targetDatabase.CreateCollectionAsync(targetCollectionName);
+                var targetCollection = targetDatabase.GetCollection<BsonDocument>(targetCollectionName);
+
+                // Copy the indexes to the target collection
+                foreach (var indexDocument in indexDocuments)
+                {
+                    // Exclude the default "_id_" index as it is automatically created
+                    if (indexDocument.GetValue("name", "") == "_id_")
+                        continue;
+
+                    // Extract the keys and options for the index
+                    var keys = indexDocument["key"].AsBsonDocument;
+
+                    CreateIndexOptions options=null;
+                    try
+                    {
+                        options = new CreateIndexOptions
+                        {
+                            Name = indexDocument.GetValue("name", default(BsonValue)).AsString,
+                            Unique = indexDocument.GetValue("unique", false).ToBoolean()
+                        };
+
+                        // Create the index on the target collection
+                        var indexModel = new CreateIndexModel<BsonDocument>(keys, options);
+                        await targetCollection.Indexes.CreateOneAsync(indexModel);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.WriteLine($"Error copying index {options.Name}  for {targetDatabaseName}.{targetCollectionName}. Details: {ex.Message}", LogType.Error);
+                        Log.Save();
+                    }                    
+                }
+
+                Log.WriteLine($"{indexDocuments.Count} Indexes copied successfully to {targetDatabaseName}.{targetCollectionName}");
+                Log.Save();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error copying indexes: {ex.Message}",LogType.Error);
+                Log.Save();
+                return false;
+            }
         }
 
 

@@ -3,14 +3,17 @@ using System.Collections.Generic;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
 namespace OnlineMongoMigrationProcessor
 {
     public static class Helper
     {
-        public static async Task<string> EnsureMongoToolsAvailableAsync(string toolsDestinationFolder,string toolsDownloadUrl)
+        public static async Task<string> EnsureMongoToolsAvailableAsync(string toolsDestinationFolder, MigrationSettings config)
         {
+            string toolsDownloadUrl= config.MongoToolsDownloadURL;
+            
             try
             {
                 string toolsLaunchFolder = Path.Combine(toolsDestinationFolder, Path.GetFileNameWithoutExtension(toolsDownloadUrl), "bin");
@@ -97,5 +100,25 @@ namespace OnlineMongoMigrationProcessor
             return new Tuple<bool, string>(true, cleanedNamespace);
         }
 
+        public static string RedactPII(string input)
+        {
+            string pattern = @"(?<=://)([^:]+):([^@]+)";
+            string replacement = "[REDACTED]:[REDACTED]";
+
+            // Redact the user ID and password
+            return Regex.Replace(input, pattern, replacement);
+        }
+
+        public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
+        {
+            if (migrationJob == null) return true;
+
+            foreach (var mu in migrationJob.MigrationUnits)
+            {
+                if (!mu.RestoreComplete || !mu.DumpComplete)
+                    return false;
+            }
+            return true;
+        }
     }
 }

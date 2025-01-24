@@ -36,6 +36,7 @@
                 <tr>
                     <th> &nbsp;&nbsp;&nbsp;&nbsp;</th>
                     <th>Name</th>
+                    <th>Migration Tool</th>
                     <th>Started On (UTC)</th>
                     <th>Endpoints</th>
                     <th>Is Online</th>
@@ -54,6 +55,7 @@
                             }        
                         </td>                        
                         <td>@migration.Name</td>
+                        <td>@GetToolName(migration.UseMongoDump)</td>
                         <td>@migration.StartedOn</td>
                         <td class="tooltip-text" title="@migration.NameSpaces">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
                         <td>@migration.IsOnline</td>
@@ -71,19 +73,19 @@
             </tbody>
         </table>
 
-       
+
     }
 }
 
 @if (_MigrationDetailsPopUpOpen)
-{    
-    <MigrationDetails NewMode=true OnSubmit="@OnMigrationDetailsPopUpSubmit" />   
+{
+    <MigrationDetails NewMode=true OnSubmit="@OnMigrationDetailsPopUpSubmit" CheckNameExists="CheckIfNameExistsAsync" />
 }
 
 
 @if (_YesNoDialogOpen)
 {
-    <YesNoDialog Type="YesNoDialog.Category.DeleteNot" Caption="Confirm Delete" Message="@_Message" OnClose="@YesNoDialogSubmit"  />
+    <YesNoDialog Type="YesNoDialog.Category.DeleteNot" Caption="Confirm Delete"  Message="@_Message" OnClose="@YesNoDialogSubmit"  />
 }
 
 @if (_MessageDialogOpen)
@@ -114,6 +116,17 @@
 
     private bool _loadingComplete;
 
+    private string GetToolName(bool useMongoDump)
+    {
+        if (useMongoDump)
+        {
+            return "MongoDump and MongoRestore";
+        }
+        else
+        {
+            return "Mongo Driver";
+        }
+    }
 #pragma warning disable CS1998
     protected override async Task OnParametersSetAsync()
     {
@@ -213,7 +226,7 @@
     }
     private void OpenConfig()
     {
-       _EditSettingsOpen = true;
+        _EditSettingsOpen = true;
     }
 
     private void HandleConfigurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
@@ -241,13 +254,27 @@
 
     }
 
+    private Task<bool> CheckIfNameExistsAsync(string name)
+    {
+        // Simulate checking the name in a database or data source
+        var migrationJob = JobManager.GetMigrations().Find(m => m.Name == name);
+        if (migrationJob != null)
+        {
+            return Task.FromResult(true);
+        }
+        else
+        {
+            return Task.FromResult(false);
+        }
+        
+    }
     private void OnMigrationDetailsPopUpSubmit(OnlineMongoMigrationProcessor.MigrationJob job)
     {
         _MigrationDetailsPopUpOpen = false;
         if(job!=null)
         {
             if (_SelectedMigrationJob == null)
-            {
+            {                
                 JobManager.GetMigrations().Add(job);
                 JobManager.Save();
                 ViewMigration(job.Id);

@@ -89,6 +89,7 @@ namespace OnlineMongoMigrationProcessor
         public bool IsCancelled { get; set; }
         public bool IsStarted { get; set; }
         public bool CurrentlyActive { get; set; }
+        public bool UseMongoDump { get; set; }
         public List<MigrationUnit> ?MigrationUnits { get; set; }
     }
 
@@ -131,7 +132,17 @@ namespace OnlineMongoMigrationProcessor
         public DateTime Datetime { get; set; }
     }
 
+    public class Boundary
+    {
+        public BsonValue? StartId { get; set; }
+        public BsonValue? EndId { get; set; }
+        public List<Boundary> SegmentBoundaries { get; set; }
+    }
 
+    public class ChunkBoundaries
+    {
+        public List<Boundary> Boundaries { get; set; }
+    }
 
     public class MigrationSettings
     {
@@ -140,13 +151,12 @@ namespace OnlineMongoMigrationProcessor
         public bool HasUUID { get; set; }
         public long ChunkSizeInMB { get; set; }
         public int ChangeStreamBatchSize { get; set; }
-
+        
         private string filePath=string.Empty;
 
         public MigrationSettings()
         {
             filePath = $"{Path.GetTempPath()}migrationjobs\\config.json";
-           
         }
 
         public void Load()
@@ -192,6 +202,14 @@ namespace OnlineMongoMigrationProcessor
 
     public enum LogType { Error, Messge};
 
+    public class Segment
+    {
+        public string? Lt { get; set; }
+        public string? Gte { get; set; }
+        public bool? IsProcessed { get; set; }
+        public long QueryDocCount { get; set; }
+    }
+
     public class MigrationChunk
     {
         public string? Lt { get; set; }
@@ -203,7 +221,9 @@ namespace OnlineMongoMigrationProcessor
         public long RestoredSucessDocCount { get; set; }
         public long RestoredFailedDocCount { get; set; }
         public long DocCountInTarget { get; set; }
+        public long skippedAsDuplicateCount { get; set; }
         public DataType DataType { get; set; }
+        public List<Segment> Segments { get; set; }
 
         public MigrationChunk(string strtId, string endId,DataType dataType, bool? downloaded, bool? uploaded)
         {
@@ -225,6 +245,7 @@ namespace OnlineMongoMigrationProcessor
         UUID,
         String,
         Object
+        
     }
 }
 
