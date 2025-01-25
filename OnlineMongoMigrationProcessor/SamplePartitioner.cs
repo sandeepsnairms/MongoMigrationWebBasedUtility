@@ -19,12 +19,6 @@ namespace OnlineMongoMigrationProcessor
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 
-        private readonly IMongoCollection<BsonDocument> _collection;
-
-        public SamplePartitioner(IMongoCollection<BsonDocument> collection)
-        {
-            _collection = collection;
-        }
 
         /// <summary>
         /// Creates partitions based on sampled data from the collection.
@@ -32,7 +26,7 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="idField">The field used as the partition key.</param>
         /// <param name="partitionCount">The number of desired partitions.</param>
         /// <returns>A list of partition boundaries.</returns>
-        public ChunkBoundaries CreatePartitions(string idField, int chunkCount, DataType dataType, long minDocsPerChunk, out long docCountByType)
+        public ChunkBoundaries CreatePartitions(IMongoCollection<BsonDocument> collection, string idField, int chunkCount, DataType dataType, long minDocsPerChunk, out long docCountByType)
         {
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
@@ -44,7 +38,7 @@ namespace OnlineMongoMigrationProcessor
             Log.AddVerboseMessage($"Count documents before sampling data for {dataType}");
             Log.Save();
 
-            docCountByType = GetDocumentCountByDataType(_collection, idField, dataType);
+            docCountByType = GetDocumentCountByDataType(collection, idField, dataType);
 
             if (docCountByType == 0)
             {
@@ -113,7 +107,7 @@ namespace OnlineMongoMigrationProcessor
                 new BsonDocument("$project", new BsonDocument(idField, 1)) // Keep only the partition key
             };
 
-            var sampledData = _collection.Aggregate<BsonDocument>(pipeline).ToList();
+            var sampledData = collection.Aggregate<BsonDocument>(pipeline).ToList();
             var partitionValues = sampledData
                 .Select(doc => doc.GetValue(idField, BsonNull.Value))
                 .Where(value => value != BsonNull.Value)
