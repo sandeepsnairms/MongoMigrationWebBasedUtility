@@ -141,9 +141,9 @@ namespace OnlineMongoMigrationProcessor
                     Log.WriteLine("Source Connection Successful");
                     Log.Save();
 
+                    _migrationProcessor?.StopProcessing();
                     if (!_job.UseMongoDump)
-                    {
-                        _migrationProcessor?.StopProcessing();
+                    {                        
                         _migrationProcessor = new CopyProcessor(_jobs, _job, _sourceClient, Config);
                     }
                     else
@@ -183,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (_migrationCancelled) break;
 
-                        _migrationProcessor.Download(migrationUnit, sourceConnectionString, targetConnectionString);
+                        _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
                     }
 
                     continueProcessing = false;
@@ -228,17 +228,26 @@ namespace OnlineMongoMigrationProcessor
         {
             var database = _sourceClient.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
-
-            long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
+                
 
             var statsCommand = new BsonDocument { { "collStats", collectionName } };
             var stats = await database.RunCommandAsync<BsonDocument>(statsCommand);
             long totalCollectionSizeBytes = stats["storageSize"].ToInt64();
-            var documentCount = stats["count"].AsInt32;
+            var documentCount = stats["count"].AsInt64;
 
-            Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
-
-            int totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            int totalChunks=0;
+            if (_job.UseMongoDump)
+            {
+                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
+                long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
+                totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            }
+            else
+            {
+                Log.WriteLine($"{databaseName}.{collectionName} Estimated Document Count: {documentCount}");
+                totalChunks = (int)Math.Max(2000, documentCount / 20000);
+            }
+            
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
             if (totalChunks > 1 || !_job.UseMongoDump)

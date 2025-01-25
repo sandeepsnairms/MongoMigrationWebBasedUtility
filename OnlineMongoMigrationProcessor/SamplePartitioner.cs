@@ -38,20 +38,25 @@ namespace OnlineMongoMigrationProcessor
             Log.AddVerboseMessage($"Count documents before sampling data for {dataType}");
             Log.Save();
 
-            docCountByType = GetDocumentCountByDataType(collection, idField, dataType);
+            docCountByType = GetDocumentCountByDataType(collection, idField, dataType,true);
 
             if (docCountByType == 0)
             {
-                Log.WriteLine($"0 Documents where {idField} is {dataType}");
+                Log.WriteLine($"No documents where {idField} is {dataType}");
                 Log.Save();
                 return null;
             }
             else if (docCountByType < minDocsPerChunk)
             {
-                Log.WriteLine($"Document Count where {idField} is {dataType}:{docCountByType} is less than min partiton size.");
+                Log.WriteLine($"Document count where {idField} is {dataType}:{docCountByType} is less than min chunk size.");
                 Log.Save();
                 sampleCount = 1;
                 chunkCount = 1;
+            }
+            else
+            {
+                Log.WriteLine($"Estimated document count where {idField} is {dataType}:{docCountByType} : {docCountByType}");
+                Log.Save();
             }
 
             if (chunkCount > maxSamples)
@@ -104,10 +109,14 @@ namespace OnlineMongoMigrationProcessor
             {
                 new BsonDocument("$match", matchCondition),  // Add the match condition for the data type
                 new BsonDocument("$sample", new BsonDocument("size", sampleCount)),
-                new BsonDocument("$project", new BsonDocument(idField, 1)) // Keep only the partition key
+                new BsonDocument("$project", new BsonDocument(idField, 1)) // Keep only the _id key
             };
 
-            var sampledData = collection.Aggregate<BsonDocument>(pipeline).ToList();
+            AggregateOptions options = new AggregateOptions
+            {
+                MaxTime = TimeSpan.FromSeconds(3000)
+            };
+            var sampledData = collection.Aggregate<BsonDocument>(pipeline,options).ToList();
             var partitionValues = sampledData
                 .Select(doc => doc.GetValue(idField, BsonNull.Value))
                 .Where(value => value != BsonNull.Value)
@@ -170,15 +179,25 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, string idField, DataType dataType)
+        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, string idField, DataType dataType, bool useEstimate = false)
         {
             var filterBuilder = Builders<BsonDocument>.Filter;
 
-            BsonDocument matchCondition = DataTypeConditionBuilder(dataType,idField);
+            BsonDocument matchCondition = DataTypeConditionBuilder(dataType, idField);
 
             // Get the count of documents matching the filter
-            var count = collection.CountDocuments(matchCondition);
-            return count;
+            if (useEstimate)
+            {
+                var options = new EstimatedDocumentCountOptions { MaxTime = TimeSpan.FromSeconds(300) };
+                var count = collection.EstimatedDocumentCount(options);
+                return count;
+            }
+            else
+            {
+                var options = new CountOptions { MaxTime = TimeSpan.FromSeconds(600) };
+                var count = collection.CountDocuments(matchCondition, options);
+                return count;
+            }
         }
 
         public static BsonDocument DataTypeConditionBuilder(DataType dataType, string idField)
