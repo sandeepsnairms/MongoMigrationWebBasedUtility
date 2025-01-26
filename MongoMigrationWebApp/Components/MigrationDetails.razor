@@ -13,15 +13,16 @@
                     <label for="name" class="form-label">Name</label>
                     <input type="text" id="name" class="form-control" disabled="@(!newMode)" @bind="name" />
                 </div>
-
-                <div class="mb-3">
-                    <label for="mongo-options">Data Migration Tool:</label>
-                    <select id="mongo-options" @onchange="OnSelectionChanged">
-                        <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
-                        <option value="Use Mongo Driver">Use Mongo Driver</option>
-                    </select>
-                </div>
-
+                @if (newMode)
+                {
+                    <div class="mb-3">
+                        <label for="mongo-options">Data Migration Tool:</label>
+                        <select id="mongo-options" @onchange="OnSelectionChanged" >
+                            <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
+                            <option value="Use Mongo Driver">Use Mongo Driver</option>
+                        </select>
+                    </div>
+                }
                 <div class="mb-3">
                     <label class="form-label">Online</label>
                     <input type="checkbox" id="isOnline" disabled="@(!newMode)" @bind="isOnline" />
@@ -101,7 +102,7 @@
             errorMessage = "Name can't be empty.";
             return;
         }
-        if (CheckNameExists != null) // Ensure callback is provided
+        if (newMode && CheckNameExists != null) // Ensure callback is provided
         {
             var nameExists = await CheckNameExists(name);
             if (nameExists)

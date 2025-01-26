@@ -141,9 +141,9 @@ namespace OnlineMongoMigrationProcessor
                     Log.WriteLine("Source Connection Successful");
                     Log.Save();
 
+                    _migrationProcessor?.StopProcessing();
                     if (!_job.UseMongoDump)
-                    {
-                        _migrationProcessor?.StopProcessing();
+                    {                        
                         _migrationProcessor = new CopyProcessor(_jobs, _job, _sourceClient, Config);
                     }
                     else
@@ -183,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (_migrationCancelled) break;
 
-                        _migrationProcessor.Download(migrationUnit, sourceConnectionString, targetConnectionString);
+                        _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
                     }
 
                     continueProcessing = false;
@@ -229,24 +229,46 @@ namespace OnlineMongoMigrationProcessor
             var database = _sourceClient.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
 
-            long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
 
             var statsCommand = new BsonDocument { { "collStats", collectionName } };
             var stats = await database.RunCommandAsync<BsonDocument>(statsCommand);
             long totalCollectionSizeBytes = stats["storageSize"].ToInt64();
-            var documentCount = stats["count"].AsInt32;
 
-            Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
 
-            int totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            long documentCount;
+            if (stats["count"].IsInt32)
+            {
+                documentCount = stats["count"].ToInt32();
+            }
+            else if (stats["count"].IsInt64)
+            {
+                documentCount = stats["count"].ToInt64();
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected data type for document count.");
+            }
+
+            int totalChunks=0;
+            if (_job.UseMongoDump)
+            {
+                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
+                long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
+                totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            }
+            else
+            {
+                Log.WriteLine($"{databaseName}.{collectionName} Estimated Document Count: {documentCount}");
+                totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples/SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
+            }
+            
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
             if (totalChunks > 1 || !_job.UseMongoDump)
             {
-                Log.WriteLine($"Creating Partitions for {databaseName}.{collectionName}");
+                Log.WriteLine($"Chunking {databaseName}.{collectionName}");
                 Log.Save();
 
-                var partitioner = new SamplePartitioner();
 
                 List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
 
@@ -256,7 +278,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var dataType in dataTypes)
                 {
                     long docCountByType;
-                    ChunkBoundaries chunkBoundaries = partitioner.CreatePartitions(collection, idField, totalChunks, dataType, documentCount / totalChunks, out docCountByType);
+                    ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(collection, idField, totalChunks, dataType, documentCount / totalChunks, out docCountByType);
 
                     if (docCountByType == 0)
                     {

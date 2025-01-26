@@ -50,7 +50,7 @@ namespace OnlineMongoMigrationProcessor
                 _changeStreamProcessor.ExecutionCancelled = true;
         }
 
-        public void Download(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             int maxRetries = 10;
             string jobId = _job.Id;
@@ -89,7 +89,7 @@ namespace OnlineMongoMigrationProcessor
 
                 for (int i = 0; i < item.MigrationChunks.Count; i++)
                 {
-                    if (_executionCancelled || !_job.CurrentlyActive) return;
+                    if (_executionCancelled || _job==null || !_job.CurrentlyActive) return;
 
                     double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                     double contributionFactor = 1.0 / item.MigrationChunks.Count;
@@ -221,7 +221,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public void Upload(MigrationUnit item, string targetConnectionString)
+        private void Upload(MigrationUnit item, string targetConnectionString)
         {
             string dbName = item.DatabaseName;
             string colName = item.CollectionName;

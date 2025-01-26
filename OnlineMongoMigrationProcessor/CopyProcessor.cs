@@ -43,12 +43,12 @@ namespace OnlineMongoMigrationProcessor
                 _changeStreamProcessor.ExecutionCancelled = true;
         }
 
-        public void Upload(MigrationUnit item, string targetConnectionString)
-        {
-            throw new NotImplementedException();
-        }
+        //public void Upload(MigrationUnit item, string targetConnectionString)
+        //{
+        //    throw new NotImplementedException();
+        //}
 
-        public async void Download(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public async void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             int maxRetries = 10;
             string jobId = _job.Id;

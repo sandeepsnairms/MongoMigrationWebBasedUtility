@@ -11,7 +11,7 @@ namespace OnlineMongoMigrationProcessor
 
         // Methods
         void StopProcessing();
-        void Download(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id");        
-        void Upload(MigrationUnit item, string targetConnectionString);
+        void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id");        
+        //void Upload(MigrationUnit item, string targetConnectionString);
     }
 }

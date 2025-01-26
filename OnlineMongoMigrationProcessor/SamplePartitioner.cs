@@ -14,47 +14,65 @@ using MongoDB.Bson.IO;
 
 namespace OnlineMongoMigrationProcessor
 {
-    public class SamplePartitioner
+    public static class SamplePartitioner
     {
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 
-
+  
+        public static int MaxSegments = 20;
+        public static int MaxSamples = 2000;
         /// <summary>
         /// Creates partitions based on sampled data from the collection.
         /// </summary>
         /// <param name="idField">The field used as the partition key.</param>
         /// <param name="partitionCount">The number of desired partitions.</param>
         /// <returns>A list of partition boundaries.</returns>
-        public ChunkBoundaries CreatePartitions(IMongoCollection<BsonDocument> collection, string idField, int chunkCount, DataType dataType, long minDocsPerChunk, out long docCountByType)
+        public static ChunkBoundaries CreatePartitions(IMongoCollection<BsonDocument> collection, string idField, int chunkCount, DataType dataType, long minDocsPerChunk, out long docCountByType)
         {
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
             long docsInChunk=0;
-            int maxSamples = 2000;
+            
             int sampleCount=0;
-            int maxSegments = 20;
+           
 
-            Log.AddVerboseMessage($"Count documents before sampling data for {dataType}");
+            Log.AddVerboseMessage($"Counting documents before sampling data for {dataType}");
             Log.Save();
 
-            docCountByType = GetDocumentCountByDataType(collection, idField, dataType);
+            try
+            {
+                docCountByType = GetDocumentCountByDataType(collection, idField, dataType);
+            }
+            catch (TimeoutException ex)
+            {
+                Log.WriteLine($"Timeout occurred while counting documents: {ex.Message}",LogType.Error);
+                Log.WriteLine($"Using Estimated document count");
+                Log.Save();
+                docCountByType = GetDocumentCountByDataType(collection, idField, dataType,true);
+            }
+
 
             if (docCountByType == 0)
             {
-                Log.WriteLine($"0 Documents where {idField} is {dataType}");
+                Log.WriteLine($"No documents where {idField} is {dataType}");
                 Log.Save();
                 return null;
             }
             else if (docCountByType < minDocsPerChunk)
             {
-                Log.WriteLine($"Document Count where {idField} is {dataType}:{docCountByType} is less than min partiton size.");
+                Log.WriteLine($"Document count where {idField} is {dataType}:{docCountByType} is less than min chunk size.");
                 Log.Save();
                 sampleCount = 1;
                 chunkCount = 1;
             }
+            else
+            {
+                Log.WriteLine($"Document count where {idField} is {dataType}:{docCountByType} : {docCountByType}");
+                Log.Save();
+            }
 
-            if (chunkCount > maxSamples)
+            if (chunkCount > MaxSamples)
                 throw new ArgumentException("Chunk count too large. Retry with larger Chunk Size.");
 
 
@@ -73,13 +91,13 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // dont allow more than 10 segments
-            segmentCount = Math.Min(segmentCount, maxSegments);
+            segmentCount = Math.Min(segmentCount, MaxSegments);
 
             // Calculate sampleCount as segmentCount times the chunkCount
             sampleCount = chunkCount * segmentCount; //used to generate segments in case of non Dump/Restore sceanrio
 
             // dont allow more samples than maxSamples
-            sampleCount = Math.Min(sampleCount, maxSamples);
+            sampleCount = Math.Min(sampleCount, MaxSamples);
 
             // Adjust the number of segments per chunk based on the new sampleCount
             segmentCount = Math.Max(1, sampleCount / chunkCount);
@@ -88,34 +106,56 @@ namespace OnlineMongoMigrationProcessor
             if (chunkCount < 1)
                 throw new ArgumentException("Chunk count must be greater than 0.");
 
-            Log.WriteLine($"SampleCount: {sampleCount}, Chunk Count: {chunkCount} where {idField} is {dataType}");
-            Log.Save();
 
             // Step 1: Build the filter pipeline based on the data type
 
-            BsonDocument matchCondition = DataTypeConditionBuilder(dataType, idField);
+            BsonDocument matchCondition = BuildDataTypeCondition(dataType, idField);
 
             // Step 2: Sample the data
 
-            Log.AddVerboseMessage($"Sampling data for {dataType} with {sampleCount} samples");
+            Log.AddVerboseMessage($"Sampling data where {idField} is {dataType} with {sampleCount} samples, Chunk Count: {chunkCount}");
             Log.Save();
 
             var pipeline = new[]
             {
                 new BsonDocument("$match", matchCondition),  // Add the match condition for the data type
                 new BsonDocument("$sample", new BsonDocument("size", sampleCount)),
-                new BsonDocument("$project", new BsonDocument(idField, 1)) // Keep only the partition key
+                new BsonDocument("$project", new BsonDocument(idField, 1)) // Keep only the _id key
             };
 
-            var sampledData = collection.Aggregate<BsonDocument>(pipeline).ToList();
-            var partitionValues = sampledData
-                .Select(doc => doc.GetValue(idField, BsonNull.Value))
-                .Where(value => value != BsonNull.Value)
-                .Distinct()
-                .OrderBy(value => value)
-                .ToList();
+            List<BsonValue> partitionValues = new List<BsonValue>();
+            for (int i = 0; i < 10; i++)
+            {
+                try
+                {
+                    AggregateOptions options = new AggregateOptions
+                    {
+                        MaxTime = TimeSpan.FromSeconds(7200)
+                    };
+                    var sampledData = collection.Aggregate<BsonDocument>(pipeline, options).ToList();
+                    partitionValues = sampledData
+                        .Select(doc => doc.GetValue(idField, BsonNull.Value))
+                        .Where(value => value != BsonNull.Value)
+                        .Distinct()
+                        .OrderBy(value => value)
+                        .ToList();
 
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    Log.WriteLine($"Attempt {i} encountered error sampling data for {dataType}: {ex.Message}");
+                    Log.Save();
+                }
+            }
 
+            if(partitionValues==null || partitionValues.Count == 0)
+            {
+                docCountByType = 0;
+                Log.WriteLine($"No data found for {dataType}");
+                Log.Save();
+                return null;
+            }
             // Step 3: Calculate partition boundaries
 
             ChunkBoundaries chunkBoundaries= new ChunkBoundaries();
@@ -170,18 +210,28 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, string idField, DataType dataType)
+        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, string idField, DataType dataType, bool useEstimate = false)
         {
             var filterBuilder = Builders<BsonDocument>.Filter;
 
-            BsonDocument matchCondition = DataTypeConditionBuilder(dataType,idField);
+            BsonDocument matchCondition = BuildDataTypeCondition(dataType, idField);
 
             // Get the count of documents matching the filter
-            var count = collection.CountDocuments(matchCondition);
-            return count;
+            if (useEstimate)
+            {
+                var options = new EstimatedDocumentCountOptions { MaxTime = TimeSpan.FromSeconds(300) };
+                var count = collection.EstimatedDocumentCount(options);
+                return count;
+            }
+            else
+            {
+                var options = new CountOptions { MaxTime = TimeSpan.FromSeconds(600) };
+                var count = collection.CountDocuments(matchCondition, options);
+                return count;
+            }
         }
 
-        public static BsonDocument DataTypeConditionBuilder(DataType dataType, string idField)
+        public static BsonDocument BuildDataTypeCondition(DataType dataType, string idField)
         {
             BsonDocument matchCondition;
             switch (dataType)
