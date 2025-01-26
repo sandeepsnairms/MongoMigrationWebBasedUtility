@@ -41,15 +41,15 @@
 }
 
 
-@if (_manageCollectionDialogOpen && MigrationJob != null)
+@if (_migrationDetailsPopUpOpen && MigrationJob != null)
 {
     <MongoMigrationWebApp.Components.MigrationDetails NewMode=false Name="@MigrationJob?.Name"
     IsOnline="@MigrationJob.IsOnline"
     SourceEndpoint="@MigrationJob.SourceEndpoint"
     TargetEndpoint="@MigrationJob.TargetEndpoint"
     NameSpaces="@MigrationJob.NameSpaces"
-    OnSubmit="@OnMigrationDetailsPopUpSubmit" />
-
+    OnSubmit="@OnMigrationDetailsPopUpSubmit"
+    CheckNameExists="CheckIfNameExistsAsync" />
 }
 
 @if (_yesNoDialogOpen)
@@ -59,7 +59,7 @@
 
 @if (_manageCollectionDialogOpen && MigrationJob != null)
 {
-    <ManageCollections MigrationUnits="@MigrationJob.MigrationUnits" OnConllectionsUpdated="@OnCollectionsUpdated" />
+    <ManageCollections MigrationUnits="@MigrationJob.MigrationUnits" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
 <table class="table">
@@ -265,6 +265,12 @@
         LogBucket = JobManager.GetLogBucket(JobId);
 
         InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
+    }
+
+    private Task<bool> CheckIfNameExistsAsync(string name)
+    {
+        //always false as we are not checking for duplicate names in this case
+        return Task.FromResult(false);
     }
 
     private string GetChangeStreamLag(DateTime cursorUtcTimestamp)

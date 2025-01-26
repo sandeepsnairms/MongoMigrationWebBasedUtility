@@ -228,12 +228,26 @@ namespace OnlineMongoMigrationProcessor
         {
             var database = _sourceClient.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
-                
+
 
             var statsCommand = new BsonDocument { { "collStats", collectionName } };
             var stats = await database.RunCommandAsync<BsonDocument>(statsCommand);
             long totalCollectionSizeBytes = stats["storageSize"].ToInt64();
-            var documentCount = stats["count"].AsInt64;
+
+
+            long documentCount;
+            if (stats["count"].IsInt32)
+            {
+                documentCount = stats["count"].ToInt32();
+            }
+            else if (stats["count"].IsInt64)
+            {
+                documentCount = stats["count"].ToInt64();
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected data type for document count.");
+            }
 
             int totalChunks=0;
             if (_job.UseMongoDump)
@@ -245,17 +259,16 @@ namespace OnlineMongoMigrationProcessor
             else
             {
                 Log.WriteLine($"{databaseName}.{collectionName} Estimated Document Count: {documentCount}");
-                totalChunks = (int)Math.Max(2000, documentCount / 20000);
+                totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples/SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
             }
             
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
             if (totalChunks > 1 || !_job.UseMongoDump)
             {
-                Log.WriteLine($"Creating Partitions for {databaseName}.{collectionName}");
+                Log.WriteLine($"Chunking {databaseName}.{collectionName}");
                 Log.Save();
 
-                var partitioner = new SamplePartitioner();
 
                 List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
 
@@ -265,7 +278,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var dataType in dataTypes)
                 {
                     long docCountByType;
-                    ChunkBoundaries chunkBoundaries = partitioner.CreatePartitions(collection, idField, totalChunks, dataType, documentCount / totalChunks, out docCountByType);
+                    ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(collection, idField, totalChunks, dataType, documentCount / totalChunks, out docCountByType);
 
                     if (docCountByType == 0)
                     {

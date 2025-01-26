@@ -86,6 +86,10 @@ namespace OnlineMongoMigrationProcessor
                 int segmentIndex = 0;
                 errors = new ConcurrentBag<Exception>();
 
+                int maxWorkerThreads, maxCompletionPortThreads;
+                ThreadPool.GetMaxThreads(out maxWorkerThreads, out maxCompletionPortThreads);
+                SemaphoreSlim semaphore = new SemaphoreSlim(maxWorkerThreads);
+
                 foreach (var segment in item.MigrationChunks[migrationChunkIndex].Segments)
                 {
                     if (segment.IsProcessed == true)
@@ -93,6 +97,7 @@ namespace OnlineMongoMigrationProcessor
                         segmentIndex++;
                         continue;
                     }
+
                     FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
                     if (item.MigrationChunks[migrationChunkIndex].Segments.Count == 1)
                     {
@@ -104,21 +109,35 @@ namespace OnlineMongoMigrationProcessor
                         var gte = bounds.gte;
                         var lt = bounds.lt;
 
-                        //filter by id bounds
+                        // Filter by id bounds
                         FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
 
-                        //filter by datatype
-                        BsonDocument matchCondition = SamplePartitioner.DataTypeConditionBuilder(item.MigrationChunks[migrationChunkIndex].DataType, "_id");
+                        // Filter by datatype
+                        BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(item.MigrationChunks[migrationChunkIndex].DataType, "_id");
 
                         // Combine the filters using $and
                         combinedFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
                     }
 
-                    tasks.Add(ProcessSegmentAsync(segment, combinedFilter, segmentIndex, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken));
-                    segmentIndex++;
+                    await semaphore.WaitAsync();
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            segmentIndex++;
+                            await ProcessSegmentAsync(segment, combinedFilter, segmentIndex, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken);
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    }));
+
+                   
                 }
 
                 await Task.WhenAll(tasks);
+               
             }
             catch (OperationCanceledException)
             {
