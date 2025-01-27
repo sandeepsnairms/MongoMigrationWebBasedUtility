@@ -141,7 +141,7 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     _sourceClient = new MongoClient(sourceConnectionString);
-                    Log.WriteLine("Source Connection Successful");
+                    Log.WriteLine("Source Client Created");
                     Log.Save();
 
                     _migrationProcessor?.StopProcessing();
@@ -254,25 +254,23 @@ namespace OnlineMongoMigrationProcessor
 
             int totalChunks=0;
             long minDocsInChunk=0;
+
+            long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
+            var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            
+
             if (_job.UseMongoDump)
             {
-                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
-                long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
-                totalChunks = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+                totalChunks = totalChunksBySize;
                 minDocsInChunk = documentCount / totalChunks;
+                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");                
             }
             else
             {
                 Log.WriteLine($"{databaseName}.{collectionName} Estimated Document Count: {documentCount}");
                 totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples/SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
-                minDocsInChunk = documentCount / totalChunks;
-
-                // we want more segments for parallel processing
-                if ( (documentCount/ (minDocsInChunk * totalChunks)) < 5)
-                {
-                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount /(5 * minDocsInChunk));
-                    minDocsInChunk = documentCount / totalChunks;
-                }
+                totalChunks = Math.Max(totalChunks, totalChunksBySize);
+                minDocsInChunk = documentCount / totalChunks;               
             }
             
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();

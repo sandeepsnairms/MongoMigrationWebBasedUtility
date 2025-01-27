@@ -75,35 +75,39 @@ namespace OnlineMongoMigrationProcessor
             if (chunkCount > MaxSamples)
                 throw new ArgumentException("Chunk count too large. Retry with larger Chunk Size.");
 
-            
 
-            //ensuring minimum docs per chunk
+            // Ensure minimum documents per chunk
+            chunkCount = Math.Max(1, (int)Math.Ceiling((double)docCountByType / minDocsPerChunk));
             docsInChunk = docCountByType / chunkCount;
-            if (docsInChunk < minDocsPerChunk)
-            {
-                chunkCount = Math.Max(1,(int)Math.Ceiling((double)docCountByType / minDocsPerChunk));
-                docsInChunk = docCountByType / chunkCount;
-            }            
 
-            // Calculate the number of segments based on the number of documents in the chunk
-            if (docsInChunk > minDocsPerSegment)
+            // Calculate segments based on documents per chunk
+            segmentCount = Math.Min(
+                Math.Max(1, (int)Math.Ceiling((double)docsInChunk / minDocsPerSegment)),
+                MaxSegments
+            );
+
+            // Calculate the total sample count
+            sampleCount = Math.Min(chunkCount * segmentCount, MaxSamples);
+
+            // Adjust segments per chunk based on the new sample count
+            segmentCount = Math.Max(1, sampleCount / chunkCount);
+
+            // Optimize for non-dump scenarios
+            if (!optimizeForMongoDump)
             {
-                segmentCount = (int)Math.Ceiling((double)docsInChunk / minDocsPerSegment);
+                while (chunkCount > segmentCount && segmentCount < 20)
+                {
+                    chunkCount--;
+                    segmentCount ++;
+                }
+
+                chunkCount = sampleCount / segmentCount;
             }
 
-            // dont allow more than 10 segments
-            segmentCount = Math.Min(segmentCount, MaxSegments);
-
-            // Calculate sampleCount as segmentCount times the chunkCount
-            sampleCount = chunkCount * segmentCount; //used to generate segments in case of non Dump/Restore sceanrio
-
-
-            // dont allow more samples than maxSamples
-            sampleCount = Math.Min(sampleCount, MaxSamples);
-
-            // Adjust the number of segments per chunk based on the new sampleCount
-            segmentCount = Math.Max(1, sampleCount / chunkCount);
             
+
+
+
 
             if (chunkCount < 1)
                 throw new ArgumentException("Chunk count must be greater than 0.");
