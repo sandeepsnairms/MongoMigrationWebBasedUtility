@@ -17,7 +17,18 @@
     <div class="d-flex align-items-center mb-3">
         @if (MigrationJob !=null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())))
         {
-            <button class="btn btn-primary mx-2" title="Resume Job" @onclick="ResumeJob">Resume Job</button>            
+            <div class="btn-group mx-2">
+                <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                    Resume Job
+                </button>
+                <ul class="dropdown-menu" aria-labelledby="resumeJobDropdown">
+                    <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
+                    @if (! string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
+                    {
+                        <li><a class="dropdown-item" @onclick="ResumeJob">With Existing Connection Strings</a></li>
+                    }
+                </ul>
+            </div>
         }
 
         @if (MigrationJob!=null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && JobManager.MigrationWorker != null && JobManager.MigrationWorker.IsProcessRunning())
@@ -192,7 +203,7 @@
 }
 @code {
 
-#pragma warning disable CS8602
+    #pragma warning disable CS8602
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 
@@ -363,6 +374,12 @@
         {
             _errorMessage = "Please pause the job, before updating collections.";
         }
+    }
+    private async Task ResumeJobWithNewConnectionString()
+    {
+        MigrationJob.SourceConnectionString = string.Empty;
+        MigrationJob.TargetConnectionString = string.Empty;
+        await ResumeJob();
     }
 
     private async Task ResumeJob()

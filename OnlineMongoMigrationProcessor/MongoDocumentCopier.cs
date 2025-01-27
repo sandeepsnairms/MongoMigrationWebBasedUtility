@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor
 
                 //int maxWorkerThreads, maxCompletionPortThreads;
                 //ThreadPool.GetMaxThreads(out maxWorkerThreads, out maxCompletionPortThreads);
-                SemaphoreSlim semaphore = new SemaphoreSlim(10);
+                SemaphoreSlim semaphore = new SemaphoreSlim(20);
 
                 foreach (var segment in item.MigrationChunks[migrationChunkIndex].Segments)
                 {
@@ -197,15 +197,27 @@ namespace OnlineMongoMigrationProcessor
             }
             else if(segment.QueryDocCount > 0)
             {
-                // Delete documents matching the filter
-                var result = await _targetCollection.DeleteManyAsync(combinedFilter);
-                if(result.DeletedCount > 0)
+                try
                 {
-                    // Output the number of deleted documents
-                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                    Log.WriteLine($"Deleting documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                    Log.Save();
+
+                    // Remove the MaxTime property as it does not exist in DeleteOptions
+                    var result = await _targetCollection.DeleteManyAsync(combinedFilter);
+                    if (result.DeletedCount > 0)
+                    {
+                        // Output the number of deleted documents
+                        Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                        Log.Save();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(ex);
+                    Log.WriteLine($"Error deleting documents from target in chunk segment [{migrationChunkIndex}.{segmentIndex}].Resuming without delete, Details: {ex.Message}", LogType.Error);
                     Log.Save();
                 }
-                
+
             }
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
             jobList.Save();
