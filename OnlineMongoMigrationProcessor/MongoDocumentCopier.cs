@@ -197,27 +197,15 @@ namespace OnlineMongoMigrationProcessor
             }
             else if(segment.QueryDocCount > 0)
             {
-                try
+                // Delete documents matching the filter
+                var result = await _targetCollection.DeleteManyAsync(combinedFilter);
+                if(result.DeletedCount > 0)
                 {
-                    Log.WriteLine($"Deleting documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
-                    Log.Save();
-
-                    // Remove the MaxTime property as it does not exist in DeleteOptions
-                    var result = await _targetCollection.DeleteManyAsync(combinedFilter);
-                    if (result.DeletedCount > 0)
-                    {
-                        // Output the number of deleted documents
-                        Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
-                        Log.Save();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    errors.Add(ex);
-                    Log.WriteLine($"Error deleting documents from target in segment [{migrationChunkIndex}.{segmentIndex}].Resuming without delete, Details: {ex.Message}", LogType.Error);
+                    // Output the number of deleted documents
+                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
                     Log.Save();
                 }
-
+                
             }
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
             jobList.Save();
