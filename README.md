@@ -1,11 +1,11 @@
 # Migration Tool for Azure Cosmos DB for MongoDB (vCore-Based)
 
-Streamline your migration to Azure Cosmos DB for MongoDB (vCore-based) with a tool built for efficiency, reliability, and ease of use. Whether you're migrating data online or offline, this tool delivers a seamless experience tailored to your requirements. While it leverages `mongodump` and `mongorestore` internally for data transfer, you don’t need to learn or use these command-line tools yourself.
+Streamline your migration to Azure Cosmos DB for MongoDB (vCore-based) with a tool built for efficiency, reliability, and ease of use. Whether you're migrating data online or offline, this tool delivers a seamless experience tailored to your requirements. It can either use `mongodump` and `mongorestore` for data movement or employ the MongoDB driver to read data from the source and write it to the target. You don’t need to learn or use these command-line tools yourself.
 
 ## Key Features
 
 - **Flexible Migration Options**  
-  Supports both online and offline migrations to suit your business requirements.
+  Supports both online and offline migrations to suit your business requirements. It can either use `mongodump` and `mongorestore` for data movement or employ the MongoDB driver to read data from the source and write it to the target.
 
 - **User-Friendly Interface**  
   No steep learning curve—simply provide your connection strings and specify the collections to migrate.
@@ -270,10 +270,10 @@ If using a private DNS zone:
 ## How to Use
 
 ### Add a New Job
-1. From the home page  (`https://<WebAppName>.azurewebsites.net`)
-2. Select **New Job**.  
-3. In the “New Job Details” pop-up, provide the necessary details and select **OK**.  
-4. The job will automatically start if no other jobs are running.  
+1. From the home page (https://<WebAppName>.azurewebsites.net), select **New Job**.
+2. In the "New Job Details" pop-up, provide the necessary details and select OK.
+3. Choose the migration tool: either "Mongo Dump/Restore" or "Mongo Driver".
+4. The job will automatically start if no other jobs are running.
 
 #### Migrations modes
 

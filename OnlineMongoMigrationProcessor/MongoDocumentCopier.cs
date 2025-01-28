@@ -50,7 +50,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0)
             {
-                Log.AddVerboseMessage($"Document copy for chunk segment [{migrationChunkIndex}.{setIndex}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+                Log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{setIndex}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
                 Log.Save();
                 item.DumpPercent = basePercent + (percent * contribFactor);
                 item.RestorePercent = item.DumpPercent;
@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor
 
                 //int maxWorkerThreads, maxCompletionPortThreads;
                 //ThreadPool.GetMaxThreads(out maxWorkerThreads, out maxCompletionPortThreads);
-                SemaphoreSlim semaphore = new SemaphoreSlim(10);
+                SemaphoreSlim semaphore = new SemaphoreSlim(20);
 
                 foreach (var segment in item.MigrationChunks[migrationChunkIndex].Segments)
                 {
@@ -184,12 +184,12 @@ namespace OnlineMongoMigrationProcessor
             ConcurrentBag<Exception> errors,
             CancellationToken cancellationToken)
         {
-            Log.WriteLine($"Document copy started for chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+            Log.WriteLine($"Document copy started for segment [{migrationChunkIndex}.{segmentIndex}]");
             Log.Save();
 
             if (segment.IsProcessed == true)
             {
-                Log.WriteLine($"Skipping processed chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                Log.WriteLine($"Skipping processed segment [{migrationChunkIndex}.{segmentIndex}]");
                 Log.Save();
 
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
@@ -202,7 +202,7 @@ namespace OnlineMongoMigrationProcessor
                 if(result.DeletedCount > 0)
                 {
                     // Output the number of deleted documents
-                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
                     Log.Save();
                 }
                 
@@ -252,14 +252,14 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (Exception ex) when (ex.Message.Contains("canceled."))
                     {
-                        Log.WriteLine($"Document copy operation canceled for chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                        Log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentIndex}]");
                         Log.Save();
                     }
                     catch (Exception ex)
                     {
                         errors.Add(ex);
                         Interlocked.Add(ref _failureCount, set.Count);
-                        Log.WriteLine($"Batch processing error during document copy for chunk segment [{migrationChunkIndex}.{segmentIndex}]. Details : {ex.Message}", LogType.Error);
+                        Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentIndex}]. Details : {ex.Message}", LogType.Error);
                         Log.Save();
                     }
                     finally
@@ -282,7 +282,7 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 errors.Add(ex);
-                Log.WriteLine($"Document copy encountered error while processing chunk segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.Message}", LogType.Error);
                 Log.Save();
             }
         }
