@@ -202,7 +202,7 @@ namespace OnlineMongoMigrationProcessor
                 if(result.DeletedCount > 0)
                 {
                     // Output the number of deleted documents
-                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in chunk segment [{migrationChunkIndex}.{segmentIndex}]");
+                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
                     Log.Save();
                 }
                 
