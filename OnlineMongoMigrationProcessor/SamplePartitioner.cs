@@ -44,12 +44,12 @@ namespace OnlineMongoMigrationProcessor
             {
                 docCountByType = GetDocumentCountByDataType(collection, idField, dataType);
             }
-            catch (TimeoutException ex)
+            catch (Exception ex)
             {
-                Log.WriteLine($"Timeout occurred while counting documents: {ex.Message}",LogType.Error);
+                Log.WriteLine($"Exception occurred while counting documents: {ex.Message}", LogType.Error);
                 Log.WriteLine($"Using Estimated document count");
                 Log.Save();
-                docCountByType = GetDocumentCountByDataType(collection, idField, dataType,true);
+                docCountByType = GetDocumentCountByDataType(collection, idField, dataType, true);
             }
 
 
