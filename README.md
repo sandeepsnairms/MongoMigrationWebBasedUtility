@@ -134,7 +134,10 @@ This option involves cloning the repository and building the C# project source f
 
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
-6. Keep in mind that [vNet injection](#1-enable-vnet-integration-for-the-web-app) is required if the source or target MongoDB servers are within a private vNet.
+
+### VNet Integration for MongoDB servers within a private Virtual Network (VNet)
+
+Accessing MongoDB servers within a VNet requires VNet injection. To enable connectivity to MongoDB servers located within a private VNet, ensure that [VNet integration](#1-enable-vnet-integration-for-the-web-app) is configured for your application.
 
 
 ## Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)
