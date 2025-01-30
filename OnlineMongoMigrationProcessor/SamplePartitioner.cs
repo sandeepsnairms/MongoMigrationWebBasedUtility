@@ -136,7 +136,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     AggregateOptions options = new AggregateOptions
                     {
-                        MaxTime = TimeSpan.FromSeconds(7200)
+                        MaxTime = TimeSpan.FromSeconds(3600*10)
                     };
                     var sampledData = collection.Aggregate<BsonDocument>(pipeline, options).ToList();
                     partitionValues = sampledData
