@@ -5,7 +5,7 @@ Streamline your migration to Azure Cosmos DB for MongoDB (vCore-based) with a to
 ## Key Features
 
 - **Flexible Migration Options**  
-  Supports both online and offline migrations to suit your business requirements. It can either use `mongodump` and `mongorestore` for data movement or employ the MongoDB driver to read data from the source and write it to the target. If you are migrating an on-premises MongoDB VM, consider using the [On-Premise Deployment](#deploy-mongomigrationwebapp-on-a-onpremise-windows-server) to install the app locally and transfer data to Azure. This eliminates the need to set up an Azure VPN.
+  Supports both online and offline migrations to suit your business requirements. It can either use `mongodump` and `mongorestore` for data movement or employ the MongoDB driver to read data from the source and write it to the target. If you are migrating an on-premises MongoDB VM, consider using the [On-Premises Deployment](#on-premises-deployment) to install the app locally and transfer data to Azure. This eliminates the need to set up an Azure VPN.
 
 - **User-Friendly Interface**  
   No steep learning curve—simply provide your connection strings and specify the collections to migrate.
@@ -103,7 +103,7 @@ This option involves cloning the repository and building the C# project source f
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
-### Deploy on Azure using using precompiled binaries (option 2)
+### Deploy on Azure using precompiled binaries (option 2)
 
 1. Download the .zip file (excluding source code.zip and source code.tar.gz) from the latest release available at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`.
 2. Open PowerShell.
@@ -134,7 +134,10 @@ This option involves cloning the repository and building the C# project source f
 
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
-6. Keep in mind that [vNet injection](#1-enable-vnet-integration-for-the-web-app) is required if the source or target MongoDB servers are within a private vNet.
+
+### VNet Integration for MongoDB servers within a private Virtual Network (VNet)
+
+Accessing MongoDB servers within a VNet requires VNet injection. To enable connectivity to MongoDB servers located within a private VNet, ensure that [VNet integration](#1-enable-vnet-integration-for-the-web-app) is configured for your application.
 
 
 ## Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)
@@ -270,7 +273,7 @@ If using a private DNS zone:
 3. Confirm that the web app is accessible only within the VNet.
 
 
-## On-Premise Deployment
+## On-Premises Deployment
 
 Follow these steps to migrate data from an on-premises MongoDB VM. You can deploy the utility by either compiling the source files or using the precompiled binaries.
 
