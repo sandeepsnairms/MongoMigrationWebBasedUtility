@@ -103,7 +103,7 @@ This option involves cloning the repository and building the C# project source f
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
-### Deploy on Azure using using precompiled binaries (option 2)
+### Deploy on Azure using precompiled binaries (option 2)
 
 1. Download the .zip file (excluding source code.zip and source code.tar.gz) from the latest release available at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`.
 2. Open PowerShell.
