@@ -167,7 +167,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 _workingFolder = Path.GetTempPath();
             }
-            else
+            
+            if(! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
             {
                 _workingFolder = Path.Combine(homePath, "home//");
             }
