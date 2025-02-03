@@ -82,7 +82,7 @@ namespace MongoMigrationWebApp.Service
         {
             try
             {
-                System.IO.Directory.Delete($"{Path.GetTempPath()}mongodump\\{jobId}",true);
+                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}",true);
             }
             catch(Exception ex)
             {

@@ -20,7 +20,7 @@ namespace OnlineMongoMigrationProcessor
         private MigrationJob? _job;
         private string _toolsLaunchFolder = string.Empty;
         private bool _executionCancelled = false;
-        private string _mongoDumpOutputFolder = $"{Path.GetTempPath()}mongodump";
+        private string _mongoDumpOutputFolder = $"{Helper.GetWorkingFolder()}mongodump";
         private MongoClient? _sourceClient;
         private MongoClient? _targetClient;
         private MigrationSettings? _config;
@@ -269,12 +269,16 @@ namespace OnlineMongoMigrationProcessor
 
             Log.WriteLine($"{dbName}.{colName} Uploader started");
 
+
+
             while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive)
             {
                 int restoredChunks = 0;
                 long restoredDocs = 0;
+
+
                 // MongoRestore
-                if (!item.RestoreComplete && !_executionCancelled)
+                if (!item.RestoreComplete && !_executionCancelled && item.SourceStatus == CollectionStatus.OK)
                 {
                     for (int i = 0; i < item.MigrationChunks.Count; i++)
                     {                 
@@ -448,7 +452,7 @@ namespace OnlineMongoMigrationProcessor
                         var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
                         if (Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                            Log.WriteLine($"{migrationJob.Id} Terminated");
+                            Log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
                             migrationJob.CurrentlyActive = false;

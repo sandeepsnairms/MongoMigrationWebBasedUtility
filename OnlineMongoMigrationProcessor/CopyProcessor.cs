@@ -231,7 +231,7 @@ namespace OnlineMongoMigrationProcessor
                         var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
                         if (Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                            Log.WriteLine($"{migrationJob.Id} Terminated");
+                            Log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
                             migrationJob.CurrentlyActive = false;

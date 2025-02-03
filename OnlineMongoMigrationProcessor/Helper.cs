@@ -11,7 +11,7 @@ namespace OnlineMongoMigrationProcessor
     public static class Helper
     {
 
-       
+       static string _workingFolder = string.Empty;
 
         private static double GetFolderSizeInGB(string folderPath)
         {
@@ -152,6 +152,28 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+
+        public static string GetWorkingFolder()
+        {
+            if (!string.IsNullOrEmpty(_workingFolder))
+            {
+                return _workingFolder;
+            }
+
+            string homePath = Environment.GetEnvironmentVariable("ResourceDrive");
+
+            if (string.IsNullOrEmpty(homePath))
+            {
+                _workingFolder = Path.GetTempPath();
+            }
+            else
+            {
+                _workingFolder = Path.Combine(homePath, "home//");
+            }
+            return _workingFolder;
+        }
+
         public static Tuple<bool, string> ValidateNamespaceFormat(string input)
         {
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
@@ -197,8 +219,11 @@ namespace OnlineMongoMigrationProcessor
 
             foreach (var mu in migrationJob.MigrationUnits)
             {
-                if (!mu.RestoreComplete || !mu.DumpComplete)
-                    return false;
+                if (mu.SourceStatus == CollectionStatus.OK)
+                {
+                    if (!mu.RestoreComplete || !mu.DumpComplete)
+                        return false;
+                }
             }
             return true;
         }

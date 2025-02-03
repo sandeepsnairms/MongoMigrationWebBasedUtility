@@ -18,7 +18,7 @@ namespace OnlineMongoMigrationProcessor
 
     public class MigrationWorker
     {
-        private string _toolsDestinationFolder = $"{Path.GetTempPath()}mongo-tools";
+        private string _toolsDestinationFolder = $"{Helper.GetWorkingFolder()}mongo-tools";
         private string _toolsLaunchFolder = string.Empty;
         private bool _migrationCancelled = false;
         private JobList? _jobs;
@@ -179,19 +179,29 @@ namespace OnlineMongoMigrationProcessor
 
                         if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
                         {
-                            var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
-
-                            Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
-                            Log.Save();
-
-                            unit.MigrationChunks = chunks;
-                            unit.ChangeStreamStartedOn = DateTime.Now;
-
-                            if (!_job.UseMongoDump)
+                            if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                             {
-                                var database = _sourceClient.GetDatabase(unit.DatabaseName);
-                                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
+                                unit.SourceStatus= CollectionStatus.OK;
+                                var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
+
+                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
+                                Log.Save();
+
+                                unit.MigrationChunks = chunks;
+                                unit.ChangeStreamStartedOn = DateTime.Now;
+
+                                if (!_job.UseMongoDump)
+                                {
+                                    var database = _sourceClient.GetDatabase(unit.DatabaseName);
+                                    var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
+                                }
+                            }
+                            else
+                            {
+                                unit.SourceStatus = CollectionStatus.NotFound;                                
+                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
+                                Log.Save();
                             }
                         }
                     }
@@ -203,7 +213,19 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (_migrationCancelled) break;
 
-                        _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                        if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                        {
+                            if (await MongoHelper.CheckCollectionExists(_sourceClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                            {
+                                _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                            }
+                            else
+                            {
+                                migrationUnit.SourceStatus = CollectionStatus.NotFound;
+                                Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source", LogType.Error);
+                                Log.Save();
+                            }
+                        }
                     }
 
                     continueProcessing = false;

@@ -8,6 +8,7 @@
 @using MongoMigrationWebApp.Components
 @using OnlineMongoMigrationProcessor
 
+
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3 class="mb-0">
         <button class="btn btn-light" title="Download Jobs JSON" @onclick="DownloadFile" style="border: none; background: transparent;">
@@ -175,7 +176,7 @@
 
             if (approved && (!_selectedMigrationJob.CurrentlyActive || !JobManager.MigrationWorker.IsProcessRunning()))
             {
-                
+
                 if (_selectedMigrationJob != null)
                 {
                     string jobId = _selectedMigrationJob.Id;
@@ -190,7 +191,7 @@
                     }
                     catch { }
                 }
-                
+
             }
 
             _selectedMigrationJob = null;
@@ -232,6 +233,8 @@
 
     private void StartMigrationAsync()
     {
+        
+
         _selectedMigrationJob = null;
         _migrationDetailsPopUpOpen = true;
     }

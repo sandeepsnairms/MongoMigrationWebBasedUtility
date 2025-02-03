@@ -17,11 +17,11 @@ namespace OnlineMongoMigrationProcessor
 
         public JobList()
         {
-            if (!Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
+            if (!Directory.Exists($"{Helper.GetWorkingFolder()}migrationjobs"))
             {
-                Directory.CreateDirectory($"{Path.GetTempPath()}migrationjobs");
+                Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationjobs");
             }
-            _filePath = $"{Path.GetTempPath()}migrationjobs\\list.json";
+            _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
         }
 
         public void Load()
@@ -84,6 +84,14 @@ namespace OnlineMongoMigrationProcessor
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 
+
+    public enum CollectionStatus
+    {
+        Unknown,
+        OK,
+        NotFound        
+    }
+
     public class MigrationUnit
     {
         public string DatabaseName { get; set; }
@@ -96,6 +104,7 @@ namespace OnlineMongoMigrationProcessor
         public bool DumpComplete { get; set; }
         public bool RestoreComplete { get; set; }
         public long EstimatedDocCount { get; set; }
+        public CollectionStatus SourceStatus { get; set; }
         public long ActualDocCount { get; set; }
         public long DumpGap { get; set; }
         public long RestoreGap { get; set; }
@@ -145,7 +154,7 @@ namespace OnlineMongoMigrationProcessor
 
         public MigrationSettings()
         {
-            _filePath = $"{Path.GetTempPath()}migrationjobs\\config.json";
+            _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
         }
 
         public void Load()

@@ -98,6 +98,17 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
+        {
+       
+            var database = client.GetDatabase(databaseName);
+
+            var collectionNamesCursor = await database.ListCollectionNamesAsync();
+            var collectionNames = await collectionNamesCursor.ToListAsync();
+            return collectionNames.Contains(collectionName);
+        }
+
         public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
         {
             try
