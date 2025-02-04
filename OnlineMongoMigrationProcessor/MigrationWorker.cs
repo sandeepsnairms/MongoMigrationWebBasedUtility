@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
 namespace OnlineMongoMigrationProcessor
 {
 #pragma warning disable CS8629
@@ -57,6 +59,7 @@ namespace OnlineMongoMigrationProcessor
         {
             int maxRetries = 10;
             int attempts = 0;
+
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
             //encoding speacial characters
@@ -147,10 +150,12 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Checking if Change Stream is enabled on source");
                         Log.Save();
+                        
 
                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString);
-                        if (!retValue)
+                        if (!retValue.IsCSEnabled)
                         {
+                            _job.SourceServerVersion = retValue.Version;
                             _job.CurrentlyActive = false;
                             _job.IsCompleted = true;
                             _jobs?.Save();
@@ -189,6 +194,9 @@ namespace OnlineMongoMigrationProcessor
 
                                 unit.MigrationChunks = chunks;
                                 unit.ChangeStreamStartedOn = DateTime.Now;
+
+                                if(_job.IsOnline)
+                                    MongoHelper.SetChangeStreamStartResumeToken(_sourceClient, unit);                                
 
                                 if (!_job.UseMongoDump)
                                 {

@@ -8,9 +8,6 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-#pragma warning disable CS8602
-#pragma warning disable CS8604
-#pragma warning disable CS8600
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -28,9 +25,10 @@ namespace OnlineMongoMigrationProcessor
         private MongoChangeStreamProcessor _changeStreamProcessor;
 
         public bool ProcessRunning { get; set; }
-        
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
         public DumpRestoreProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
+#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
         {
             _jobs = jobs;
             _job = job;
@@ -53,6 +51,9 @@ namespace OnlineMongoMigrationProcessor
 
         public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8604 // Possible null reference argument.\
+#pragma warning disable CS8600 // Possible null reference argument.
             int maxRetries = 10;
             string jobId = _job.Id;
 
@@ -90,7 +91,7 @@ namespace OnlineMongoMigrationProcessor
 
                 for (int i = 0; i < item.MigrationChunks.Count; i++)
                 {
-                    if (_executionCancelled || _job==null || !_job.CurrentlyActive) return;
+                    if (_executionCancelled || _job == null || !_job.CurrentlyActive) return;
 
                     double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                     double contributionFactor = 1.0 / item.MigrationChunks.Count;
@@ -115,7 +116,7 @@ namespace OnlineMongoMigrationProcessor
                                 double freeSpaceGB = 0;
                                 while (true)
                                 {
-                                    continueDownlods = Helper.CanProceedWithDownloads(folder, _config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB); 
+                                    continueDownlods = Helper.CanProceedWithDownloads(folder, _config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB);
 
                                     if (!continueDownlods)
                                     {
@@ -162,7 +163,6 @@ namespace OnlineMongoMigrationProcessor
 
                                 if (Directory.Exists($"folder\\{i}.bson"))
                                     Directory.Delete($"folder\\{i}.bson", true);
-                                                                
 
                                 var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongodump.exe", args));
                                 task.Wait(); // Wait for the task to complete
@@ -254,10 +254,16 @@ namespace OnlineMongoMigrationProcessor
                     Task.Run(() => Upload(item, targetConnectionString));
                 }
             }
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
+#pragma warning restore CS8604 // Possible null reference argument.
+#pragma warning restore CS8600 // 
         }
 
         private void Upload(MigrationUnit item, string targetConnectionString)
         {
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8604 // Possible null reference argument.
+#pragma warning disable CS8600
             string dbName = item.DatabaseName;
             string colName = item.CollectionName;
             int maxRetries = 10;
@@ -269,20 +275,16 @@ namespace OnlineMongoMigrationProcessor
 
             Log.WriteLine($"{dbName}.{colName} Uploader started");
 
-
-
             while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive)
             {
                 int restoredChunks = 0;
                 long restoredDocs = 0;
 
-
                 // MongoRestore
                 if (!item.RestoreComplete && !_executionCancelled && item.SourceStatus == CollectionStatus.OK)
                 {
                     for (int i = 0; i < item.MigrationChunks.Count; i++)
-                    {                 
-
+                    {
                         if (_executionCancelled) return;
 
                         if (!item.MigrationChunks[i].IsUploaded == true && item.MigrationChunks[i].IsDownloaded == true)
@@ -444,7 +446,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _config);
 
-                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(item));
+                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(_job, item));
                     }
 
                     if (!_job.IsOnline && !_executionCancelled)
@@ -467,6 +469,8 @@ namespace OnlineMongoMigrationProcessor
                     // Do nothing
                 }
             }
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
+#pragma warning restore CS8604 // Possible null reference argument.
         }
     }
 }

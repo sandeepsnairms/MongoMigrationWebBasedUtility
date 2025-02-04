@@ -84,7 +84,7 @@ namespace MongoMigrationWebApp.Service
             {
                 System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}",true);
             }
-            catch(Exception ex)
+            catch
             {
             }
         }

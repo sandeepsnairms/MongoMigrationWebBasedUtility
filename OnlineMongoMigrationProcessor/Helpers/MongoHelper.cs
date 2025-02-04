@@ -5,6 +5,11 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
+
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8625
+#pragma warning disable CS8600
+
 namespace OnlineMongoMigrationProcessor
 {
     internal static class MongoHelper
@@ -64,8 +69,9 @@ namespace OnlineMongoMigrationProcessor
 
        
 
-        public static async Task<bool> IsChangeStreamEnabledAsync(string connectionString)
+        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString)
         {
+            string version = string.Empty;
             try
             {
                 // Connect to the MongoDB server
@@ -73,31 +79,63 @@ namespace OnlineMongoMigrationProcessor
 
                 // Check the server status to verify replica set or sharded cluster
                 var adminDatabase = client.GetDatabase("admin");
-                var command = new BsonDocument("isMaster", 1);
-                var isMasterResult = await adminDatabase.RunCommandAsync<BsonDocument>(command);
+                var masterCommand = new BsonDocument("isMaster", 1);
+                var isMasterResult = await adminDatabase.RunCommandAsync<BsonDocument>(masterCommand);
+
+                // Get Mongo Version
+                var verCommand = new BsonDocument("buildInfo", 1);
+                var result = await adminDatabase.RunCommandAsync<BsonDocument>(verCommand);
+
+                version = result["version"].AsString;
 
                 // Check if the server is part of a replica set or a sharded cluster
                 if (isMasterResult.Contains("setName") || isMasterResult.GetValue("msg", "").AsString == "isdbgrid")
                 {
                     Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
                     Log.Save();
-                    return true;
+                    return (IsCSEnabled: true, Version: version);
                 }
                 else
                 {
                     Log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
                     Log.Save();
-                    return false;
+                    return (IsCSEnabled: false, Version: version);
                 }
             }
             catch (Exception ex)
             {
                 Log.WriteLine($"Error checking for change streams: {ex.Message}", LogType.Error);
                 Log.Save();
-                return false;
+                return (IsCSEnabled: false, Version: version);
             }
         }
 
+        public static void SetChangeStreamStartResumeToken(MongoClient client, MigrationUnit unit)
+        {
+            try
+            {
+                BsonDocument resumeToken = null;
+
+                var database = client.GetDatabase(unit.DatabaseName);
+                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+
+                var options = new ChangeStreamOptions
+                {
+                    FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
+                };
+
+                using (var cursor = collection.Watch(options))
+                {
+                    resumeToken = cursor.GetResumeToken();
+                }
+                unit.ResumeToken = resumeToken.ToJson();
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error setting change stream start token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
+                Log.Save();
+            }
+        }
 
         public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
         {

@@ -6,6 +6,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+
 namespace OnlineMongoMigrationProcessor
 {
     internal class MongoChangeStreamProcessor
@@ -25,7 +27,7 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
         }
 
-        public void ProcessCollectionChangeStream(MigrationUnit item)
+        public void ProcessCollectionChangeStream(MigrationJob job,MigrationUnit item)
         {
             try
             {
@@ -46,7 +48,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         ChangeStreamOptions options = new ChangeStreamOptions { };
 
-                        if (item.CursorUtcTimestamp > DateTime.MinValue)
+                        if (item.CursorUtcTimestamp > DateTime.MinValue && !job.SourceConnectionString.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(item.CursorUtcTimestamp.ToLocalTime());
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
@@ -55,7 +57,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
                         }
-                        else if (item.ChangeStreamStartedOn.HasValue)
+                        else if (item.ChangeStreamStartedOn.HasValue && !job.SourceConnectionString.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };

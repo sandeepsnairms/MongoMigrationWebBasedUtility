@@ -101,17 +101,15 @@
                 <tr>
                     <td>@unit.DatabaseName</td>
                     <td>@unit.CollectionName</td>                    
+
                     <td>
-                        <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
-                        </td>
+                        @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
                     </td>
+
                     @if (MigrationJob != null && MigrationJob.UseMongoDump)
                     {
                         <td>
-                            <td>
-                                @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
-                            </td>
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
                         </td>
                     }
                     @if (MigrationJob != null && MigrationJob.IsOnline)
@@ -207,7 +205,7 @@
 }
 @code {
 
-    #pragma warning disable CS8602
+#pragma warning disable CS8602
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 
@@ -367,7 +365,7 @@
         }
     }
 
-    private async Task ManageCollections()
+    private void ManageCollections()
     {
         _errorMessage = string.Empty;
         if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs())

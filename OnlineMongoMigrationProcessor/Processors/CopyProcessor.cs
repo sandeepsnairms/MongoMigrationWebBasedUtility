@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 #pragma warning disable CS8602
 #pragma warning disable CS8604
 #pragma warning disable CS8600
-
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor : IMigrationProcessor
@@ -69,12 +69,14 @@ namespace OnlineMongoMigrationProcessor
             {
                 item.EstimatedDocCount = collection.EstimatedDocumentCount();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 Task.Run(() =>
                 {
                     long count = MongoHelper.GetActualDocumentCount(collection, item);
                     item.ActualDocCount = count;
                     _jobs?.Save();
                 });
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
                 long downloadCount = 0;
 
@@ -223,7 +225,9 @@ namespace OnlineMongoMigrationProcessor
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _config);
 
-                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(item));
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(_job,item));
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                     }
 
                     if (!_job.IsOnline && !_executionCancelled)
