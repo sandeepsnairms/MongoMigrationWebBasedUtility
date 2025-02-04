@@ -67,7 +67,7 @@ namespace OnlineMongoMigrationProcessor
             return collection.CountDocuments(filter);
         }
 
-       
+
 
         public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString)
         {
@@ -110,11 +110,11 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public static void SetChangeStreamStartResumeToken(MongoClient client, MigrationUnit unit)
+        public async static Task SetChangeStreamStartResumeTokenAsync(MongoClient client, MigrationUnit unit)
         {
             try
             {
-                BsonDocument resumeToken = null;
+                BsonDocument resumeToken = new BsonDocument();
 
                 var database = client.GetDatabase(unit.DatabaseName);
                 var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
@@ -124,11 +124,32 @@ namespace OnlineMongoMigrationProcessor
                     FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
                 };
 
-                using (var cursor = collection.Watch(options))
+
+                using (var cursor = await collection.WatchAsync(options))
                 {
+                    // Try to get a resume token, even if no changes exist
                     resumeToken = cursor.GetResumeToken();
+
+                    //3.6 mongo  doesn't return resume token if no changes exist
+                    if (resumeToken == null || resumeToken.ElementCount == 0)
+                    {
+                        foreach (var change in cursor.ToEnumerable())
+                        {
+                            resumeToken = change.ResumeToken;
+                            break;
+                        }
+                    }
+
                 }
-                unit.ResumeToken = resumeToken.ToJson();
+
+                if (resumeToken == null || resumeToken.ElementCount == 0)
+                {
+                    Log.WriteLine($"Blank resume token when setting change stream start token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
+                }
+                else
+                {
+                    unit.ResumeToken = resumeToken.ToJson();
+                }
             }
             catch (Exception ex)
             {
@@ -139,7 +160,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
         {
-       
+
             var database = client.GetDatabase(databaseName);
 
             var collectionNamesCursor = await database.ListCollectionNamesAsync();

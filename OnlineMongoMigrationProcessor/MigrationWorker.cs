@@ -63,7 +63,7 @@ namespace OnlineMongoMigrationProcessor
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
             //encoding speacial characters
-            sourceConnectionString=Helper.EncodeMongoPasswordInConnectionString(sourceConnectionString);
+            sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(sourceConnectionString);
             targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(targetConnectionString);
 
             if (Config == null)
@@ -92,7 +92,7 @@ namespace OnlineMongoMigrationProcessor
                 .Select(item => item.Trim())
                 .ToArray();
 
-            
+
 
             if (_job.UseMongoDump)
             {
@@ -134,7 +134,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
 
-           
+
 
             while (attempts < maxRetries && !_migrationCancelled && continueProcessing)
             {
@@ -150,12 +150,14 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Checking if Change Stream is enabled on source");
                         Log.Save();
-                        
+
 
                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString);
+                        _job.SourceServerVersion = retValue.Version;
+                        _jobs?.Save();
+
                         if (!retValue.IsCSEnabled)
                         {
-                            _job.SourceServerVersion = retValue.Version;
                             _job.CurrentlyActive = false;
                             _job.IsCompleted = true;
                             _jobs?.Save();
@@ -186,7 +188,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                             {
-                                unit.SourceStatus= CollectionStatus.OK;
+                                unit.SourceStatus = CollectionStatus.OK;
                                 var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
 
                                 Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
@@ -195,8 +197,13 @@ namespace OnlineMongoMigrationProcessor
                                 unit.MigrationChunks = chunks;
                                 unit.ChangeStreamStartedOn = DateTime.Now;
 
-                                if(_job.IsOnline)
-                                    MongoHelper.SetChangeStreamStartResumeToken(_sourceClient, unit);                                
+                                if (_job.IsOnline)
+                                {
+                                    await Task.Run(async () =>
+                                    {
+                                        await MongoHelper.SetChangeStreamStartResumeTokenAsync(_sourceClient, unit);
+                                    });
+                                }
 
                                 if (!_job.UseMongoDump)
                                 {
@@ -207,7 +214,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             else
                             {
-                                unit.SourceStatus = CollectionStatus.NotFound;                                
+                                unit.SourceStatus = CollectionStatus.NotFound;
                                 Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
                                 Log.Save();
                             }
@@ -299,28 +306,28 @@ namespace OnlineMongoMigrationProcessor
                 throw new InvalidOperationException("Unexpected data type for document count.");
             }
 
-            int totalChunks=0;
-            long minDocsInChunk=0;
+            int totalChunks = 0;
+            long minDocsInChunk = 0;
 
             long targetChunkSizeBytes = Config.ChunkSizeInMb * 1024 * 1024;
             var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
-            
+
 
             if (_job.UseMongoDump)
             {
                 totalChunks = totalChunksBySize;
                 minDocsInChunk = documentCount / totalChunks;
-                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");                
+                Log.WriteLine($"{databaseName}.{collectionName} Storage Size: {totalCollectionSizeBytes}");
             }
             else
             {
                 Log.WriteLine($"{databaseName}.{collectionName} Estimated Document Count: {documentCount}");
-                totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples/SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
+                totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
                 totalChunks = Math.Max(1, totalChunks); // At least one chunk
                 totalChunks = Math.Max(totalChunks, totalChunksBySize);
-                minDocsInChunk = documentCount / totalChunks;               
+                minDocsInChunk = documentCount / totalChunks;
             }
-            
+
             List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
             if (totalChunks > 1 || !_job.UseMongoDump)
@@ -337,7 +344,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var dataType in dataTypes)
                 {
                     long docCountByType;
-                    ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(_job.UseMongoDump,collection, idField, totalChunks, dataType, minDocsInChunk, out docCountByType);
+                    ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(_job.UseMongoDump, collection, idField, totalChunks, dataType, minDocsInChunk, out docCountByType);
 
                     if (docCountByType == 0)
                     {
