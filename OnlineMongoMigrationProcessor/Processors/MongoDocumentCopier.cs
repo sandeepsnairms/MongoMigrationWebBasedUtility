@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 namespace OnlineMongoMigrationProcessor
 {
     public class MongoDocumentCopier
@@ -92,11 +93,7 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var segment in item.MigrationChunks[migrationChunkIndex].Segments)
                 {
-                    //if (segment.IsProcessed == true)
-                    //{
-                    //    segmentIndex++;
-                    //    continue;
-                    //}
+
 
                     FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
                     if (item.MigrationChunks[migrationChunkIndex].Segments.Count == 1 || segment.IsProcessed == true)
@@ -105,7 +102,9 @@ namespace OnlineMongoMigrationProcessor
                     }
                     else
                     {
+#pragma warning disable CS8604 // Possible null reference argument.
                         var bounds = SamplePartitioner.GetChunkBounds(segment.Gte, segment.Lt, item.MigrationChunks[migrationChunkIndex].DataType);
+#pragma warning restore CS8604 // Possible null reference argument.
                         var gte = bounds.gte;
                         var lt = bounds.lt;
 
@@ -154,6 +153,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (item.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0)
             {
+#pragma warning disable CS8604 // Possible null reference argument.
                 var bounds = SamplePartitioner.GetChunkBounds(item.MigrationChunks[migrationChunkIndex].Gte, item.MigrationChunks[migrationChunkIndex].Lt, item.MigrationChunks[migrationChunkIndex].DataType);
                 var gte = bounds.gte;
                 var lt = bounds.lt;

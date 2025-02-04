@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
 namespace OnlineMongoMigrationProcessor
 {
 #pragma warning disable CS8629
@@ -18,7 +20,7 @@ namespace OnlineMongoMigrationProcessor
 
     public class MigrationWorker
     {
-        private string _toolsDestinationFolder = $"{Path.GetTempPath()}mongo-tools";
+        private string _toolsDestinationFolder = $"{Helper.GetWorkingFolder()}mongo-tools";
         private string _toolsLaunchFolder = string.Empty;
         private bool _migrationCancelled = false;
         private JobList? _jobs;
@@ -57,6 +59,7 @@ namespace OnlineMongoMigrationProcessor
         {
             int maxRetries = 10;
             int attempts = 0;
+
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
             //encoding speacial characters
@@ -147,10 +150,12 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Checking if Change Stream is enabled on source");
                         Log.Save();
+                        
 
                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString);
-                        if (!retValue)
+                        if (!retValue.IsCSEnabled)
                         {
+                            _job.SourceServerVersion = retValue.Version;
                             _job.CurrentlyActive = false;
                             _job.IsCompleted = true;
                             _jobs?.Save();
@@ -179,19 +184,32 @@ namespace OnlineMongoMigrationProcessor
 
                         if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
                         {
-                            var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
-
-                            Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
-                            Log.Save();
-
-                            unit.MigrationChunks = chunks;
-                            unit.ChangeStreamStartedOn = DateTime.Now;
-
-                            if (!_job.UseMongoDump)
+                            if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                             {
-                                var database = _sourceClient.GetDatabase(unit.DatabaseName);
-                                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
+                                unit.SourceStatus= CollectionStatus.OK;
+                                var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
+
+                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
+                                Log.Save();
+
+                                unit.MigrationChunks = chunks;
+                                unit.ChangeStreamStartedOn = DateTime.Now;
+
+                                if(_job.IsOnline)
+                                    MongoHelper.SetChangeStreamStartResumeToken(_sourceClient, unit);                                
+
+                                if (!_job.UseMongoDump)
+                                {
+                                    var database = _sourceClient.GetDatabase(unit.DatabaseName);
+                                    var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
+                                }
+                            }
+                            else
+                            {
+                                unit.SourceStatus = CollectionStatus.NotFound;                                
+                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
+                                Log.Save();
                             }
                         }
                     }
@@ -203,7 +221,19 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (_migrationCancelled) break;
 
-                        _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                        if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                        {
+                            if (await MongoHelper.CheckCollectionExists(_sourceClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                            {
+                                _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                            }
+                            else
+                            {
+                                migrationUnit.SourceStatus = CollectionStatus.NotFound;
+                                Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source", LogType.Error);
+                                Log.Save();
+                            }
+                        }
                     }
 
                     continueProcessing = false;

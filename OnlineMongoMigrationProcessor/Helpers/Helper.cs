@@ -6,12 +6,17 @@ using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8604 // Possible null reference argument.
+#pragma warning disable CS8600
+
 namespace OnlineMongoMigrationProcessor
 {
     public static class Helper
     {
 
-       
+       static string _workingFolder = string.Empty;
 
         private static double GetFolderSizeInGB(string folderPath)
         {
@@ -58,7 +63,10 @@ namespace OnlineMongoMigrationProcessor
             if (freeSpaceInMb < spaceRequiredInMb)
             {
                 // Get disk space info
+
+
                 DirectoryInfo dirInfo = Directory.GetParent(directoryPath)?.Parent.Parent;
+
                 folderSizeInGB = Math.Round(GetFolderSizeInGB(dirInfo.FullName), 2);
                 freeSpaceGB = Math.Round(freeSpaceInMb /1024, 2);
 
@@ -95,11 +103,15 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<string> EnsureMongoToolsAvailableAsync(string toolsDestinationFolder, MigrationSettings config)
         {
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
+#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
 
             try
             {
+#pragma warning disable CS8604 // Possible null reference argument.
                 string toolsLaunchFolder = Path.Combine(toolsDestinationFolder, Path.GetFileNameWithoutExtension(toolsDownloadUrl), "bin");
+#pragma warning restore CS8604 // Possible null reference argument.
 
                 string mongodumpPath = Path.Combine(toolsLaunchFolder, "mongodump.exe");
                 string mongorestorePath = Path.Combine(toolsLaunchFolder, "mongorestore.exe");
@@ -152,6 +164,31 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+
+        public static string GetWorkingFolder()
+        {
+            if (!string.IsNullOrEmpty(_workingFolder))
+            {
+                return _workingFolder;
+            }
+
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+            string homePath = Environment.GetEnvironmentVariable("ResourceDrive");
+#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
+
+            if (string.IsNullOrEmpty(homePath))
+            {
+                _workingFolder = Path.GetTempPath();
+            }
+            
+            if(! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
+            {
+                _workingFolder = Path.Combine(homePath, "home//");
+            }
+            return _workingFolder;
+        }
+
         public static Tuple<bool, string> ValidateNamespaceFormat(string input)
         {
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
@@ -197,8 +234,11 @@ namespace OnlineMongoMigrationProcessor
 
             foreach (var mu in migrationJob.MigrationUnits)
             {
-                if (!mu.RestoreComplete || !mu.DumpComplete)
-                    return false;
+                if (mu.SourceStatus == CollectionStatus.OK)
+                {
+                    if (!mu.RestoreComplete || !mu.DumpComplete)
+                        return false;
+                }
             }
             return true;
         }

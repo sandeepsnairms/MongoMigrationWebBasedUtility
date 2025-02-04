@@ -18,8 +18,8 @@ namespace OnlineMongoMigrationProcessor
     {
 #pragma warning disable CS8603
 #pragma warning disable CS8604
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 
-  
         public static int MaxSegments = 20;
         public static int MaxSamples = 2000;
         /// <summary>
@@ -166,8 +166,10 @@ namespace OnlineMongoMigrationProcessor
 
             ChunkBoundaries chunkBoundaries= new ChunkBoundaries();
 
+
             Boundary segmentBoundary = null;
             Boundary chunkBoundary = null;
+
 
             for (int i = 0; i < partitionValues.Count; i++)
             {

@@ -57,6 +57,11 @@
 </div>
 
 @code {
+
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+#pragma warning disable CS8601
+#pragma warning disable CS8602
+
     [Parameter]
     public bool newMode { get; set; }
 
@@ -97,6 +102,7 @@
 
     private async void HandleSubmit()
     {
+       
         if (string.IsNullOrEmpty(name))
         {
             errorMessage = "Name can't be empty.";

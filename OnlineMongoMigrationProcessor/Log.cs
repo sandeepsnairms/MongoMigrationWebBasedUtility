@@ -62,7 +62,7 @@ namespace OnlineMongoMigrationProcessor
         public static void Init(string id)
         {
             _currentId = id;
-            Directory.CreateDirectory($"{Path.GetTempPath()}migrationlogs");
+            Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationlogs");
 
             _logBucket = GetLogBucket(_currentId);
         }
@@ -95,7 +95,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 string json = JsonConvert.SerializeObject(_logBucket);
-                var path = $"{Path.GetTempPath()}migrationlogs\\{_currentId}.txt";
+                var path = $"{Helper.GetWorkingFolder()}migrationlogs\\{_currentId}.txt";
                 File.WriteAllText(path, json);
             }
             catch { }
@@ -108,7 +108,7 @@ namespace OnlineMongoMigrationProcessor
                 if (id == _currentId && _logBucket != null)
                     return _logBucket;
 
-                var path = $"{Path.GetTempPath()}migrationlogs\\{id}.txt";
+                var path = $"{Helper.GetWorkingFolder()}migrationlogs\\{id}.txt";
                 if (File.Exists(path))
                 {
                     string json = File.ReadAllText(path);
