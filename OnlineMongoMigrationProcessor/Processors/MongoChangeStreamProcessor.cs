@@ -79,7 +79,7 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 foreach (ChangeStreamDocument<BsonDocument> change in cursor.ToEnumerable())
                                 {
-                                    if (ProcessCursor(change, cursor, targetCollection, item, ref counter) == false)
+                                    if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
                                     {
                                         break;
                                     }
@@ -91,7 +91,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     foreach (var change in cursor.Current)
                                     {
-                                        if (ProcessCursor(change, cursor, targetCollection, item, ref counter) == false)
+                                        if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
                                         {
                                             break;
                                         }
@@ -140,30 +140,47 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter)
+        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter)
         {
-            // Access the ClusterTime (timestamp) from the ChangeStreamDocument
-            var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
+            try
+            {
+                if (!job.SourceServerVersion.StartsWith("3"))
+                {
+                    // Access the ClusterTime (timestamp) from the ChangeStreamDocument
+                    var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
 
-            // Output change details to the console
-            Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
-            ProcessChange(change, targetCollection);
+                    // Output change details to the console
+                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
+                    ProcessChange(change, targetCollection);
+                    item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                }
+                else
+                {
+                    // Output change details to the console
+                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
+                    ProcessChange(change, targetCollection);
+                }
+                item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
+                _jobs?.Save(); // persists state
 
-            item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
-            item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
-            _jobs?.Save(); // persists state
+                counter++;
 
-            counter++;
+                // Break if batch size is reached
+                if (counter > _config.ChangeStreamBatchSize)
+                    return false;
 
-            // Break if batch size is reached
-            if (counter > _config.ChangeStreamBatchSize)
+                // Break if execution is canceled
+                if (ExecutionCancelled)
+                    return false;
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error processing cursor. Details : {ex.Message}", LogType.Error);
+                Log.Save();
                 return false;
-
-            // Break if execution is canceled
-            if (ExecutionCancelled)
-                return false;
-
-            return true;
+            }
         }
 
 
