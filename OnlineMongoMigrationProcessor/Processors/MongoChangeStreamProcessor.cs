@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Reflection.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -58,6 +59,10 @@ namespace OnlineMongoMigrationProcessor
                         {
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
                         }
+                        else if (item.ResumeToken == null && job.SourceServerVersion.StartsWith("3"))
+                        {
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+                        }
                         else if (item.ChangeStreamStartedOn.HasValue && !job.SourceServerVersion.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
@@ -77,6 +82,13 @@ namespace OnlineMongoMigrationProcessor
                             //mongo 3.6 has different implementation for change stream
                             if (job.SourceServerVersion.StartsWith("3"))
                             {
+                                if (item.ResumeDocumentId != null && !item.ResumeDocumentId.IsBsonNull)                              
+                                {
+                                    //manually replay  the first change as the ResumeAfter skips the current item
+                                    ProcessFirstChangeManuallyForResumeToken(item.ResumeDocumentId, item.ResumeTokenOperation, sourceCollection, targetCollection);
+                                }
+
+                                //proceed with the rest of the changes
                                 foreach (ChangeStreamDocument<BsonDocument> change in cursor.ToEnumerable())
                                 {
                                     if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
@@ -137,6 +149,61 @@ namespace OnlineMongoMigrationProcessor
                 Log.WriteLine($"Error processing change stream. Details : {ex.Message}", LogType.Error);
                 Log.Save();
             }
+        }
+
+        // This method retrieves the event associated with the ResumeToken
+        private void ProcessFirstChangeManuallyForResumeToken(BsonValue? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection)
+        {
+            if (documentId==null || documentId.IsBsonNull)
+            {
+                Log.WriteLine("Manual replay for {targetCollection.CollectionNamespace} resume token is null, skipping processing.");
+                Log.Save();
+                return;
+            }
+
+            Log.WriteLine($"Manual replay for {targetCollection.CollectionNamespace} resume token is type: {opType} ");
+
+            var filter = Builders<BsonDocument>.Filter.Eq("_id", documentId); // Assuming _id is your resume token
+            var result = sourceCollection.Find(filter).FirstOrDefault(); // Retrieve the document for the resume token
+
+            if (result != null)
+            {
+                try
+                {
+                    switch (opType)
+                    {
+                        case ChangeStreamOperationType.Insert:
+                            targetCollection.InsertOne(result);
+                            break;
+                        case ChangeStreamOperationType.Update:
+                        case ChangeStreamOperationType.Replace:
+                            targetCollection.ReplaceOne(filter, result, new ReplaceOptions { IsUpsert = true });
+                            break;
+                        case ChangeStreamOperationType.Delete:
+                            var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", documentId);
+                            targetCollection.DeleteOne(deleteFilter);
+                            break;
+                        default:
+                            Log.WriteLine($"Unhandled operation type: {opType}");
+                            break;
+                    }
+                }
+                catch (MongoException mex) when (opType == ChangeStreamOperationType.Insert && mex.Message.Contains("DuplicateKey"))
+                {
+                    // Ignore duplicate key errors for inserts, typically caused by reprocessing of the same change stream
+                }
+                catch (Exception ex)
+                {
+                    Log.WriteLine($"Error processing operation {opType} on {targetCollection.CollectionNamespace} with _id {documentId}. Details : {ex.Message}", LogType.Error);
+                    Log.Save();
+                }
+            }
+            else
+            {
+                Log.WriteLine("Document for the ResumeToken doesn't exist (may be deleted).");
+                Log.Save();
+            }
+            Log.Save();
         }
 
 
