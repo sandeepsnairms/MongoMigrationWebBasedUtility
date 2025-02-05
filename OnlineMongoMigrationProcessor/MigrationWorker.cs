@@ -189,6 +189,16 @@ namespace OnlineMongoMigrationProcessor
                             if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                             {
                                 unit.SourceStatus = CollectionStatus.OK;
+
+                                if (_job.IsOnline)
+                                {
+                                    await Task.Run(async () =>
+                                    {
+                                        await MongoHelper.SetChangeStreamResumeTokenAsync(_sourceClient, unit);
+                                    });
+                                }
+
+
                                 var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
 
                                 Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
@@ -197,13 +207,7 @@ namespace OnlineMongoMigrationProcessor
                                 unit.MigrationChunks = chunks;
                                 unit.ChangeStreamStartedOn = DateTime.Now;
 
-                                if (_job.IsOnline)
-                                {
-                                    await Task.Run(async () =>
-                                    {
-                                        await MongoHelper.SetChangeStreamStartResumeTokenAsync(_sourceClient, unit);
-                                    });
-                                }
+
 
                                 if (!_job.UseMongoDump)
                                 {

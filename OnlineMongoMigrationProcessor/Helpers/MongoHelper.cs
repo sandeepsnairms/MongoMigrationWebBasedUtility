@@ -110,10 +110,19 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public async static Task SetChangeStreamStartResumeTokenAsync(MongoClient client, MigrationUnit unit)
+        public async static Task SetChangeStreamResumeTokenAsync(MongoClient client, MigrationUnit unit)
         {
+
             try
             {
+                if (!string.IsNullOrEmpty(unit.ResumeToken))
+                {
+                    Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                    Log.Save();
+                    return;
+                }
+
+
                 BsonDocument resumeToken = new BsonDocument();
 
                 var database = client.GetDatabase(unit.DatabaseName);
@@ -144,16 +153,19 @@ namespace OnlineMongoMigrationProcessor
 
                 if (resumeToken == null || resumeToken.ElementCount == 0)
                 {
-                    Log.WriteLine($"Blank resume token when setting change stream start token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
+                    Log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
                 }
                 else
                 {
+                    Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+                    Log.Save();
+
                     unit.ResumeToken = resumeToken.ToJson();
                 }
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error setting change stream start token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
                 Log.Save();
             }
         }
