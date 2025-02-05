@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using MongoDB.Bson;
+using MongoDB.Driver;
 using Newtonsoft.Json;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
@@ -99,6 +100,8 @@ namespace OnlineMongoMigrationProcessor
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? ResumeToken { get; set; }
+        public ChangeStreamOperationType ResumeTokenOperation { get; set; }
+        public BsonValue? ResumeDocumentId { get; set; }
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
         public double DumpPercent { get; set; }

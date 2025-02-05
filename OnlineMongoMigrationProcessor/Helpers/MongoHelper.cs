@@ -112,7 +112,8 @@ namespace OnlineMongoMigrationProcessor
 
         public async static Task SetChangeStreamResumeTokenAsync(MongoClient client, MigrationUnit unit)
         {
-
+            ChangeStreamOperationType? changeType = null;
+            BsonValue? documentId = null;
             try
             {
                 if (!string.IsNullOrEmpty(unit.ResumeToken))
@@ -133,7 +134,7 @@ namespace OnlineMongoMigrationProcessor
                     FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
                 };
 
-
+                
                 using (var cursor = await collection.WatchAsync(options))
                 {
                     // Try to get a resume token, even if no changes exist
@@ -145,6 +146,8 @@ namespace OnlineMongoMigrationProcessor
                         foreach (var change in cursor.ToEnumerable())
                         {
                             resumeToken = change.ResumeToken;
+                            changeType= change.OperationType;
+                            documentId=change.DocumentKey["_id"];
                             break;
                         }
                     }
@@ -161,7 +164,15 @@ namespace OnlineMongoMigrationProcessor
                     Log.Save();
 
                     unit.ResumeToken = resumeToken.ToJson();
+
+                    if (changeType != null)
+                    {
+                        unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
+                        unit.ResumeDocumentId = documentId;
+                    }
+                        
                 }
+                
             }
             catch (Exception ex)
             {
