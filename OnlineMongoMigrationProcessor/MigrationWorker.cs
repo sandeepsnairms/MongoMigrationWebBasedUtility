@@ -183,21 +183,20 @@ namespace OnlineMongoMigrationProcessor
                     foreach (var unit in _job.MigrationUnits)
                     {
                         if (_migrationCancelled) return;
-
-                        if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
+                        
+                        if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                         {
-                            if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
+                            unit.SourceStatus = CollectionStatus.OK;
+
+                            if (_job.IsOnline)
                             {
-                                unit.SourceStatus = CollectionStatus.OK;
-
-                                if (_job.IsOnline)
+                                Task.Run(async () =>
                                 {
-                                    await Task.Run(async () =>
-                                    {
-                                        await MongoHelper.SetChangeStreamResumeTokenAsync(_sourceClient, unit);
-                                    });
-                                }
-
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_sourceClient, unit);
+                                });
+                            }
+                            if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
+                            {
 
                                 var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
 
@@ -216,12 +215,13 @@ namespace OnlineMongoMigrationProcessor
                                     await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
                                 }
                             }
-                            else
-                            {
-                                unit.SourceStatus = CollectionStatus.NotFound;
-                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
-                                Log.Save();
-                            }
+                           
+                        }
+                        else
+                        {
+                            unit.SourceStatus = CollectionStatus.NotFound;
+                            Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
+                            Log.Save();
                         }
                     }
 

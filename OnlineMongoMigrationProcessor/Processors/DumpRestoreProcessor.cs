@@ -240,9 +240,12 @@ namespace OnlineMongoMigrationProcessor
                         downloadCount += item.MigrationChunks[i].DumpQueryDocCount;
                     }
                 }
-                item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
-                item.DumpPercent = 100;
-                item.DumpComplete = true;
+                if (!_executionCancelled)
+                {
+                    item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
+                    item.DumpPercent = 100;
+                    item.DumpComplete = true;
+                }
             }
             else if (item.DumpComplete && !_executionCancelled)
             {
