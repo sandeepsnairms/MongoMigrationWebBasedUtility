@@ -2,6 +2,7 @@
 using MongoDB.Driver;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +12,7 @@ using System.Threading.Tasks;
 namespace OnlineMongoMigrationProcessor
 {
     internal class MongoChangeStreamProcessor
-    {        
+    {
         private MongoClient _sourceClient;
         private MongoClient _targetClient;
         private JobList? _jobs;
@@ -27,7 +28,7 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
         }
 
-        public void ProcessCollectionChangeStream(MigrationJob job,MigrationUnit item)
+        public void ProcessCollectionChangeStream(MigrationJob job, MigrationUnit item)
         {
             try
             {
@@ -42,13 +43,13 @@ namespace OnlineMongoMigrationProcessor
 
                 Log.WriteLine($"Replaying change stream for {databaseName}.{collectionName}");
 
-                while (!ExecutionCancelled)
+                while (!ExecutionCancelled && item.DumpComplete)
                 {
                     try
                     {
                         ChangeStreamOptions options = new ChangeStreamOptions { };
 
-                        if (item.CursorUtcTimestamp > DateTime.MinValue && !job.SourceConnectionString.StartsWith("3"))
+                        if (item.CursorUtcTimestamp > DateTime.MinValue && !job.SourceServerVersion.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(item.CursorUtcTimestamp.ToLocalTime());
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
@@ -57,7 +58,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
                         }
-                        else if (item.ChangeStreamStartedOn.HasValue && !job.SourceConnectionString.StartsWith("3"))
+                        else if (item.ChangeStreamStartedOn.HasValue && !job.SourceServerVersion.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
@@ -73,35 +74,33 @@ namespace OnlineMongoMigrationProcessor
                             int counter = 0;
 
                             // Continuously monitor the change stream
-                            while (cursor.MoveNext(cancellationToken))
+                            //mongo 3.6 has different implementation for change stream
+                            if (job.SourceServerVersion.StartsWith("3"))
                             {
-                                foreach (var change in cursor.Current)
+                                foreach (ChangeStreamDocument<BsonDocument> change in cursor.ToEnumerable())
                                 {
-                                    // Access the ClusterTime (timestamp) from the ChangeStreamDocument
-                                    var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
-
-                                    // Output change details to the console
-                                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
-                                    ProcessChange(change, targetCollection);
-
-                                    item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
-                                    item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
-                                    _jobs?.Save(); // persists state
-
-                                    counter++;
-
-                                    // Break if batch size is reached
-                                    if (counter > _config.ChangeStreamBatchSize)
+                                    if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
+                                    {
                                         break;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                while (cursor.MoveNext(cancellationToken))
+                                {
+                                    foreach (var change in cursor.Current)
+                                    {
+                                        if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
+                                        {
+                                            break;
+                                        }
+                                    }
 
-                                    // Break if execution is canceled
-                                    if (ExecutionCancelled)
+                                    // Break the outer loop if conditions are met
+                                    if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
                                         break;
                                 }
-
-                                // Break the outer loop if conditions are met
-                                if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
-                                    break;
                             }
                             Log.Save();
                         }
@@ -139,6 +138,51 @@ namespace OnlineMongoMigrationProcessor
                 Log.Save();
             }
         }
+
+
+        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter)
+        {
+            try
+            {
+                if (!job.SourceServerVersion.StartsWith("3"))
+                {
+                    // Access the ClusterTime (timestamp) from the ChangeStreamDocument
+                    var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
+
+                    // Output change details to the console
+                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
+                    ProcessChange(change, targetCollection);
+                    item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                }
+                else
+                {
+                    // Output change details to the console
+                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
+                    ProcessChange(change, targetCollection);
+                }
+                item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
+                _jobs?.Save(); // persists state
+
+                counter++;
+
+                // Break if batch size is reached
+                if (counter > _config.ChangeStreamBatchSize)
+                    return false;
+
+                // Break if execution is canceled
+                if (ExecutionCancelled)
+                    return false;
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"Error processing cursor. Details : {ex.Message}", LogType.Error);
+                Log.Save();
+                return false;
+            }
+        }
+
 
         private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection)
         {

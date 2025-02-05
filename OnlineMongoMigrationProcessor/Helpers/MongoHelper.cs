@@ -67,7 +67,7 @@ namespace OnlineMongoMigrationProcessor
             return collection.CountDocuments(filter);
         }
 
-       
+
 
         public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString)
         {
@@ -110,11 +110,20 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public static void SetChangeStreamStartResumeToken(MongoClient client, MigrationUnit unit)
+        public async static Task SetChangeStreamResumeTokenAsync(MongoClient client, MigrationUnit unit)
         {
+
             try
             {
-                BsonDocument resumeToken = null;
+                if (!string.IsNullOrEmpty(unit.ResumeToken))
+                {
+                    Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                    Log.Save();
+                    return;
+                }
+
+
+                BsonDocument resumeToken = new BsonDocument();
 
                 var database = client.GetDatabase(unit.DatabaseName);
                 var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
@@ -124,22 +133,46 @@ namespace OnlineMongoMigrationProcessor
                     FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
                 };
 
-                using (var cursor = collection.Watch(options))
+
+                using (var cursor = await collection.WatchAsync(options))
                 {
+                    // Try to get a resume token, even if no changes exist
                     resumeToken = cursor.GetResumeToken();
+
+                    //3.6 mongo  doesn't return resume token if no changes exist
+                    if (resumeToken == null || resumeToken.ElementCount == 0)
+                    {
+                        foreach (var change in cursor.ToEnumerable())
+                        {
+                            resumeToken = change.ResumeToken;
+                            break;
+                        }
+                    }
+
                 }
-                unit.ResumeToken = resumeToken.ToJson();
+
+                if (resumeToken == null || resumeToken.ElementCount == 0)
+                {
+                    Log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
+                }
+                else
+                {
+                    Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+                    Log.Save();
+
+                    unit.ResumeToken = resumeToken.ToJson();
+                }
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error setting change stream start token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
                 Log.Save();
             }
         }
 
         public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
         {
-       
+
             var database = client.GetDatabase(databaseName);
 
             var collectionNamesCursor = await database.ListCollectionNamesAsync();

@@ -24,6 +24,7 @@ namespace OnlineMongoMigrationProcessor
         private ProcessExecutor _processExecutor;
         private MongoChangeStreamProcessor _changeStreamProcessor;
 
+
         public bool ProcessRunning { get; set; }
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
@@ -37,6 +38,7 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
 
             _processExecutor = new ProcessExecutor();
+
         }
 
         public void StopProcessing()
@@ -47,6 +49,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (_changeStreamProcessor != null)
                 _changeStreamProcessor.ExecutionCancelled = true;
+            
         }
 
         public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
@@ -70,8 +73,9 @@ namespace OnlineMongoMigrationProcessor
             var collection = database.GetCollection<BsonDocument>(colName);
 
             bool restoreInvoked = false;
-
+            
             DateTime migrationJobStartTime = DateTime.Now;
+            
 
             Log.WriteLine($"{dbName}.{colName} Downloader started");
 
@@ -240,9 +244,12 @@ namespace OnlineMongoMigrationProcessor
                         downloadCount += item.MigrationChunks[i].DumpQueryDocCount;
                     }
                 }
-                item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
-                item.DumpPercent = 100;
-                item.DumpComplete = true;
+                if (!_executionCancelled)
+                {
+                    item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
+                    item.DumpPercent = 100;
+                    item.DumpComplete = true;
+                }
             }
             else if (item.DumpComplete && !_executionCancelled)
             {
