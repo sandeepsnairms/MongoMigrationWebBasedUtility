@@ -65,7 +65,7 @@ namespace OnlineMongoMigrationProcessor
         {
             var countOptions = new CountOptions
             {
-                MaxTime = TimeSpan.FromMinutes(120) // Set the timeout to 5 minutes
+                MaxTime = TimeSpan.FromMinutes(120) // Set the timeout
             };
 
             // Execute the query and return the count with the specified timeout

@@ -179,7 +179,12 @@ namespace OnlineMongoMigrationProcessor
                     Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}], verified no documents missing, count in target: {item.MigrationChunks[migrationChunkIndex].DocCountInTarget}");
                     Log.Save();
                 }
-
+                else
+                {
+                    Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}] count mismatch. Chunk will be reprocessed.", LogType.Error);
+                    Log.Save();
+                    return false;
+                }
                 jobList?.Save(); //persists state
             }
             return true;
