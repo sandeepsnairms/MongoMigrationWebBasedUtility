@@ -46,7 +46,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Exception occurred while counting documents: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Exception occurred while counting documents: {ex.ToString()}", LogType.Error);
                 Log.WriteLine($"Using Estimated document count");
                 Log.Save();
                 docCountByType = GetDocumentCountByDataType(collection, idField, dataType, true);
@@ -150,7 +150,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    Log.WriteLine($"Attempt {i} encountered error sampling data for {dataType}: {ex.Message}");
+                    Log.WriteLine($"Attempt {i} encountered error sampling data for {dataType}: {ex.ToString()}");
                     Log.Save();
                 }
             }

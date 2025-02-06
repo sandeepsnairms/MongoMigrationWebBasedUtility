@@ -199,7 +199,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (MongoExecutionTimeoutException ex)
                             {
-                                Log.WriteLine($" Dump attempt {dumpAttempts} failed due to timeout: {ex.Message}", LogType.Error);
+                                Log.WriteLine($" Dump attempt {dumpAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
 
                                 if (dumpAttempts >= maxRetries)
                                 {
@@ -367,7 +367,7 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 catch (MongoExecutionTimeoutException ex)
                                 {
-                                    Log.WriteLine($" Restore attempt {restoreAttempts} failed due to timeout: {ex.Message}", LogType.Error);
+                                    Log.WriteLine($" Restore attempt {restoreAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
 
                                     if (restoreAttempts >= maxRetries)
                                     {

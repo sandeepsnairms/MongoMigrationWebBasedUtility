@@ -253,7 +253,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (MongoExecutionTimeoutException ex)
                 {
-                    Log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.Message}", LogType.Error);
+                    Log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
 
                     if (attempts >= maxRetries)
                     {

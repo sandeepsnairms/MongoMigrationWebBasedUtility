@@ -35,12 +35,12 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (UnauthorizedAccessException e)
             {
-                Console.WriteLine($"Access denied: {e.Message}");
+                Console.WriteLine($"Access denied: {e.ToString()}");
                 return 0;
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error: {e.Message}");
+                Console.WriteLine($"Error: {e.ToString()}");
                 return 0;
             }
         }
@@ -168,10 +168,20 @@ namespace OnlineMongoMigrationProcessor
 
         public static string GetWorkingFolder()
         {
+            
+
             if (!string.IsNullOrEmpty(_workingFolder))
             {
                 return _workingFolder;
             }
+
+            //back ward compatibility, old code used to create a folder in temp path
+            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
+            {
+                _workingFolder = Path.GetTempPath();
+                return _workingFolder;
+            }
+            //back ward compatibility end
 
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
             string homePath = Environment.GetEnvironmentVariable("ResourceDrive");

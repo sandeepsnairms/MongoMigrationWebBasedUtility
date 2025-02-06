@@ -104,7 +104,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (Exception ex)
                             {
-                                Log.WriteLine($"Error terminating process {processType}: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                                Log.WriteLine($"Error terminating process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                             }
                         }
                     }
@@ -120,7 +120,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                Log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 Log.Save();
                 return false;
             }

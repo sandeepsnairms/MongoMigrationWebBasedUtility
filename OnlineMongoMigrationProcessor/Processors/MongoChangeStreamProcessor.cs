@@ -125,17 +125,17 @@ namespace OnlineMongoMigrationProcessor
                         // Handle cancellation gracefully
                         Log.AddVerboseMessage($"CS Batch duration expired while monitoring {targetCollection.CollectionNamespace}. CS will resume automatically");
                     }
-                    catch (MongoCommandException ex) when (ex.Message.Contains("Resume of change stream was not possible"))
+                    catch (MongoCommandException ex) when (ex.ToString().Contains("Resume of change stream was not possible"))
                     {
                         // Handle other potential exceptions
-                        Log.WriteLine($"Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.Message}", LogType.Error);
+                        Log.WriteLine($"Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
                         Log.Save();
                         Thread.Sleep(1000 * 300);
                     }
                     catch (Exception ex)
                     {
                         // Handle other potential exceptions
-                        Log.WriteLine($"Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.Message}", LogType.Error);
+                        Log.WriteLine($"Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
                         Log.Save();
                     }
                     finally
@@ -146,7 +146,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing change stream. Details : {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error processing change stream. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }
@@ -194,7 +194,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    Log.WriteLine($"Error processing operation {opType} on {targetCollection.CollectionNamespace} with _id {documentId}. Details : {ex.Message}", LogType.Error);
+                    Log.WriteLine($"Error processing operation {opType} on {targetCollection.CollectionNamespace} with _id {documentId}. Details : {ex.ToString()}", LogType.Error);
                     Log.Save();
                 }
             }
@@ -244,7 +244,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing cursor. Details : {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error processing cursor. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
                 return false;
             }
@@ -280,7 +280,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }
