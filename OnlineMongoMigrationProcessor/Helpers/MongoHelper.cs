@@ -104,7 +104,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error checking for change streams: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error checking for change streams: {ex.ToString()}", LogType.Error);
                 Log.Save();
                 return (IsCSEnabled: false, Version: version);
             }
@@ -176,7 +176,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }
@@ -254,7 +254,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (Exception ex)
                     {
-                        Log.WriteLine($"Error copying index {options?.Name} for {targetDatabaseName}.{targetCollectionName}. Details: {ex.Message}", LogType.Error);
+                        Log.WriteLine($"Error copying index {options?.Name} for {targetDatabaseName}.{targetCollectionName}. Details: {ex.ToString()}", LogType.Error);
                         Log.Save();
                     }
                 }
@@ -265,7 +265,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error copying indexes: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error copying indexes: {ex.ToString()}", LogType.Error);
                 Log.Save();
                 return false;
             }

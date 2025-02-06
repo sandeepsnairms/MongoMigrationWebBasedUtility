@@ -250,7 +250,7 @@ namespace OnlineMongoMigrationProcessor
                         Interlocked.Add(ref _failureCount, ex.WriteErrors.Count);
                         LogErrors(ex);
                     }
-                    catch (Exception ex) when (ex.Message.Contains("canceled."))
+                    catch (Exception ex) when (ex.ToString().Contains("canceled."))
                     {
                         Log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentIndex}]");
                         Log.Save();
@@ -259,7 +259,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         errors.Add(ex);
                         Interlocked.Add(ref _failureCount, set.Count);
-                        Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentIndex}]. Details : {ex.Message}", LogType.Error);
+                        Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentIndex}]. Details : {ex.ToString()}", LogType.Error);
                         Log.Save();
                     }
                     finally
@@ -282,7 +282,7 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 errors.Add(ex);
-                Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }
@@ -291,7 +291,7 @@ namespace OnlineMongoMigrationProcessor
         {
             foreach (var error in ex.WriteErrors)
             {
-                Log.WriteLine($"Document copy encountered WriteErrors, Details: {ex.Message}");
+                Log.WriteLine($"Document copy encountered WriteErrors, Details: {ex.ToString()}");
                 Log.Save();
             }
         }

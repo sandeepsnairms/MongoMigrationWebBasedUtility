@@ -42,7 +42,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error loading data: {ex.Message}");
+                Log.WriteLine($"Error loading data: {ex.ToString()}");
             }
         }
 
@@ -59,7 +59,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }
@@ -197,7 +197,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.Message}", LogType.Error);
+                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }
