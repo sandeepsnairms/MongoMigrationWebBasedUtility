@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -158,7 +159,20 @@ namespace OnlineMongoMigrationProcessor
                 var gte = bounds.gte;
                 var lt = bounds.lt;
 
-                item.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
+                Log.WriteLine($"Document copy for chunk[{ migrationChunkIndex}], couting documents on target");
+                Log.Save();
+
+                try
+                {
+                    item.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
+                }
+                catch (Exception ex)
+                {
+                    Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}] encountered error while counting documents on target. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
+                    Log.Save();
+                    ResetSegmentsInChunk(item.MigrationChunks[migrationChunkIndex]);
+                    return false;
+                }
 
                 if (item.MigrationChunks[migrationChunkIndex].DocCountInTarget == item.MigrationChunks[migrationChunkIndex].DumpResultDocCount)
                 {
@@ -169,6 +183,14 @@ namespace OnlineMongoMigrationProcessor
                 jobList?.Save(); //persists state
             }
             return true;
+        }
+
+        private void ResetSegmentsInChunk(MigrationChunk migrationChunk)
+        {
+            foreach (var segment in migrationChunk.Segments)
+            {
+                segment.IsProcessed = false;
+            }
         }
 
         private async Task ProcessSegmentAsync(

@@ -63,9 +63,15 @@ namespace OnlineMongoMigrationProcessor
 
         public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, FilterDefinition<BsonDocument> filter)
         {
-            // Execute the query and return the count
-            return collection.CountDocuments(filter);
+            var countOptions = new CountOptions
+            {
+                MaxTime = TimeSpan.FromMinutes(120) // Set the timeout to 5 minutes
+            };
+
+            // Execute the query and return the count with the specified timeout
+            return collection.CountDocuments(filter, countOptions);
         }
+
 
 
 
