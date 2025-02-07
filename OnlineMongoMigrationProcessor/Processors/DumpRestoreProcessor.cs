@@ -313,16 +313,16 @@ namespace OnlineMongoMigrationProcessor
                             int restoreAttempts = 0;
                             backoff = TimeSpan.FromSeconds(2);
                             bool continueProcessing = true;
+                            bool skipRestore = false;
                             while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete && _job.CurrentlyActive)
                             {
                                 restoreAttempts++;
+                                skipRestore=false;
                                 try
                                 {
                                     if (_processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, 0, $"{_toolsLaunchFolder}\\mongorestore.exe", args))
                                     {
-                                        continueProcessing = false;
-                                        item.MigrationChunks[i].IsUploaded = true;
-                                        _jobs?.Save(); // Persist state
+                                        
 
                                         if (item.MigrationChunks[i].RestoredFailedDocCount > 0)
                                         {
@@ -336,38 +336,68 @@ namespace OnlineMongoMigrationProcessor
                                             var gte = bounds.gte;
                                             var lt = bounds.lt;
 
-                                            item.MigrationChunks[i].DocCountInTarget = MongoHelper.GetDocumentCount(targetCollection, gte, lt, item.MigrationChunks[i].DataType);
+                                            // get count in target collection
+                                            try
+                                            {
+                                                item.MigrationChunks[i].DocCountInTarget = MongoHelper.GetDocumentCount(targetCollection, gte, lt, item.MigrationChunks[i].DataType);
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} encountered error while counting documents on target. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
+                                                Log.Save();                                                
+                                            }
 
+                                            // checking if source  and target doc counts are same
                                             if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpResultDocCount)
                                             {
-                                                Log.WriteLine($"{dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
+                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
+                                                Log.Save();
+                                            }
+                                            else
+                                            {
+                                                //since count is mismatched, we will reprocess the chunk
+                                                skipRestore = true;
+                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} Documents missing, Chunk will be reprocessed", LogType.Error);
                                                 Log.Save();
                                             }
 
                                             _jobs?.Save(); // Persist state
                                         }
 
-                                        restoreAttempts = 0;
-
-                                        restoredChunks++;
-                                        restoredDocs += Math.Max(item.MigrationChunks[i].RestoredSuccessDocCount, item.MigrationChunks[i].DocCountInTarget);
-                                        try
+                                        //skip updating the chunk status as we are reprocessing the chunk
+                                        if (!skipRestore)
                                         {
-                                            Directory.Delete($"{folder}\\{i}.bson", true);
-                                        }
-                                        catch { }
+                                            
+                                            continueProcessing = false;
+                                            item.MigrationChunks[i].IsUploaded = true;
+                                            _jobs?.Save(); // Persist state
+
+                                            restoreAttempts = 0;
+
+                                            restoredChunks++;
+                                            restoredDocs += Math.Max(item.MigrationChunks[i].RestoredSuccessDocCount, item.MigrationChunks[i].DocCountInTarget);
+
+
+                                            try
+                                            {
+                                                Directory.Delete($"{folder}\\{i}.bson", true);
+                                            }
+                                            catch { }
+                                        }                                        
                                     }
                                     else
                                     {
                                         if (!_executionCancelled)
                                         {
-                                            Log.WriteLine($"Attempt {restoreAttempts} {dbName}.{colName}-{i} of Restore Executor failed");
+                                            Log.WriteLine($"Restore attempt {restoreAttempts} {dbName}.{colName}-{i} failed", LogType.Error);
+                                            Log.Save();
                                         }
                                     }
                                 }
                                 catch (MongoExecutionTimeoutException ex)
                                 {
                                     Log.WriteLine($" Restore attempt {restoreAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
+                                    i--;
 
                                     if (restoreAttempts >= maxRetries)
                                     {
@@ -400,6 +430,7 @@ namespace OnlineMongoMigrationProcessor
                                     {
                                         Log.WriteLine(ex.ToString(), LogType.Error);
                                         Log.Save();
+
                                     }
 
                                     _job.CurrentlyActive = false;
@@ -448,7 +479,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_targetClient == null)
                             _targetClient = new MongoClient(targetConnectionString);
 
-                        Log.WriteLine($"{dbName}.{colName} ProcessCollectionChangeStream invoked");
+                        Log.WriteLine($"{dbName}.{colName} change stream processing started");
 
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _config);
