@@ -168,7 +168,6 @@ namespace OnlineMongoMigrationProcessor
 
         public static string GetWorkingFolder()
         {
-            
 
             if (!string.IsNullOrEmpty(_workingFolder))
             {
@@ -176,7 +175,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             //back ward compatibility, old code used to create a folder in temp path
-            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
+            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))                
             {
                 _workingFolder = Path.GetTempPath();
                 return _workingFolder;
