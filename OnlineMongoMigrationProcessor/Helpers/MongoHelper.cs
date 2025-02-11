@@ -192,9 +192,19 @@ namespace OnlineMongoMigrationProcessor
 
             var database = client.GetDatabase(databaseName);
 
-            var collectionNamesCursor = await database.ListCollectionNamesAsync();
-            var collectionNames = await collectionNamesCursor.ToListAsync();
-            return collectionNames.Contains(collectionName);
+            //var collectionNamesCursor = await database.ListCollectionNamesAsync();
+            //var collectionNames = await collectionNamesCursor.ToListAsync();
+            //return collectionNames.Contains(collectionName);
+
+
+            var collection = database.GetCollection<BsonDocument>(collectionName);
+
+            // Try to find one document (limit query to 1 for efficiency)
+            var document = await collection.Find(FilterDefinition<BsonDocument>.Empty)
+                                           .Limit(1)
+                                           .FirstOrDefaultAsync();
+
+            return document != null; // If a document is found, collection exists
         }
 
         public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)

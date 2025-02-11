@@ -79,7 +79,12 @@ This option involves cloning the repository and building the C# project source f
    # Configure Nuget Path. Execute only once on a machine
    dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
 
-
+   # Delete the existing publish folder (if exist)
+   if (Test-Path $publishFolder) {
+		Remove-Item -Path $publishFolder -Recurse -Force -Confirm:$false
+   }
+	
+	
    # Build the Blazor app
    Write-Host "Building Blazor app..."
    dotnet publish $projectFilePath -c Release -o $publishFolder -warnaserror:none --nologo
