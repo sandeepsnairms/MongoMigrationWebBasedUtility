@@ -222,7 +222,7 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             unit.SourceStatus = CollectionStatus.NotFound;
-                            Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
+                            Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
                             Log.Save();
                         }
                     }
@@ -243,7 +243,7 @@ namespace OnlineMongoMigrationProcessor
                             else
                             {
                                 migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                                Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source", LogType.Error);
+                                Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records", LogType.Error);
                                 Log.Save();
                             }
                         }

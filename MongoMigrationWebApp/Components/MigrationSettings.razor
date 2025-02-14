@@ -27,6 +27,11 @@
                     <input type="number" id="csbatchsize" class="form-control" @bind="configuration.ChangeStreamBatchSize" />
                 </div>
 
+                <div class="mb-3">
+                    <label for="csbatchsize" class="form-label">Mongo Copy Page Size:</label>
+                    <input type="number" id="csbatchsize" class="form-control" @bind="configuration.MongoCopyPageSize" />
+                </div>
+
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
                     <div class="alert alert-danger mt-2">@errorMessage</div>
@@ -52,6 +57,12 @@
 
     private void HandleSubmit()
     {
+        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 10000)
+        {
+            errorMessage = "Page Size should be between 50 and 10000.";
+            return;
+        }
+
         if (configuration.ChangeStreamBatchSize < 100 || configuration.ChunkSizeInMb > 1000000)
         {
             errorMessage = "Batch Size should be between 100 and 1000,000.";

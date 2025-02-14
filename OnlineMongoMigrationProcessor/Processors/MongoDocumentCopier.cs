@@ -16,7 +16,7 @@ namespace OnlineMongoMigrationProcessor
         private MongoClient _targetClient;
         private IMongoCollection<BsonDocument> _sourceCollection;
         private IMongoCollection<BsonDocument> _targetCollection;
-        private const int PageSize = 500;
+        private int _pageSize = 500;
         private long _successCount = 0;
         private long _failureCount = 0;
         private long _skippedCount = 0;
@@ -25,11 +25,14 @@ namespace OnlineMongoMigrationProcessor
             MongoClient targetClient,
             IMongoCollection<BsonDocument> sourceCollection,
             string targetDatabase,
-            string targetCollectionName)
+            string targetCollectionName,
+            int pageSize)
         {
             _targetClient = targetClient;
             _sourceCollection = sourceCollection;
             _targetCollection = _targetClient.GetDatabase(targetDatabase).GetCollection<BsonDocument>(targetCollectionName);
+
+            _pageSize =pageSize;
         }
 
         private void UpdateProgress(
@@ -248,8 +251,8 @@ namespace OnlineMongoMigrationProcessor
                         // Get the next page of results
                         set = await _sourceCollection.Aggregate()
                             .Match(combinedFilter)  // Apply the filter
-                            .Skip(pageIndex * PageSize)  // Skip documents based on the current page
-                            .Limit(PageSize)  // Limit to the page size
+                            .Skip(pageIndex * _pageSize)  // Skip documents based on the current page
+                            .Limit(_pageSize)  // Limit to the page size
                             .ToListAsync(cancellationToken);
 
                         if (set.Count == 0)
@@ -265,6 +268,11 @@ namespace OnlineMongoMigrationProcessor
 
                         // Increment the page index to get the next batch
                         pageIndex++;
+                    }
+                    catch (OutOfMemoryException ex)
+                    {
+                        Log.WriteLine($"Document copy encountered out of memory error for segment [{migrationChunkIndex}.{segmentIndex}]. Try reducing _pageSize in settings. Details: {ex.ToString()}", LogType.Error);
+                        Log.Save();
                     }
                     catch (MongoException mex) when (mex.Message.Contains("DuplicateKey"))
                     {
