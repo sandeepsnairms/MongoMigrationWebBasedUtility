@@ -155,6 +155,7 @@ namespace OnlineMongoMigrationProcessor
         public bool HasUuid { get; set; }
         public long ChunkSizeInMb { get; set; }
         public int ChangeStreamBatchSize { get; set; }
+        public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
 
         public MigrationSettings()
@@ -175,6 +176,7 @@ namespace OnlineMongoMigrationProcessor
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
                     ChangeStreamBatchSize = loadedObject.ChangeStreamBatchSize;
+                    MongoCopyPageSize=loadedObject.MongoCopyPageSize;
                     initialized = true;
                 }
             }
@@ -184,6 +186,7 @@ namespace OnlineMongoMigrationProcessor
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMb = 5120;
                 ChangeStreamBatchSize = 10000;
+                MongoCopyPageSize = 500;
             }
         }
 
