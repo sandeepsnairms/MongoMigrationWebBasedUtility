@@ -227,15 +227,33 @@ namespace OnlineMongoMigrationProcessor
             }
             else if(segment.QueryDocCount > 0)
             {
-                // Delete documents matching the filter
-                var result = await _targetCollection.DeleteManyAsync(combinedFilter);
-                if(result.DeletedCount > 0)
+                Log.WriteLine($"Deleting documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
+                Log.Save();
+               
+                try
                 {
-                    // Output the number of deleted documents
-                    Log.WriteLine($"Deleted {result.DeletedCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
+                    // Execute DeleteManyAsync causing timeout
+                    //var result = await _targetCollection.DeleteManyAsync(combinedFilter);
+
+                    var resultCount= await DeleteInBatchesAsync(_targetCollection, combinedFilter, _pageSize, $"{migrationChunkIndex}.{segmentIndex}");
+                    if (resultCount > 0)
+                    {
+                        // Output the number of deleted documents
+                        Log.WriteLine($"Deleted {resultCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");                        
+                    }
+                    else
+                    {
+                        Log.WriteLine($"No duplicate documents found on target in segment [{migrationChunkIndex}.{segmentIndex}]");
+                    }
                     Log.Save();
                 }
-                
+                catch
+                {
+                    // Output the number of deleted documents
+                    Log.WriteLine($"Delete documents from target to avoid duplicates failed for segment [{migrationChunkIndex}.{segmentIndex}]. Expect duplicates to be reported in resume.",LogType.Error);
+                    Log.Save();
+                }
+
             }
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
             jobList.Save();
@@ -320,6 +338,34 @@ namespace OnlineMongoMigrationProcessor
                 Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
+        }
+
+        private async Task<long> DeleteInBatchesAsync(IMongoCollection<BsonDocument> collection, FilterDefinition<BsonDocument> filter, int batchSize, string chunkindex)
+        {
+            long deletedCount = 0;
+            int ctr = 1;
+            while (true)
+            {
+                Log.AddVerboseMessage($"Getting page {ctr} to delete from target for segment {chunkindex}");
+
+                // Get a batch of document _ids to delete
+                var batchIds = await collection.Find(filter)
+                                               .Limit(batchSize)
+                                               .Project(doc => doc["_id"])
+                                               .ToListAsync();
+
+                if (batchIds.Count == 0)
+                    break;  // No more documents to delete
+
+                // Delete documents in this batch
+                var deleteFilter = Builders<BsonDocument>.Filter.In("_id", batchIds);
+
+                Log.AddVerboseMessage($"Deleting page {ctr} from target for segment {chunkindex}");
+                var result = await collection.DeleteManyAsync(deleteFilter);
+                deletedCount = deletedCount + result.DeletedCount;
+                ctr++;
+            }
+            return deletedCount;
         }
 
         private void LogErrors(MongoBulkWriteException<BsonDocument> ex)
