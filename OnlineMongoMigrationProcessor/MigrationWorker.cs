@@ -395,7 +395,7 @@ namespace OnlineMongoMigrationProcessor
                         if (!_job.UseMongoDump && (chunkBoundaries.Boundaries[i].SegmentBoundaries == null || chunkBoundaries.Boundaries[i].SegmentBoundaries.Count == 0))
                         {
                             chunk.Segments ??= new List<Segment>();
-                            chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false });
+                            chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false,Id="1" });
                         }
 
                         if (!_job.UseMongoDump && chunkBoundaries.Boundaries[i].SegmentBoundaries.Count > 0)
@@ -406,7 +406,7 @@ namespace OnlineMongoMigrationProcessor
                                 var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, chunkBoundaries.Boundaries[i].SegmentBoundaries.Count, j, chunk.Lt, chunk.Gte);
 
                                 chunk.Segments ??= new List<Segment>();
-                                chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false });
+                                chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false , Id = (j+1).ToString() });
                             }
                         }
                     }
