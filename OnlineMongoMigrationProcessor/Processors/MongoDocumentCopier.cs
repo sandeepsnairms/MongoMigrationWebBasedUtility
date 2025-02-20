@@ -36,7 +36,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
         private void UpdateProgress(
-            int setIndex,
+            string segmentId,
             JobList jobList,
             MigrationUnit item,
             int migrationChunkIndex,
@@ -55,7 +55,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0)
             {
-                Log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{setIndex}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+                Log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
                 Log.Save();
                 item.DumpPercent = basePercent + (percent * contribFactor);
                 item.RestorePercent = item.DumpPercent;
@@ -98,6 +98,10 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var segment in item.MigrationChunks[migrationChunkIndex].Segments)
                 {
 
+                    //back ward compatibility, Id was introduced later
+                    segmentIndex++;
+                    if (string.IsNullOrEmpty(segment.Id))
+                        segment.Id = segmentIndex.ToString();
 
                     FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
                     if (item.MigrationChunks[migrationChunkIndex].Segments.Count == 1 || segment.IsProcessed == true)
@@ -127,8 +131,8 @@ namespace OnlineMongoMigrationProcessor
                     {
                         try
                         {
-                            segmentIndex++;
-                            await ProcessSegmentAsync(segment, combinedFilter, segmentIndex, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken);
+                            
+                            await ProcessSegmentAsync(segment, combinedFilter, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken);
                         }
                         finally
                         {
@@ -204,7 +208,6 @@ namespace OnlineMongoMigrationProcessor
         private async Task ProcessSegmentAsync(
             Segment segment,
             FilterDefinition<BsonDocument> combinedFilter,
-            int segmentIndex,
             JobList jobList,
             MigrationUnit item,
             int migrationChunkIndex,
@@ -214,45 +217,58 @@ namespace OnlineMongoMigrationProcessor
             ConcurrentBag<Exception> errors,
             CancellationToken cancellationToken)
         {
-            Log.WriteLine($"Document copy started for segment [{migrationChunkIndex}.{segmentIndex}]");
+              
+            string segmentId = segment.Id;
+            TimeSpan backoff = TimeSpan.FromSeconds(2);
+
+            Log.WriteLine($"Document copy started for segment [{migrationChunkIndex}.{segmentId}]");
             Log.Save();
 
             if (segment.IsProcessed == true)
             {
-                Log.WriteLine($"Skipping processed segment [{migrationChunkIndex}.{segmentIndex}]");
+                Log.WriteLine($"Skipping processed segment [{migrationChunkIndex}.{segmentId}]");
                 Log.Save();
 
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
                 return;
             }
             else if(segment.QueryDocCount > 0)
-            {
-                Log.WriteLine($"Deleting documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");
-                Log.Save();
-               
-                try
+            {               
+                /*
+                for (int i = 0; i < 5; i++)
                 {
-                    // Execute DeleteManyAsync causing timeout
-                    //var result = await _targetCollection.DeleteManyAsync(combinedFilter);
+                    Log.WriteLine($"Deleting documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentId}]");
+                    Log.Save();
 
-                    var resultCount= await DeleteInBatchesAsync(_targetCollection, combinedFilter, _pageSize, $"{migrationChunkIndex}.{segmentIndex}");
-                    if (resultCount > 0)
+                    try
+                    {
+                        // Execute DeleteManyAsync causing timeout
+                        //var result = await _targetCollection.DeleteManyAsync(combinedFilter);
+
+                        var resultCount = await DeleteInBatchesAsync(_targetCollection, combinedFilter, _pageSize, $"{migrationChunkIndex}.{segmentId}");
+                        if (resultCount > 0)
+                        {
+                            // Output the number of deleted documents
+                            Log.WriteLine($"Deleted {resultCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentId}]");
+                        }
+                        else
+                        {
+                            Log.WriteLine($"No duplicate documents found on target in segment [{migrationChunkIndex}.{segmentId}]");
+                        }
+                        Log.Save();
+                        break;
+                    }
+                    catch(Exception ex)
                     {
                         // Output the number of deleted documents
-                        Log.WriteLine($"Deleted {resultCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentIndex}]");                        
+                        Log.WriteLine($"Attempt {i + 1} for delete documents failed for segment [{migrationChunkIndex}.{segmentId}]. Details :{ex.ToString()}", LogType.Error);
+                        Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds");
+                        Log.Save();
+
+                        Thread.Sleep(backoff);
+                        backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
                     }
-                    else
-                    {
-                        Log.WriteLine($"No duplicate documents found on target in segment [{migrationChunkIndex}.{segmentIndex}]");
-                    }
-                    Log.Save();
-                }
-                catch
-                {
-                    // Output the number of deleted documents
-                    Log.WriteLine($"Delete documents from target to avoid duplicates failed for segment [{migrationChunkIndex}.{segmentIndex}]. Expect duplicates to be reported in resume.",LogType.Error);
-                    Log.Save();
-                }
+                }*/
 
             }
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
@@ -279,22 +295,24 @@ namespace OnlineMongoMigrationProcessor
                             break;
                         }
 
+                        var options = new InsertManyOptions { IsOrdered = false };
                         // Insert the current batch into the target collection
-                        await _targetCollection.InsertManyAsync(set, cancellationToken: cancellationToken);
+                        await _targetCollection.InsertManyAsync(set, options,cancellationToken: cancellationToken);
 
                         Interlocked.Add(ref _successCount, set.Count);
 
-                        // Increment the page index to get the next batch
-                        pageIndex++;
+   
                     }
                     catch (OutOfMemoryException ex)
                     {
-                        Log.WriteLine($"Document copy encountered out of memory error for segment [{migrationChunkIndex}.{segmentIndex}]. Try reducing _pageSize in settings. Details: {ex.ToString()}", LogType.Error);
+                        Log.WriteLine($"Document copy encountered out of memory error for segment [{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize in settings. Details: {ex.ToString()}", LogType.Error);
                         Log.Save();
+                        throw;
                     }
                     catch (MongoException mex) when (mex.Message.Contains("DuplicateKey"))
                     {
                         Interlocked.Add(ref _skippedCount, ((MongoBulkWriteException)mex).WriteErrors.Count);
+
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
@@ -305,37 +323,40 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (Exception ex) when (ex.ToString().Contains("canceled."))
                     {
-                        Log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentIndex}]");
+                        Log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentId}]");
                         Log.Save();
                     }
                     catch (Exception ex)
                     {
                         errors.Add(ex);
                         Interlocked.Add(ref _failureCount, set.Count);
-                        Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentIndex}]. Details : {ex.ToString()}", LogType.Error);
+                        Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentId}]. Details : {ex.ToString()}", LogType.Error);
                         Log.Save();
+
                     }
                     finally
                     {
-                        UpdateProgress(segmentIndex, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount);
+                        UpdateProgress(segmentId, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount);
+
+                        // Increment the page index to get the next batch
+                        pageIndex++;
                     }
                 }
 
                 if(!cancellationToken.IsCancellationRequested)
                 {
-                    Log.WriteLine($"Document copy Operation completed for chunk [{migrationChunkIndex}.{segmentIndex}]");
+                    Log.WriteLine($"Document copy Operation completed for chunk [{migrationChunkIndex}.{segmentId}]");
                     Log.Save();
 
                     segment.IsProcessed = true;
                     jobList.Save();
-                }            
-
+                }      
                 
             }
             catch (Exception ex)
             {
                 errors.Add(ex);
-                Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentIndex}], Details: {ex.ToString()}", LogType.Error);
+                Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentId}], Details: {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }
