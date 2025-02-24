@@ -1,6 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -192,11 +193,6 @@ namespace OnlineMongoMigrationProcessor
 
             var database = client.GetDatabase(databaseName);
 
-            //var collectionNamesCursor = await database.ListCollectionNamesAsync();
-            //var collectionNames = await collectionNamesCursor.ToListAsync();
-            //return collectionNames.Contains(collectionName);
-
-
             var collection = database.GetCollection<BsonDocument>(collectionName);
 
             // Try to find one document (limit query to 1 for efficiency)
@@ -206,6 +202,33 @@ namespace OnlineMongoMigrationProcessor
 
             return document != null; // If a document is found, collection exists
         }
+
+        public static async Task<(long CollectionSizeBytes, long DocumentCount)> GetCollectionStatsAsync(MongoClient client, string databaseName, string collectionName)
+        {
+            var database = client.GetDatabase(databaseName);
+            var collection = database.GetCollection<BsonDocument>(collectionName);
+
+            var statsCommand = new BsonDocument { { "collStats", collectionName } };
+            var stats = await database.RunCommandAsync<BsonDocument>(statsCommand);
+            long totalCollectionSizeBytes = stats.Contains("storageSize") ? stats["storageSize"].ToInt64() : stats["size"].ToInt64();
+
+            long documentCount;
+            if (stats["count"].IsInt32)
+            {
+                documentCount = stats["count"].ToInt32();
+            }
+            else if (stats["count"].IsInt64)
+            {
+                documentCount = stats["count"].ToInt64();
+            }
+            else
+            {
+                throw new InvalidOperationException("Unexpected data type for document count.");
+            }
+
+            return new (totalCollectionSizeBytes, documentCount);
+        }
+
 
         public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
         {
