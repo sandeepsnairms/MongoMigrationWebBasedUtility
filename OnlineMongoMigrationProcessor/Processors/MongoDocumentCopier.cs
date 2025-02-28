@@ -361,33 +361,33 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private async Task<long> DeleteInBatchesAsync(IMongoCollection<BsonDocument> collection, FilterDefinition<BsonDocument> filter, int batchSize, string chunkindex)
-        {
-            long deletedCount = 0;
-            int ctr = 1;
-            while (true)
-            {
-                Log.AddVerboseMessage($"Getting page {ctr} to delete from target for segment {chunkindex}");
+        //private async Task<long> DeleteInBatchesAsync(IMongoCollection<BsonDocument> collection, FilterDefinition<BsonDocument> filter, int batchSize, string chunkindex)
+        //{
+        //    long deletedCount = 0;
+        //    int ctr = 1;
+        //    while (true)
+        //    {
+        //        Log.AddVerboseMessage($"Getting page {ctr} to delete from target for segment {chunkindex}");
 
-                // Get a batch of document _ids to delete
-                var batchIds = await collection.Find(filter)
-                                               .Limit(batchSize)
-                                               .Project(doc => doc["_id"])
-                                               .ToListAsync();
+        //        // Get a batch of document _ids to delete
+        //        var batchIds = await collection.Find(filter)
+        //                                       .Limit(batchSize)
+        //                                       .Project(doc => doc["_id"])
+        //                                       .ToListAsync();
 
-                if (batchIds.Count == 0)
-                    break;  // No more documents to delete
+        //        if (batchIds.Count == 0)
+        //            break;  // No more documents to delete
 
-                // Delete documents in this batch
-                var deleteFilter = Builders<BsonDocument>.Filter.In("_id", batchIds);
+        //        // Delete documents in this batch
+        //        var deleteFilter = Builders<BsonDocument>.Filter.In("_id", batchIds);
 
-                Log.AddVerboseMessage($"Deleting page {ctr} from target for segment {chunkindex}");
-                var result = await collection.DeleteManyAsync(deleteFilter);
-                deletedCount = deletedCount + result.DeletedCount;
-                ctr++;
-            }
-            return deletedCount;
-        }
+        //        Log.AddVerboseMessage($"Deleting page {ctr} from target for segment {chunkindex}");
+        //        var result = await collection.DeleteManyAsync(deleteFilter);
+        //        deletedCount = deletedCount + result.DeletedCount;
+        //        ctr++;
+        //    }
+        //    return deletedCount;
+        //}
 
         private void LogErrors(MongoBulkWriteException<BsonDocument> ex)
         {

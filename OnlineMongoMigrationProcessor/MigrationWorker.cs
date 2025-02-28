@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -65,6 +66,8 @@ namespace OnlineMongoMigrationProcessor
             //encoding speacial characters
             sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(sourceConnectionString);
             targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(targetConnectionString);
+
+            targetConnectionString = Helper.UpdateAppName(targetConnectionString, "MSFTMongoWebMigration-" + Guid.NewGuid().ToString());
 
             if (Config == null)
             {
@@ -238,7 +241,15 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (await MongoHelper.CheckCollectionExists(_sourceClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                             {
+                                var targetClient = new MongoClient(targetConnectionString);
+
+                                if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                                {
+                                    Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
+                                    Log.Save();
+                                }
                                 _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+    
                             }
                             else
                             {
@@ -289,28 +300,14 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, string idField = "_id")
         {
+
+            var stas=await MongoHelper.GetCollectionStatsAsync(_sourceClient, databaseName, collectionName);
+
+            long documentCount = stas.DocumentCount;
+            long totalCollectionSizeBytes = stas.CollectionSizeBytes;
+
             var database = _sourceClient.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
-
-
-            var statsCommand = new BsonDocument { { "collStats", collectionName } };
-            var stats = await database.RunCommandAsync<BsonDocument>(statsCommand);
-            long totalCollectionSizeBytes = stats.Contains("storageSize") ? stats["storageSize"].ToInt64() : stats["size"].ToInt64();
-
-
-            long documentCount;
-            if (stats["count"].IsInt32)
-            {
-                documentCount = stats["count"].ToInt32();
-            }
-            else if (stats["count"].IsInt64)
-            {
-                documentCount = stats["count"].ToInt64();
-            }
-            else
-            {
-                throw new InvalidOperationException("Unexpected data type for document count.");
-            }
 
             int totalChunks = 0;
             long minDocsInChunk = 0;

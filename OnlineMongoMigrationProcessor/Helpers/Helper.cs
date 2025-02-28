@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web;
 
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -196,6 +197,27 @@ namespace OnlineMongoMigrationProcessor
                 _workingFolder = Path.Combine(homePath, "home//");
             }
             return _workingFolder;
+        }
+
+        public static string UpdateAppName(string connectionString, string appName)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
+
+            if (string.IsNullOrWhiteSpace(appName))
+                throw new ArgumentException("App name cannot be null or empty.", nameof(appName));
+
+            var uri = new Uri(connectionString);
+            var queryParams = HttpUtility.ParseQueryString(uri.Query);
+
+            // Set or update the appName parameter
+            queryParams["appName"] = appName;
+
+            // Reconstruct the connection string with updated parameters
+            var newQuery = queryParams.ToString();
+            var updatedConnectionString = connectionString.Replace(uri.Query.ToString(),"?"+ newQuery);
+
+            return updatedConnectionString;
         }
 
         public static Tuple<bool, string> ValidateNamespaceFormat(string input)
