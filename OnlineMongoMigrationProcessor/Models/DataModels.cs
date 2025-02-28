@@ -53,7 +53,11 @@ namespace OnlineMongoMigrationProcessor
                 lock (_fileLock)
                 {
                     string json = JsonConvert.SerializeObject(this);
-                    File.WriteAllText(_filePath, json);
+                    //File.WriteAllText(_filePath, json);
+                    string tempFile = _filePath + ".tmp";
+                    File.WriteAllText(tempFile, json);
+                    File.Move(tempFile, _filePath, true); // Atomic move on most OSes
+
                 }
                 return true;
             }
