@@ -155,7 +155,7 @@ namespace OnlineMongoMigrationProcessor
                         Log.Save();
 
 
-                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString);
+                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString, _job.MigrationUnits[0]);
                         _job.SourceServerVersion = retValue.Version;
                         _jobs?.Save();
 
