@@ -76,7 +76,7 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString)
+        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString, MigrationUnit unit)
         {
             string version = string.Empty;
             try
@@ -84,30 +84,55 @@ namespace OnlineMongoMigrationProcessor
                 // Connect to the MongoDB server
                 var client = new MongoClient(connectionString);
 
-                // Check the server status to verify replica set or sharded cluster
-                var adminDatabase = client.GetDatabase("admin");
-                var masterCommand = new BsonDocument("isMaster", 1);
-                var isMasterResult = await adminDatabase.RunCommandAsync<BsonDocument>(masterCommand);
-
-                // Get Mongo Version
-                var verCommand = new BsonDocument("buildInfo", 1);
-                var result = await adminDatabase.RunCommandAsync<BsonDocument>(verCommand);
-
-                version = result["version"].AsString;
-
-                // Check if the server is part of a replica set or a sharded cluster
-                if (isMasterResult.Contains("setName") || isMasterResult.GetValue("msg", "").AsString == "isdbgrid")
+                if (connectionString.Contains("mongocluster.cosmos.azure.com")) //for vcore
                 {
-                    Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
-                    Log.Save();
-                    return (IsCSEnabled: true, Version: version);
+                    var database = client.GetDatabase(unit.DatabaseName);
+                    var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+
+                    var options = new ChangeStreamOptions
+                    {
+                        FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
+                    };
+                    var cursor = await collection.WatchAsync(options) ;
+
+                    return (IsCSEnabled: true, Version: "");
                 }
                 else
                 {
-                    Log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
-                    Log.Save();
-                    return (IsCSEnabled: false, Version: version);
+                    
+
+                    // Check the server status to verify replica set or sharded cluster
+                    var adminDatabase = client.GetDatabase("admin");
+                    var masterCommand = new BsonDocument("isMaster", 1);
+                    var isMasterResult = await adminDatabase.RunCommandAsync<BsonDocument>(masterCommand);
+
+                    // Get Mongo Version
+                    var verCommand = new BsonDocument("buildInfo", 1);
+                    var result = await adminDatabase.RunCommandAsync<BsonDocument>(verCommand);
+
+                    version = result["version"].AsString;
+
+                    // Check if the server is part of a replica set or a sharded cluster
+                    if (isMasterResult.Contains("setName") || isMasterResult.GetValue("msg", "").AsString == "isdbgrid")
+                    {
+                        Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
+                        Log.Save();
+                        return (IsCSEnabled: true, Version: "version");
+                    }
+                    else
+                    {
+                        Log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
+                        Log.Save();
+                        return (IsCSEnabled: false, Version: version);
+                    }
                 }
+            }
+            catch (MongoCommandException ex) when (ex.Message.Contains("$changeStream is not supported"))
+            {
+                Log.WriteLine("Change streams are not enabled on vCore.", LogType.Error);
+                Log.Save();
+                return (IsCSEnabled: false, Version: "");
+
             }
             catch (Exception ex)
             {

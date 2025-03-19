@@ -211,8 +211,9 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                if (!job.SourceServerVersion.StartsWith("3"))
+                if (!job.SourceServerVersion.StartsWith("3") && change.ClusterTime!=null)
                 {
+
                     // Access the ClusterTime (timestamp) from the ChangeStreamDocument
                     var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
 
@@ -220,6 +221,16 @@ namespace OnlineMongoMigrationProcessor
                     Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
                     ProcessChange(change, targetCollection);
                     item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                }
+                else if (!job.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for vcore
+                {
+                    // use Walltime
+                    var timestamp = change.WallTime; 
+
+                    // Output change details to the console
+                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
+                    ProcessChange(change, targetCollection);
+                    item.CursorUtcTimestamp = timestamp.Value;
                 }
                 else
                 {

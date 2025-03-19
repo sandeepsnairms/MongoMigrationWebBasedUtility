@@ -411,15 +411,15 @@ The job processes collections in the order they are added. Since larger collecti
    - **Resume Job**: Visible if the migration is paused. Select this to resume the current job. The app may prompt you to provide the connection strings if the cache has expired.
    - **Pause Job**: Visible if the current job is running. Select this to pause the current job. You can resume it later.  
    - **Update Collections**: Select this to add/remove collections in the current job. You can only update collections for a paused job. Removing a collection that is partially or fully migrated will lead to the loss of its migration details, and you will need to remigrate it from the start.  
-   - **Cut Over**: Select this to cut over an online job when the source and target are completely synced. Before cutting over, ensure to stop write traffic to the source and wait for the Change Stream Lag to become zero for all collections. Once cut over is performed, there is no rollback.  
+   - **Cut Over**: Select this to cut over an online job when the source and target are completely synced. Before cutting over, ensure to stop write traffic to the source and wait for the Time Since Last Change to become zero for all collections. Once cut over is performed, there is no rollback.  
 1. The **Monitor** section lists the current actions being performed.  
 1. The **Logs** section displays system-generated logs for debugging. You can download the logs by selecting the **download icon** next to the header.  
 
 **Note**: An offline job will automatically terminate once the data is copied. However, an online job requires a manual cut over to complete.
 
-#### Change Stream Lag
+#### Time Since Last Change
 
-Change Stream Lag refers to the time difference between the timestamp of the last processed change and the current time. During an online migration, the lag will be high immediately after the upload completes, but it should decrease as change stream processing starts, eventually reaching zero. If the lag does not reduce, consider the following:
+Time Since Last Change refers to the time difference between the timestamp of the last processed change and the current time. During an online migration, the lag will be high immediately after the upload completes, but it should decrease as change stream processing starts, eventually reaching zero. If the lag does not reduce, consider the following:
 
 - Ensure the job is not paused and is processing requests. Resume the job if necessary.
 - Monitor for new write operations on the source. If no new changes are detected, the lag will increase. However, this is not an issue since all changes have already been processed.
