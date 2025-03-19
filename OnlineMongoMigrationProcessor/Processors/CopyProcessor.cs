@@ -48,7 +48,7 @@ namespace OnlineMongoMigrationProcessor
         //    throw new NotImplementedException();
         //}
 
-        public async void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             int maxRetries = 10;
             string jobId = _job.Id;
@@ -138,7 +138,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 var documentCopier = new MongoDocumentCopier();
                                 documentCopier.Initialize(_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
-                                var result = await documentCopier.CopyDocumentsAsync(_jobs, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token);
+                                var result = documentCopier.CopyDocumentsAsync(_jobs, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token).GetAwaiter().GetResult();
 
                                 if (result)
                                 {
