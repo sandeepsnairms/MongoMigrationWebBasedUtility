@@ -166,7 +166,7 @@ namespace OnlineMongoMigrationProcessor
                 var gte = bounds.gte;
                 var lt = bounds.lt;
 
-                Log.WriteLine($"Document copy for chunk[{ migrationChunkIndex}], couting documents on target");
+                Log.WriteLine($"Document copy for chunk[{ migrationChunkIndex}], counting documents on target");
                 Log.Save();
 
                 try

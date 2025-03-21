@@ -195,6 +195,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             _job.CurrentlyActive = false;
                             _jobs?.Save();
+                            ProcessRunning = false;
                         }
                     }
                     else

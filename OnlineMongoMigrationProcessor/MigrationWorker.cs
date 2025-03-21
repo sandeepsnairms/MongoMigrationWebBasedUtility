@@ -266,17 +266,6 @@ namespace OnlineMongoMigrationProcessor
                 {
                     Log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
 
-                    if (attempts >= maxRetries)
-                    {
-                        Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
-                        Log.Save();
-
-                        _job.CurrentlyActive = false;
-                        _jobs?.Save();
-
-                        _migrationProcessor?.StopProcessing();
-                    }
-
                     Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
                     Log.Save();
@@ -286,15 +275,28 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    Log.WriteLine(ex.ToString(), LogType.Error);
+                    Log.WriteLine($"Attempt {attempts} failed: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
+
+                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                    Thread.Sleep(backoff);
                     Log.Save();
 
-                    _job.CurrentlyActive = false;
-                    _jobs?.Save();
-                    continueProcessing = false;
-
-                    _migrationProcessor?.StopProcessing();
+                    continueProcessing = true;
+                    //backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
+                   
                 }
+            }
+            if (attempts == maxRetries)
+            {
+                Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
+                Log.Save();
+
+                _job.CurrentlyActive = false;
+                _jobs?.Save();
+                continueProcessing = false;
+
+                _migrationProcessor?.StopProcessing();
+
             }
         }
 

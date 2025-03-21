@@ -138,7 +138,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 Log.WriteLine($"Error checking for change streams: {ex.ToString()}", LogType.Error);
                 Log.Save();
-                return (IsCSEnabled: false, Version: version);
+                //return (IsCSEnabled: false, Version: version);
+                throw ex;
             }
         }
 
