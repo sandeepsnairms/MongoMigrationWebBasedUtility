@@ -348,7 +348,7 @@ namespace OnlineMongoMigrationProcessor
                                             }
 
                                             // checking if source  and target doc counts are same
-                                            if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpResultDocCount)
+                                            if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpQueryDocCount)
                                             {
                                                 Log.WriteLine($"Restore for {dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
                                                 Log.Save();
