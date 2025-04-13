@@ -79,7 +79,8 @@ namespace OnlineMongoMigrationProcessor
             double contribFactor,
             long targetCount,
             FilterDefinition<BsonDocument> filter,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool isWriteSimulated)
         {
             ConcurrentBag<Exception> errors = new ConcurrentBag<Exception>();
             try
@@ -132,7 +133,7 @@ namespace OnlineMongoMigrationProcessor
                         try
                         {
                             
-                            await ProcessSegmentAsync(segment, combinedFilter, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken);
+                            await ProcessSegmentAsync(segment, combinedFilter, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken, isWriteSimulated);
                         }
                         finally
                         {
@@ -215,7 +216,8 @@ namespace OnlineMongoMigrationProcessor
             double contribFactor,
             long targetCount,
             ConcurrentBag<Exception> errors,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool IsWriteSimulated)
         {
               
             string segmentId = segment.Id;
@@ -295,13 +297,14 @@ namespace OnlineMongoMigrationProcessor
                             break;
                         }
 
-                        var options = new InsertManyOptions { IsOrdered = false };
-                        // Insert the current batch into the target collection
-                        await _targetCollection.InsertManyAsync(set, options,cancellationToken: cancellationToken);
-
+                        if (!IsWriteSimulated)
+                        {
+                            var options = new InsertManyOptions { IsOrdered = false };
+                            // Insert the current batch into the target collection
+                            await _targetCollection.InsertManyAsync(set, options, cancellationToken: cancellationToken);                           
+                        }
                         Interlocked.Add(ref _successCount, set.Count);
 
-   
                     }
                     catch (OutOfMemoryException ex)
                     {

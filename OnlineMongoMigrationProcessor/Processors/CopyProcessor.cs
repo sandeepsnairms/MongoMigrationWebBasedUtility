@@ -138,7 +138,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 var documentCopier = new MongoDocumentCopier();
                                 documentCopier.Initialize(_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
-                                var result = documentCopier.CopyDocumentsAsync(_jobs, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token).GetAwaiter().GetResult();
+                                var result = documentCopier.CopyDocumentsAsync(_jobs, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token,_job.IsSimulatedRun).GetAwaiter().GetResult();
 
                                 if (result)
                                 {

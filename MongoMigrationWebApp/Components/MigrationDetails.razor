@@ -43,6 +43,11 @@
                     <textarea id="nameSpaces" disabled="@(!newMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5" class="form-control" @bind="namespaces"></textarea>
                 </div>
 
+                <div class="mb-3">
+                    <label for="isSimulatedRun" class="form-label">Simulation Mode: No Target Writes</label>
+                    <input type="checkbox" id="isSimulatedRun" disabled="@(!newMode)" @bind="isSimulatedRun" />
+                </div>
+
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
                     <div class="alert alert-danger mt-2">@errorMessage</div>
@@ -93,7 +98,8 @@
     private string errorMessage = string.Empty;
     private bool useMongoDump = true; // Variable to track the selected value
     private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
-
+    private bool isSimulatedRun = false; // Variable to track the dummy run option 
+    
     private void OnSelectionChanged(ChangeEventArgs e)
     {
         selectedOption = e.Value.ToString();
@@ -168,7 +174,8 @@
                 SourceEndpoint = tmpSrcEndpoint,
                 TargetEndpoint = tmpTgtEndpoint,
                 NameSpaces = namespaces,
-                UseMongoDump = useMongoDump
+                UseMongoDump = useMongoDump,
+                IsSimulatedRun = isSimulatedRun
             };
         await OnSubmit.InvokeAsync(job);
     }
