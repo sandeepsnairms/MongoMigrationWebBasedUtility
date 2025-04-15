@@ -219,7 +219,7 @@ namespace OnlineMongoMigrationProcessor
 
                     // Output change details to the console
                     Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
-                    ProcessChange(change, targetCollection);
+                    ProcessChange(change, targetCollection,job.IsSimulatedRun);
                     item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
                 }
                 else if (!job.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for vcore
@@ -229,14 +229,14 @@ namespace OnlineMongoMigrationProcessor
 
                     // Output change details to the console
                     Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
-                    ProcessChange(change, targetCollection);
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun);
                     item.CursorUtcTimestamp = timestamp.Value;
                 }
                 else
                 {
                     // Output change details to the console
                     Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
-                    ProcessChange(change, targetCollection);
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun);
                 }
                 item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
                 _jobs?.Save(); // persists state
@@ -262,8 +262,11 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection)
+        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated)
         {
+            if (isWriteSimulated)
+                return;
+
             try
             {
                 switch (change.OperationType)

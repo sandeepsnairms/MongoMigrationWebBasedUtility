@@ -88,6 +88,7 @@ namespace OnlineMongoMigrationProcessor
         public bool IsStarted { get; set; }
         public bool CurrentlyActive { get; set; }
         public bool UseMongoDump { get; set; }
+        public bool IsSimulatedRun { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 

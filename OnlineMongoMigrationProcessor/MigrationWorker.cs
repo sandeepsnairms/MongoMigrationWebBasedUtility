@@ -146,6 +146,10 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _sourceClient = new MongoClient(sourceConnectionString);
                     Log.WriteLine("Source Client Created");
+                    if(job.IsSimulatedRun)
+                    {
+                        Log.WriteLine("Simulated Run. No changes will be made to the target.");
+                    }                   
                     Log.Save();
 
 
@@ -213,7 +217,7 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-                                if (!_job.UseMongoDump)
+                                if (!_job.UseMongoDump && !job.IsSimulatedRun)
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);

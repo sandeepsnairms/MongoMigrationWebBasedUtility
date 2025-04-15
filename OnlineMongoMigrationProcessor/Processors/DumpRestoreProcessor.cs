@@ -179,7 +179,7 @@ namespace OnlineMongoMigrationProcessor
                                     _jobs?.Save(); // Persist state
                                     dumpAttempts = 0;
 
-                                    if (!restoreInvoked)
+                                    if (!restoreInvoked )
                                     {
                                         Log.WriteLine($"{dbName}.{colName} Uploader invoked");
 
@@ -282,7 +282,7 @@ namespace OnlineMongoMigrationProcessor
 
             Log.WriteLine($"{dbName}.{colName} Uploader started");
 
-            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive)
+            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive && !_job.IsSimulatedRun)
             {
                 int restoredChunks = 0;
                 long restoredDocs = 0;
@@ -314,7 +314,7 @@ namespace OnlineMongoMigrationProcessor
                             backoff = TimeSpan.FromSeconds(2);
                             bool continueProcessing = true;
                             bool skipRestore = false;
-                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete && _job.CurrentlyActive)
+                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete && _job.CurrentlyActive )
                             {
                                 restoreAttempts++;
                                 skipRestore=false;
@@ -348,7 +348,7 @@ namespace OnlineMongoMigrationProcessor
                                             }
 
                                             // checking if source  and target doc counts are same
-                                            if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpResultDocCount)
+                                            if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpQueryDocCount)
                                             {
                                                 Log.WriteLine($"Restore for {dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
                                                 Log.Save();
@@ -468,11 +468,14 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            if (item.RestoreComplete && item.DumpComplete)
+            if ((item.RestoreComplete && item.DumpComplete)|| (item.DumpComplete && _job.IsSimulatedRun))
             {
                 try
                 {
-                    Directory.Delete(folder, true);
+
+                    if (Directory.Exists(folder))
+                        Directory.Delete(folder, true);
+
                     // Process change streams
                     if (_job.IsOnline && !_executionCancelled)
                     {

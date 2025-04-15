@@ -267,6 +267,9 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (mu.SourceStatus == CollectionStatus.OK)
                 {
+                    if(mu.DumpComplete && migrationJob.IsSimulatedRun)
+                        return true;
+                    
                     if (!mu.RestoreComplete || !mu.DumpComplete)
                         return false;
                 }
