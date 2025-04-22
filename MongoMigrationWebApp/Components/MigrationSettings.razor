@@ -57,9 +57,9 @@
 
     private void HandleSubmit()
     {
-        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 10000)
+        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 20000)
         {
-            errorMessage = "Page Size should be between 50 and 10000.";
+            errorMessage = "Page Size should be between 50 and 20000.";
             return;
         }
 
