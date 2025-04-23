@@ -1,4 +1,6 @@
 ﻿@inject Service.JobManager JobManager
+@inject IConfiguration Configuration
+
 @using OnlineMongoMigrationProcessor
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
@@ -18,7 +20,10 @@
                     <div class="mb-3">
                         <label for="mongo-options">Data Migration Tool:</label>
                         <select id="mongo-options" @onchange="OnSelectionChanged" >
-                            <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
+                            @if (AllowMongoDump)
+                            {
+                                <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
+                            }
                             <option value="Use Mongo Driver">Use Mongo Driver</option>
                         </select>
                     </div>
@@ -98,7 +103,8 @@
     private string errorMessage = string.Empty;
     private bool useMongoDump = true; // Variable to track the selected value
     private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
-    private bool isSimulatedRun = false; // Variable to track the dummy run option 
+    private bool isSimulatedRun = false; // Variable to track the dummy run option
+    private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     
     private void OnSelectionChanged(ChangeEventArgs e)
     {
