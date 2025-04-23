@@ -26,6 +26,7 @@ builder.Services.AddScoped(sp =>
 
 builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
+builder.Services.AddSingleton(builder.Configuration);
 builder.Services.AddSingleton<JobManager>();
 builder.Services.AddScoped<FileService>();
 
