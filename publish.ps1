@@ -3,8 +3,8 @@ param (
 )
 
 # Variables to be replaced
-$resourceGroupName = "MongoMigrationRGTest2"
-$webAppName = "MongoMigrationWepAppSN"
+$resourceGroupName = "<Replace with Existing Resource Group Name>"
+$webAppName = "<Replace with WebApp Name>"
 $projectFolderPath = Get-Location
 
 
