@@ -81,8 +81,13 @@ namespace OnlineMongoMigrationProcessor
             string version = string.Empty;
             try
             {
-                // Connect to the MongoDB server
-                var client = new MongoClient(connectionString);
+                //// Connect to the MongoDB server
+                //var client = new MongoClient(connectionString);
+                var mongoUrl = new MongoUrl(connectionString);
+                var settings = MongoClientSettings.FromUrl(mongoUrl);
+                settings.ReadConcern = ReadConcern.Majority;
+                var client = new MongoClient(settings);
+
 
                 if (connectionString.Contains("mongocluster.cosmos.azure.com")) //for vcore
                 {
