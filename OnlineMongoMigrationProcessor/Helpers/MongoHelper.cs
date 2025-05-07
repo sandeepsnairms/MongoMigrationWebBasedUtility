@@ -122,7 +122,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
                         Log.Save();
-                        return (IsCSEnabled: true, Version: "version");
+                        return (IsCSEnabled: true, Version: version);
                     }
                     else
                     {
