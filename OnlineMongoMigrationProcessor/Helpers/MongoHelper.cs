@@ -81,8 +81,13 @@ namespace OnlineMongoMigrationProcessor
             string version = string.Empty;
             try
             {
-                // Connect to the MongoDB server
-                var client = new MongoClient(connectionString);
+                //// Connect to the MongoDB server
+                //var client = new MongoClient(connectionString);
+                var mongoUrl = new MongoUrl(connectionString);
+                var settings = MongoClientSettings.FromUrl(mongoUrl);
+                settings.ReadConcern = ReadConcern.Majority;
+                var client = new MongoClient(settings);
+
 
                 if (connectionString.Contains("mongocluster.cosmos.azure.com")) //for vcore
                 {
@@ -117,7 +122,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
                         Log.Save();
-                        return (IsCSEnabled: true, Version: "version");
+                        return (IsCSEnabled: true, Version: version);
                     }
                     else
                     {
@@ -145,72 +150,82 @@ namespace OnlineMongoMigrationProcessor
 
         public async static Task SetChangeStreamResumeTokenAsync(MongoClient client, MigrationUnit unit)
         {
-            ChangeStreamOperationType? changeType = null;
-            BsonValue? documentId = null;
-            try
+            int retryCount = 0;
+            bool isSucessful = false;
+
+            while (!isSucessful && retryCount<10)
             {
-                if (!string.IsNullOrEmpty(unit.ResumeToken))
+                ChangeStreamOperationType? changeType = null;
+                BsonValue? documentId = null;
+                try
                 {
-                    Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
-                    Log.Save();
-                    return;
-                }
+                    if (!string.IsNullOrEmpty(unit.ResumeToken))
+                    {
+                        Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                        Log.Save();
+                        return;
+                    }
 
 
-                BsonDocument resumeToken = new BsonDocument();
+                    BsonDocument resumeToken = new BsonDocument();
 
-                var database = client.GetDatabase(unit.DatabaseName);
-                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                    var database = client.GetDatabase(unit.DatabaseName);
+                    var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
 
-                var options = new ChangeStreamOptions
-                {
-                    FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
-                };
+                    var options = new ChangeStreamOptions
+                    {
+                        FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
+                    };
 
-                
-                using (var cursor = await collection.WatchAsync(options))
-                {
-                    // Try to get a resume token, even if no changes exist
-                    resumeToken = cursor.GetResumeToken();
 
-                    //3.6 mongo  doesn't return resume token if no changes exist
+                    using (var cursor = await collection.WatchAsync(options))
+                    {
+                        // Try to get a resume token, even if no changes exist
+                        resumeToken = cursor.GetResumeToken();
+
+                        //3.6 mongo  doesn't return resume token if no changes exist
+                        if (resumeToken == null || resumeToken.ElementCount == 0)
+                        {
+                            foreach (var change in cursor.ToEnumerable())
+                            {
+                                resumeToken = change.ResumeToken;
+                                changeType = change.OperationType;
+                                documentId = change.DocumentKey["_id"];
+                                break;
+                            }
+                        }
+
+                    }
+
                     if (resumeToken == null || resumeToken.ElementCount == 0)
                     {
-                        foreach (var change in cursor.ToEnumerable())
-                        {
-                            resumeToken = change.ResumeToken;
-                            changeType= change.OperationType;
-                            documentId=change.DocumentKey["_id"];
-                            break;
-                        }
+                        Log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
                     }
-
-                }
-
-                if (resumeToken == null || resumeToken.ElementCount == 0)
-                {
-                    Log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
-                }
-                else
-                {
-                    Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
-                    Log.Save();
-
-                    unit.ResumeToken = resumeToken.ToJson();
-
-                    if (changeType != null)
+                    else
                     {
-                        unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
-                        unit.ResumeDocumentId = documentId;
+                        Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+                        Log.Save();
+
+                        unit.ResumeToken = resumeToken.ToJson();
+
+                        if (changeType != null)
+                        {
+                            unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
+                            unit.ResumeDocumentId = documentId;
+                        }
+
                     }
-                        
+                    isSucessful = true;
+
                 }
-                
-            }
-            catch (Exception ex)
-            {
-                Log.WriteLine($"Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
-                Log.Save();
+                catch (Exception ex)
+                {
+                    retryCount++;
+
+                    Log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
+                    Log.Save();
+                    
+                }
             }
         }
 

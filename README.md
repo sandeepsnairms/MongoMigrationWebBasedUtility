@@ -377,15 +377,20 @@ Follow these steps to migrate data from an on-premises MongoDB VM. You can deplo
 ## How to Use
 
 ### Add a New Job
-1. From the home page (https://<WebAppName>.azurewebsites.net), select **New Job**.
-2. In the "New Job Details" pop-up, provide the necessary details and select OK.
-3. Choose the migration tool: either "Mongo Dump/Restore" or "Mongo Driver".
-4. The job will automatically start if no other jobs are running.
+
+1. Go to the home page: `https://<WebAppName>.azurewebsites.net` and click **New Job**.  
+2. In the **New Job Details** pop-up, enter all required information.  
+3. If necessary, use the [list collection steps](#create-comma-separated-list-of-collections) to create a comma-separated list of collection names.  
+4. Choose the migration tool: either **Mongo Dump/Restore** or **Mongo Driver**.  
+5. Select the desired [migration mode](#migrations-modes).  
+6. Once all fields are filled, select **OK**.  
+7. The job will automatically start if no other jobs are running.  
 
 
 **Note:** For the Mongo Dump/Restore option, the Web App will download the mongo-tools from the URL specified in the Web App settings. Ensure that the Web App has access to this URL. If the Web App does not have internet access, you can download the mongo-tools zip file to your development machine, then copy it to the wwwroot folder inside the published folder before compressing it. Afterward, update the URL in the Web App settings to point to the Web App’s URL (e.g., https://<WebAppName>.azurewebsites.net/<zipfilename.zip>).
 
-#### Migrations modes
+
+### Migrations modes
 
 Migrations can be done in two ways:
 
@@ -393,9 +398,70 @@ Migrations can be done in two ways:
 
 - Online Migration: Apart from the bulk data copy activity done in the offline migration, a change stream monitors all additions/updates/deletes. After the bulk data copy is completed, the data in the change stream is copied to the target to ensure that all updates made during the migration process are also transferred to the target. The application downtime required is minimal.
 
+
 #### Oplog retention size
 
 For online jobs, ensure that the oplog retention size of the source MongoDB is large enough to store operations for at least the duration of both the download and upload activities. If the oplog retention size is too small and there is a high volume of write operations, the online migration may fail or be unable to read all documents from the change stream in time.
+
+### Create Comma Separated List of Collections
+
+The below script lists all authorized databases and collections in the format `dbname.collectionname`, excluding system collections and databases you don’t have access to.
+
+```javascript
+// Get input from args or global input variable
+const input = typeof input !== "undefined" ? input : args[0];
+
+function isSystemCollection(name) {
+    return name.startsWith("system.");
+}
+
+const result = [];
+
+if (!input) {
+    print("❌ Input required. Use '*.*' or 'dbname.*'");
+    quit(1);
+}
+
+function listCollectionsSafely(dbName) {
+    try {
+        const currentDb = db.getSiblingDB(dbName);
+        const collections = currentDb.getCollectionNames().filter(c => !isSystemCollection(c));
+        collections.forEach(c => result.push(`${dbName}.${c}`));
+    } catch (err) {
+        console.error(`⚠️ Skipping ${dbName}: ${err.message}`);
+    }
+}
+
+if (input === "*.*") {
+    const dbs = db.adminCommand({ listDatabases: 1 }).databases;
+    dbs.forEach(d => listCollectionsSafely(d.name));
+} else if (input.endsWith(".*")) {
+    const dbName = input.slice(0, -2);
+    listCollectionsSafely(dbName);
+} else {
+    print("❌ Invalid input. Use '*.*' or 'dbname.*'");
+    quit(1);
+}
+
+// Print the result as a single comma-separated string without line breaks
+print(" ")
+print("******OUTPUT****************")
+print(result.join(","));
+print("-------------------------------- ")
+
+```
+
+1. Save the script as `listCollections.js` in the same folder where you run `mongosh` or your current working directory
+2. Run the script with `mongosh`
+
+```bash
+# List all collections in all accessible databases
+mongosh "mongodb://localhost:27017" listCollections.js -- "*.*"
+
+# List collections in a specific database 'mydb'
+mongosh "mongodb://localhost:27017" listCollections.js -- "mydb.*"
+
+```
 
 #### Sequencing your collections
 
