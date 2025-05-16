@@ -234,45 +234,7 @@ namespace OnlineMongoMigrationProcessor
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
                 return;
             }
-            else if(segment.QueryDocCount > 0)
-            {               
-                /*
-                for (int i = 0; i < 5; i++)
-                {
-                    Log.WriteLine($"Deleting documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentId}]");
-                    Log.Save();
-
-                    try
-                    {
-                        // Execute DeleteManyAsync causing timeout
-                        //var result = await _targetCollection.DeleteManyAsync(combinedFilter);
-
-                        var resultCount = await DeleteInBatchesAsync(_targetCollection, combinedFilter, _pageSize, $"{migrationChunkIndex}.{segmentId}");
-                        if (resultCount > 0)
-                        {
-                            // Output the number of deleted documents
-                            Log.WriteLine($"Deleted {resultCount} documents from target to avoid duplicates in segment [{migrationChunkIndex}.{segmentId}]");
-                        }
-                        else
-                        {
-                            Log.WriteLine($"No duplicate documents found on target in segment [{migrationChunkIndex}.{segmentId}]");
-                        }
-                        Log.Save();
-                        break;
-                    }
-                    catch(Exception ex)
-                    {
-                        // Output the number of deleted documents
-                        Log.WriteLine($"Attempt {i + 1} for delete documents failed for segment [{migrationChunkIndex}.{segmentId}]. Details :{ex.ToString()}", LogType.Error);
-                        Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds");
-                        Log.Save();
-
-                        Thread.Sleep(backoff);
-                        backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
-                    }
-                }*/
-
-            }
+           
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
             jobList.Save();
 

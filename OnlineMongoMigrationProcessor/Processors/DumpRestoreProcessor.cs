@@ -164,6 +164,10 @@ namespace OnlineMongoMigrationProcessor
 
                                     args = $"{args} --query=\"{query}\"";
                                 }
+                                else
+                                {
+                                    docCount = item.MigrationChunks[i].DumpQueryDocCount;
+                                }
 
                                 if (Directory.Exists($"folder\\{i}.bson"))
                                     Directory.Delete($"folder\\{i}.bson", true);
@@ -276,6 +280,7 @@ namespace OnlineMongoMigrationProcessor
             int maxRetries = 10;
             string jobId = _job.Id;
 
+
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
             string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{dbName}.{colName}";
@@ -320,7 +325,7 @@ namespace OnlineMongoMigrationProcessor
                                 skipRestore=false;
                                 try
                                 {
-                                    if (_processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, 0, $"{_toolsLaunchFolder}\\mongorestore.exe", args))
+                                    if (_processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, item.MigrationChunks[i].DumpQueryDocCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args))
                                     {
                                         
 
@@ -390,6 +395,11 @@ namespace OnlineMongoMigrationProcessor
                                         if (!_executionCancelled)
                                         {
                                             Log.WriteLine($"Restore attempt {restoreAttempts} {dbName}.{colName}-{i} failed", LogType.Error);
+                                            // Wait for the backoff duration before retrying
+                                            Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                                            Thread.Sleep(backoff);
+                                            // Exponentially increase the backoff duration
+                                            backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
                                             Log.Save();
                                         }
                                     }
