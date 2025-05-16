@@ -142,7 +142,7 @@ namespace OnlineMongoMigrationProcessor
                 percent = Math.Round(((double)count / targetCount) * 100, 3);
             }
 
-            if (percent > 0)
+            if (percent > 0 && targetCount>0)
             {
                 Log.AddVerboseMessage($"{processType} Chunk Percentage: {percent}");
                 if (processType == "MongoRestore")

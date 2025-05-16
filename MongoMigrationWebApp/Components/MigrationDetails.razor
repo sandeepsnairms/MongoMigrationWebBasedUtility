@@ -35,12 +35,12 @@
 
                 <div class="mb-3">
                     <label for="sourceConnectionString" class="form-label">Source Connection String</label>
-                    <input type="text" id="sourceConnectionString" placeholder="@(newMode ? "" : "For " + sourceEndpoint)" class="form-control" @bind="sourceConnectionString" />
+                    <input type="password" id="sourceConnectionString" placeholder="@(newMode ? "" : "For " + sourceEndpoint)" class="form-control" @bind="sourceConnectionString" />
                 </div>
 
                 <div class="mb-3">
                     <label for="targetConnectionString" class="form-label">Target Connection String</label>
-                    <input type="text" id="targetConnectionString" placeholder="@(newMode ? "For [account name].mongocluster.cosmos.azure.com" : "For " + targetEndpoint)" class="form-control" @bind="targetConnectionString" />
+                    <input type="password" id="targetConnectionString" placeholder="@(newMode ? "For [account name].mongocluster.cosmos.azure.com" : "For " + targetEndpoint)" class="form-control" @bind="targetConnectionString" />
                 </div>
 
                 <div class="mb-3">

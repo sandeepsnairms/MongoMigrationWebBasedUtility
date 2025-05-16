@@ -201,23 +201,30 @@ namespace OnlineMongoMigrationProcessor
 
         public static string UpdateAppName(string connectionString, string appName)
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
-                throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
+            try
+            {
+                if (string.IsNullOrWhiteSpace(connectionString))
+                    throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
 
-            if (string.IsNullOrWhiteSpace(appName))
-                throw new ArgumentException("App name cannot be null or empty.", nameof(appName));
+                if (string.IsNullOrWhiteSpace(appName))
+                    throw new ArgumentException("App name cannot be null or empty.", nameof(appName));
 
-            var uri = new Uri(connectionString);
-            var queryParams = HttpUtility.ParseQueryString(uri.Query);
+                var uri = new Uri(connectionString);
+                var queryParams = HttpUtility.ParseQueryString(uri.Query);
 
-            // Set or update the appName parameter
-            queryParams["appName"] = appName;
+                // Set or update the appName parameter
+                queryParams["appName"] = appName;
 
-            // Reconstruct the connection string with updated parameters
-            var newQuery = queryParams.ToString();
-            var updatedConnectionString = connectionString.Replace(uri.Query.ToString(),"?"+ newQuery);
+                // Reconstruct the connection string with updated parameters
+                var newQuery = queryParams.ToString();
+                var updatedConnectionString = connectionString.Replace(uri.Query.ToString(), "?" + newQuery);
 
-            return updatedConnectionString;
+                return updatedConnectionString;
+            }
+            catch (Exception ex)
+            {                
+                return connectionString; // Return the original connection string in case of error
+            }
         }
 
         public static Tuple<bool, string> ValidateNamespaceFormat(string input)

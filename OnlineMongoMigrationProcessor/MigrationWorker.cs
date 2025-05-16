@@ -286,7 +286,7 @@ namespace OnlineMongoMigrationProcessor
                     Log.Save();
 
                     continueProcessing = true;
-                    //backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
+                    backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
                    
                 }
             }
