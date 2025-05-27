@@ -271,7 +271,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
+        public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
         {
             try
             {
@@ -285,7 +285,7 @@ namespace OnlineMongoMigrationProcessor
                 var targetDatabase = targetClient.GetDatabase(targetDatabaseName);
                 var targetCollectionName = sourceCollectionName;
 
-                Log.WriteLine($"Creating collection with indexes: {targetDatabaseName}.{targetCollectionName}");
+                Log.WriteLine($"Creating collection: {targetDatabaseName}.{targetCollectionName}");
                 Log.Save();
 
                 // Check if the target collection exists
@@ -297,9 +297,15 @@ namespace OnlineMongoMigrationProcessor
                 if (targetCollectionExists)
                 {
                     await targetDatabase.DropCollectionAsync(targetCollectionName);
-                    Log.WriteLine($"Deleted target collection: {targetDatabaseName}.{targetCollectionName}");
+                    Log.WriteLine($"Deleted existing target collection: {targetDatabaseName}.{targetCollectionName}");
                     Log.Save();
                 }
+
+                if (skipIndexes)
+                    return true;
+
+                Log.WriteLine($"Creating indexes for: {targetDatabaseName}.{targetCollectionName}");
+                Log.Save();
 
                 // Get the indexes from the source collection
                 var indexes = await sourceCollection.Indexes.ListAsync();

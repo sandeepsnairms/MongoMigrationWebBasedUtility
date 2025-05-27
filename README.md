@@ -382,9 +382,11 @@ Follow these steps to migrate data from an on-premises MongoDB VM. You can deplo
 2. In the **New Job Details** pop-up, enter all required information.  
 3. If necessary, use the [list collection steps](#create-comma-separated-list-of-collections) to create a comma-separated list of collection names.  
 4. Choose the migration tool: either **Mongo Dump/Restore** or **Mongo Driver**.  
-5. Select the desired [migration mode](#migrations-modes).  
-6. Once all fields are filled, select **OK**.  
-7. The job will automatically start if no other jobs are running.  
+5. Select the desired [migration mode](#migrations-modes).
+6. Select **Append Mode** to preserve existing collection(s) on the target without deleting them.  
+7. Select **Skip Indexes** to prevent the tool from copying indexes from the source.
+8. Once all fields are filled, select **OK**.  
+9. The job will automatically start if no other jobs are running.  
 
 
 **Note:** For the Mongo Dump/Restore option, the Web App will download the mongo-tools from the URL specified in the Web App settings. Ensure that the Web App has access to this URL. If the Web App does not have internet access, you can download the mongo-tools zip file to your development machine, then copy it to the wwwroot folder inside the published folder before compressing it. Afterward, update the URL in the Web App settings to point to the Web App’s URL (e.g., https://<WebAppName>.azurewebsites.net/<zipfilename.zip>).

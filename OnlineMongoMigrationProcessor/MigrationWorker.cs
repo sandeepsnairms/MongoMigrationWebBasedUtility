@@ -146,12 +146,25 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _sourceClient = new MongoClient(sourceConnectionString);
                     Log.WriteLine("Source Client Created");
-                    if(job.IsSimulatedRun)
+                    if (job.IsSimulatedRun)
                     {
                         Log.WriteLine("Simulated Run. No changes will be made to the target.");
-                    }                   
+                    }
+                    else
+                    {                        
+                        if (job.AppendMode)
+                        {
+                            Log.WriteLine("Existing target collections will remain unchanged, and no indexes will be created.");
+                        }
+                        else
+                        {
+                            if (job.SkipIndexes)
+                            {
+                                Log.WriteLine("No indexes will be created.");
+                            }
+                        }
+                    }
                     Log.Save();
-
 
                     if (_job.IsOnline)
                     {
@@ -217,12 +230,12 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-                                if (!_job.UseMongoDump && !job.IsSimulatedRun)
+                                if (!_job.UseMongoDump && !job.IsSimulatedRun && !job.AppendMode)
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection);
-                                }
+                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
+                                }                                
                             }
                            
                         }

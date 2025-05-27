@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -163,20 +164,17 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (processType == "MongoRestore")
                 {
-                    var (restoredCount, failedCount) = ExtractRestoreCounts(data);
+                    var (restoredCount, failedCount, restorePercent) = ExtractRestoreCounts(data);
                     if (restoredCount > 0 || failedCount > 0)
                     {
                         chunk.RestoredSuccessDocCount = restoredCount;
                         chunk.RestoredFailedDocCount = failedCount;
                     }
-                }
-                else
-                {
-                    var dumpedDocCount = ExtractDumpedDocumentCount(data);
-                    if (dumpedDocCount > 0)
+                    if (restoredCount == 0 && failedCount == 0 && restorePercent ==100)
                     {
-                        chunk.DumpResultDocCount = dumpedDocCount;
+                        chunk.IsUploaded = true;
                     }
+
                 }
                 if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                 {
@@ -211,7 +209,7 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        public (int RestoredCount, int FailedCount) ExtractRestoreCounts(string input)
+        public (int RestoredCount, int FailedCount, double percentage) ExtractRestoreCounts(string input)
         {
             // Regular expressions to capture the counts
             var restoredMatch = Regex.Match(input, @"(\d+)\s+document\(s\)\s+restored\s+successfully");
@@ -221,7 +219,19 @@ namespace OnlineMongoMigrationProcessor
             int restoredCount = restoredMatch.Success ? int.Parse(restoredMatch.Groups[1].Value) : 0;
             int failedCount = failedMatch.Success ? int.Parse(failedMatch.Groups[1].Value) : 0;
 
-            return (restoredCount, failedCount);
+            double percentage=0;
+            if (restoredCount==0 && failedCount==0)
+            {
+                var match = Regex.Match(input, @"\(([\d.]+)%\)");
+
+                if (match.Success)
+                {
+                    percentage = double.Parse(match.Groups[1].Value);
+                    //Console.WriteLine($"Percentage: {percentage}%");
+                }
+            }
+
+            return (restoredCount, failedCount, percentage);
         }
 
         public int ExtractDumpedDocumentCount(string input)

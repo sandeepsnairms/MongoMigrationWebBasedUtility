@@ -141,6 +141,7 @@ namespace OnlineMongoMigrationProcessor
                                         break;
                                 }
 
+
                                 if (item.MigrationChunks.Count > 1)
                                 {
                                     var bounds = SamplePartitioner.GetChunkBounds(item.MigrationChunks[i].Gte, item.MigrationChunks[i].Lt, item.MigrationChunks[i].DataType);
@@ -168,6 +169,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     docCount = item.MigrationChunks[i].DumpQueryDocCount;
                                 }
+
 
                                 if (Directory.Exists($"folder\\{i}.bson"))
                                     Directory.Delete($"folder\\{i}.bson", true);
@@ -303,11 +305,20 @@ namespace OnlineMongoMigrationProcessor
                         {
                             string args = $" --uri=\"{targetConnectionString}\" --gzip {folder}\\{i}.bson";
 
-                            // If first item, drop collection, else append
-                            if (i == 0)
+                            // If first item, drop collection, else append. Also No drop in AppendMode
+                            if (i == 0 && !_job.AppendMode)
+                            {
                                 args = $"{args} --drop";
+                                if (_job.SkipIndexes)
+                                {
+                                    args = $"{args} --noIndexRestore"; // No index to create for all chunks.
+                                }
+                            }
                             else
-                                args = $"{args} --noIndexRestore"; // No index for subsequent items.
+                            {
+                                args = $"{args} --noIndexRestore"; // No index to create. Index restore only for 1st chunk.
+
+                            }
 
                             double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                             double contributionFactor = (double)item.MigrationChunks[i].DumpQueryDocCount / Math.Max(item.ActualDocCount, item.EstimatedDocCount);
@@ -392,7 +403,12 @@ namespace OnlineMongoMigrationProcessor
                                     }
                                     else
                                     {
-                                        if (!_executionCancelled)
+                                        if (item.MigrationChunks[i].IsUploaded == true)
+                                        {
+                                            continueProcessing = false;
+                                            _jobs?.Save(); // Persist state
+                                        }
+                                        else if (!_executionCancelled)
                                         {
                                             Log.WriteLine($"Restore attempt {restoreAttempts} {dbName}.{colName}-{i} failed", LogType.Error);
                                             // Wait for the backoff duration before retrying
