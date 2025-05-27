@@ -29,8 +29,21 @@
                     </div>
                 }
                 <div class="mb-3">
-                    <label class="form-label">Online</label>
-                    <input type="checkbox" id="isOnline" disabled="@(!newMode)" @bind="isOnline" />
+                    <div style="display: flex; gap: 1rem; align-items: center;">  
+                        <label class="form-label">
+                            <input type="checkbox" id="isOnline" disabled="@(!newMode)" @bind="isOnline" />
+                            Online
+                        </label>
+                        <label class="form-label">                            
+                            <input type="checkbox" id="copyIndex" disabled="@(!newMode)" @bind="appendMode" />
+                            Append Mode
+                        </label>
+                        <label class="form-label">                            
+                            <input type="checkbox" id="copyIndex" disabled="@(!newMode || appendMode)" @bind="skipIndexes" />
+                            Skip Indexes
+                        </label>
+                       
+                    </div>
                 </div>
 
                 <div class="mb-3">
@@ -49,8 +62,10 @@
                 </div>
 
                 <div class="mb-3">
-                    <label for="isSimulatedRun" class="form-label">Simulation Mode: No Target Writes</label>
-                    <input type="checkbox" id="isSimulatedRun" disabled="@(!newMode)" @bind="isSimulatedRun" />
+                    <label for="isSimulatedRun" class="form-label">
+                        <input type="checkbox" id="isSimulatedRun" disabled="@(!newMode)" @bind="isSimulatedRun" />
+                        Simulation Mode (No Writes to Target)
+                    </label>
                 </div>
 
                 @if (!string.IsNullOrEmpty(errorMessage))
@@ -68,7 +83,7 @@
 
 @code {
 
-#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+    #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 #pragma warning disable CS8601
 #pragma warning disable CS8602
 
@@ -100,6 +115,8 @@
     [Parameter]
     public Func<string, Task<bool>> CheckNameExists { get; set; }
 
+    private bool skipIndexes = false;// create indexes on Target
+    private bool appendMode = false;// if the target collection exists, it will be deleted
     private string errorMessage = string.Empty;
     private bool useMongoDump = true; // Variable to track the selected value
     private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
@@ -181,7 +198,9 @@
                 TargetEndpoint = tmpTgtEndpoint,
                 NameSpaces = namespaces,
                 UseMongoDump = useMongoDump,
-                IsSimulatedRun = isSimulatedRun
+                IsSimulatedRun = isSimulatedRun,
+                SkipIndexes=skipIndexes,
+                AppendMode=appendMode
             };
         await OnSubmit.InvokeAsync(job);
     }
