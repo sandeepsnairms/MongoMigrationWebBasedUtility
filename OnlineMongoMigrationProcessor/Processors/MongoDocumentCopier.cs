@@ -316,7 +316,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if(!cancellationToken.IsCancellationRequested)
                 {
-                    Log.WriteLine($"Document copy Operation completed for chunk [{migrationChunkIndex}.{segmentId}] with satus {!failed}");
+                    Log.WriteLine($"Document copy Operation completed for chunk [{migrationChunkIndex}.{segmentId}] with status {!failed}");
                     Log.Save();
 
                     segment.IsProcessed = !failed;
