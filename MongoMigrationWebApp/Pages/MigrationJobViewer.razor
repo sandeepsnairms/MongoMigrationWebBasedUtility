@@ -103,13 +103,13 @@
                     <td>@unit.CollectionName</td>                    
 
                     <td>
-                        @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+                        @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
                     </td>
 
                     @if (MigrationJob != null && MigrationJob.UseMongoDump)
                     {
                         <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "ERROR" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
                         </td>
                     }
                     @if (MigrationJob != null && MigrationJob.IsOnline)

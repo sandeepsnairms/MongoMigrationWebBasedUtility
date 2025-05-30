@@ -57,15 +57,15 @@
 
     private void HandleSubmit()
     {
-        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 20000)
+        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 40000)
         {
-            errorMessage = "Page Size should be between 50 and 20000.";
+            errorMessage = "Page Size should be between 50 and 40000.";
             return;
         }
 
-        if (configuration.ChangeStreamBatchSize < 100 || configuration.ChunkSizeInMb > 1000000)
+        if (configuration.ChangeStreamBatchSize < 100 || configuration.ChangeStreamBatchSize > 1000000) // Fixed condition to compare correctly
         {
-            errorMessage = "Batch Size should be between 100 and 1000,000.";
+            errorMessage = "Batch Size should be between 100 and 1000000."; // Corrected error message
             return;
         }
 
