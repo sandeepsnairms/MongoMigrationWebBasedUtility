@@ -53,20 +53,20 @@ namespace OnlineMongoMigrationProcessor
                         if (item.CursorUtcTimestamp > DateTime.MinValue && !job.SourceServerVersion.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(item.CursorUtcTimestamp.ToLocalTime());
-                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
                         else if (item.ResumeToken != null)
                         {
-                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
                         }
                         else if (item.ResumeToken == null && job.SourceServerVersion.StartsWith("3"))
                         {
-                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
                         }
                         else if (item.ChangeStreamStartedOn.HasValue && !job.SourceServerVersion.StartsWith("3"))
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
-                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
 
                         // Create a CancellationTokenSource with a timeout (e.g., 5 minutes)
@@ -177,7 +177,21 @@ namespace OnlineMongoMigrationProcessor
                             break;
                         case ChangeStreamOperationType.Update:
                         case ChangeStreamOperationType.Replace:
-                            targetCollection.ReplaceOne(filter, result, new ReplaceOptions { IsUpsert = true });
+                            if (result == null || result.IsBsonNull)
+                            {
+                                Log.WriteLine($"No Document found. Deleting document with _id {documentId} for {opType}.");
+                                var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", documentId);
+                                try
+                                {
+                                    targetCollection.DeleteOne(deleteTTLFilter);
+                                }
+                                catch
+                                { }
+                            }
+                            else
+                            {
+                                targetCollection.ReplaceOne(filter, result, new ReplaceOptions { IsUpsert = true });
+                            }
                             break;
                         case ChangeStreamOperationType.Delete:
                             var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", documentId);
