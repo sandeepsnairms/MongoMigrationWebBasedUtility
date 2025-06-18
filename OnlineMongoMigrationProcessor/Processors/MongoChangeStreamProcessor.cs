@@ -291,7 +291,21 @@ namespace OnlineMongoMigrationProcessor
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
                         var filter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
-                        targetCollection.ReplaceOne(filter, change.FullDocument, new ReplaceOptions { IsUpsert = true });
+                        if (change.FullDocument == null || change.FullDocument.IsBsonNull)
+                        {
+                            Log.WriteLine($"No Document found. Deleting document with _id {change.DocumentKey["_id"]} for {change.OperationType}.");
+                            var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                            try
+                            {
+                                targetCollection.DeleteOne(deleteTTLFilter);
+                            }
+                            catch
+                            { }
+                        }
+                        else
+                        {
+                            targetCollection.ReplaceOne(filter, change.FullDocument, new ReplaceOptions { IsUpsert = true });
+                        }
                         break;
                     case ChangeStreamOperationType.Delete:
                         var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
