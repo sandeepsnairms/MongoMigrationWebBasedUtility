@@ -289,6 +289,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace}. Change stream event missing _id in DocumentKey.", LogType.Error);
                     Log.Save();
+                    return;
                 }
 
                 switch (change.OperationType)
