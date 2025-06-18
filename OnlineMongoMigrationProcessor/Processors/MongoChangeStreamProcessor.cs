@@ -281,8 +281,16 @@ namespace OnlineMongoMigrationProcessor
             if (isWriteSimulated)
                 return;
 
+            BsonValue idValue= BsonNull.Value;
+
             try
             {
+                if (!change.DocumentKey.TryGetValue("_id", out idValue))
+                {
+                    Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace}. Change stream event missing _id in DocumentKey.", LogType.Error);
+                    Log.Save();
+                }
+
                 switch (change.OperationType)
                 {
                     case ChangeStreamOperationType.Insert:
@@ -290,11 +298,11 @@ namespace OnlineMongoMigrationProcessor
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
-                        var filter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                        var filter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         if (change.FullDocument == null || change.FullDocument.IsBsonNull)
                         {
-                            Log.WriteLine($"No Document found. Deleting document with _id {change.DocumentKey["_id"]} for {change.OperationType}.");
-                            var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                            Log.WriteLine($"No Document found on source. Deleting document with _id {idValue} for {change.OperationType}.");
+                            var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                             try
                             {
                                 targetCollection.DeleteOne(deleteTTLFilter);
@@ -308,7 +316,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                         break;
                     case ChangeStreamOperationType.Delete:
-                        var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", change.DocumentKey["_id"]);
+                        var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         targetCollection.DeleteOne(deleteFilter);
                         break;
                     default:
@@ -322,7 +330,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.ToString()}", LogType.Error);
+                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {idValue}. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }

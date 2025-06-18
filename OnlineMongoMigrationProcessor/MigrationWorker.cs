@@ -124,11 +124,17 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if (_migrationCancelled) return;
 
-                    string[] parts = fullName.Split('.');
-                    if (parts.Length != 2) continue;
+                    //string[] parts = fullName.Split('.');
+                    //if (parts.Length != 2) continue;
 
-                    string dbName = parts[0].Trim();
-                    string colName = parts[1].Trim();
+                    //string dbName = parts[0].Trim();
+                    //string colName = parts[1].Trim();
+
+                    int firstDotIndex = fullName.IndexOf('.');
+                    if (firstDotIndex <= 0 || firstDotIndex == fullName.Length - 1) continue;
+
+                    string dbName = fullName.Substring(0, firstDotIndex).Trim();
+                    string colName = fullName.Substring(firstDotIndex + 1).Trim();
 
                     var migrationUnit = new MigrationUnit(dbName, colName, null);
                     _job.MigrationUnits.Add(migrationUnit);
