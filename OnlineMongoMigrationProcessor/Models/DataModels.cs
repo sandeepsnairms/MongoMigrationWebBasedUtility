@@ -52,11 +52,19 @@ namespace OnlineMongoMigrationProcessor
             {
                 lock (_fileLock)
                 {
-                    string json = JsonConvert.SerializeObject(this);
-                    //File.WriteAllText(_filePath, json);
+                    //string json = JsonConvert.SerializeObject(this);
                     string tempFile = _filePath + ".tmp";
-                    File.WriteAllText(tempFile, json);
-                    File.Move(tempFile, _filePath, true); // Atomic move on most OSes
+                    //File.WriteAllText(tempFile, json);
+
+                    using (var writer = new StreamWriter(tempFile))
+                    using (var jsonWriter = new JsonTextWriter(writer))
+                    {
+                        var serializer = new JsonSerializer();
+                        serializer.Serialize(jsonWriter, this);
+                    }
+
+                    // Atomic move on most OSes
+                    File.Move(tempFile, _filePath, true); 
 
                 }
                 return true;
