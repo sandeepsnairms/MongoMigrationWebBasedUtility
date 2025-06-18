@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Processors;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -29,7 +30,7 @@ namespace OnlineMongoMigrationProcessor
         private MongoClient? _sourceClient;
         private IMigrationProcessor _migrationProcessor;
 
-        private MongoChangeStreamProcessor _syncBackToSource;
+        
 
         public MigrationSettings? Config { get; set; }
         public string? CurrentJobId { get; set; }
@@ -56,12 +57,6 @@ namespace OnlineMongoMigrationProcessor
             _migrationProcessor?.StopProcessing();
             _migrationProcessor.ProcessRunning = false;
             _migrationProcessor = null;
-
-            if(_syncBackToSource!= null)
-            {
-                _syncBackToSource.ExecutionCancelled = true;
-                _syncBackToSource = null;
-            }
 
         }
 
@@ -250,7 +245,7 @@ namespace OnlineMongoMigrationProcessor
 
                                     if (_job.SyncBackAfterMigration && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
                                     {
-                                        Log.WriteLine("Checking if Change Stream is enabled on Target for Reverse Sync");
+                                        Log.WriteLine("Checking if Change Stream is enabled on Target for Sync Back");
                                         Log.Save();
 
                                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit);
@@ -297,7 +292,7 @@ namespace OnlineMongoMigrationProcessor
                                     Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
                                     Log.Save();
                                 }
-                                _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                                _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
     
                             }
                             else
@@ -351,76 +346,35 @@ namespace OnlineMongoMigrationProcessor
 
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
-        {
-            int maxRetries = 10;
-            int attempts = 0;
+        {   
+            if (Config == null)
+            {
+                Config = new MigrationSettings();
+                Config.Load();
+            }
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
             bool continueProcessing = true;
 
-            var sourceClient = new MongoClient(sourceConnectionString);
-            var targetClient = new MongoClient(targetConnectionString);
+            _job = job;
+            _migrationCancelled = false;
+            CurrentJobId = _job.Id;
 
-            _syncBackToSource = null;
-            _syncBackToSource = new MongoChangeStreamProcessor(sourceClient, targetClient, _jobs, Config);
+            Log.Init(_job.Id);
+            Log.WriteLine($"{_job.Id} Sync Back started on {_job.StartedOn} (UTC)");
+            Log.Save();
 
-            job.ReverseSyncStarted = true;
+            job.SyncBackStarted = true;
             _jobs.Save();
 
-            while (attempts < maxRetries && !_migrationCancelled && continueProcessing)
-            {
-                attempts++;
-                try
-                {               
-                    foreach (var migrationUnit in job.MigrationUnits)
-                    {
-                        if (_migrationCancelled) break;
+            if(_migrationProcessor!=null)            
+                _migrationProcessor.StopProcessing();
 
-                        if (migrationUnit.SourceStatus == CollectionStatus.OK)
-                        {                                  
-                           Task.Run(() => _syncBackToSource.CollectionSyncBackAsync(job, migrationUnit));                           
-                        }
-                    }
-                    continueProcessing = false;
-                }
-                catch (MongoExecutionTimeoutException ex)
-                {
-                    Log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
+            _migrationProcessor = null;
+            _migrationProcessor = new SyncBackProcessor(_jobs, _job, null, Config, string.Empty);
 
-                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
-                    Thread.Sleep(backoff);
-                    Log.Save();
+            _migrationProcessor.StartProcess(null, sourceConnectionString, targetConnectionString);
 
-                    continueProcessing = true;
-                    backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
-                }
-                catch (Exception ex)
-                {
-                    Log.WriteLine($"Attempt {attempts} failed: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
-
-                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
-                    Thread.Sleep(backoff);
-                    Log.Save();
-
-                    continueProcessing = true;
-                    backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
-
-                }
-            }
-            if (attempts == maxRetries)
-            {
-                Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
-                Log.Save();
-
-                job.CurrentlyActive = false;
-                _jobs?.Save();
-                continueProcessing = false;
-
-                _migrationProcessor?.StopProcessing();
-
-                _syncBackToSource.ExecutionCancelled = true;
-                _syncBackToSource = null;
-            }
         }
 
         private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, string idField = "_id")

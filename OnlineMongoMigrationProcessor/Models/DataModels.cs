@@ -92,7 +92,7 @@ namespace OnlineMongoMigrationProcessor
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
         public bool SyncBackAfterMigration { get; set; }
-        public bool ReverseSyncStarted { get; set; }
+        public bool SyncBackStarted { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 
@@ -114,9 +114,9 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
 
-        public string? ReverseSyncResumeToken { get; set; }
-        public DateTime? ReverseSyncChangeStreamStartedOn { get; set; }
-        public DateTime ReverseSyncCursorUtcTimestamp { get; set; }
+        public string? SyncBackResumeToken { get; set; }
+        public DateTime? SyncBackChangeStreamStartedOn { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
         public double DumpPercent { get; set; }
         public double RestorePercent { get; set; }

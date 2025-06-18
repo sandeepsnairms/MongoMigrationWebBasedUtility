@@ -174,13 +174,13 @@ namespace OnlineMongoMigrationProcessor
                     {
                         ChangeStreamOptions options = new ChangeStreamOptions { };
 
-                        if (item.ReverseSyncResumeToken != null)
+                        if (item.SyncBackResumeToken != null)
                         {
-                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ReverseSyncResumeToken) };
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.SyncBackResumeToken) };
                         }
-                        else if (item.ReverseSyncChangeStreamStartedOn.HasValue)
+                        else if (item.SyncBackChangeStreamStartedOn.HasValue)
                         {
-                            var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ReverseSyncChangeStreamStartedOn);
+                            var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.SyncBackChangeStreamStartedOn);
                             options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
 
@@ -316,11 +316,11 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter, bool reverseSync=false)
+        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter, bool syncBack=false)
         {
-            string reversePrefix = string.Empty;
-            if(reverseSync)
-                reversePrefix = "[R] ";
+            string syncBackPrefix = string.Empty;
+            if(syncBack)
+                syncBackPrefix = "[R] ";
 
             try
             {
@@ -331,12 +331,12 @@ namespace OnlineMongoMigrationProcessor
                     var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
 
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{reversePrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
-                    ProcessChange(change, targetCollection,job.IsSimulatedRun, reverseSync);
-                    if(!reverseSync)
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
+                    ProcessChange(change, targetCollection,job.IsSimulatedRun, syncBack);
+                    if(!syncBack)
                         item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
                     else
-                        item.ReverseSyncCursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp); //for reverse sync
+                        item.SyncBackCursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp); //for reverse sync
                 }
                 else if (!job.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for vcore
                 {
@@ -344,18 +344,18 @@ namespace OnlineMongoMigrationProcessor
                     var timestamp = change.WallTime; 
 
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{reversePrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
-                    ProcessChange(change, targetCollection, job.IsSimulatedRun, reverseSync);
-                    if (!reverseSync)
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun, syncBack);
+                    if (!syncBack)
                         item.CursorUtcTimestamp = timestamp.Value;
                     else
-                        item.ReverseSyncCursorUtcTimestamp = timestamp.Value;
+                        item.SyncBackCursorUtcTimestamp = timestamp.Value;
                 }
                 else
                 {
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{reversePrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
-                    ProcessChange(change, targetCollection, job.IsSimulatedRun, reverseSync);
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun, syncBack);
                 }
                 item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
                 _jobs?.Save(); // persists state
@@ -374,21 +374,21 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing cursor. {reversePrefix}Details : {ex.ToString()}", LogType.Error);
+                Log.WriteLine($"Error processing cursor. {syncBackPrefix}Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
                 return false;
             }
         }
 
 
-        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated, bool reverseSync)
+        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated, bool syncBack)
         {
             if (isWriteSimulated)
                 return;
 
-            string reversePrefix = string.Empty;
-            if (reverseSync)
-                reversePrefix = "[R] ";
+            string syncBackPrefix = string.Empty;
+            if (syncBack)
+                syncBackPrefix = "[R] ";
 
             try
             {
@@ -431,7 +431,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing operation {reversePrefix}{change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.ToString()}", LogType.Error);
+                Log.WriteLine($"Error processing operation {syncBackPrefix}{change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
             }
         }

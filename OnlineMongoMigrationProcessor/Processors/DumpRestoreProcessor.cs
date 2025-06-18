@@ -49,10 +49,11 @@ namespace OnlineMongoMigrationProcessor
 
             if (_changeStreamProcessor != null)
                 _changeStreamProcessor.ExecutionCancelled = true;
-            
+
+            _changeStreamProcessor = null;
         }
 
-        public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.\
