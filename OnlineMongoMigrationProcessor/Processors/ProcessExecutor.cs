@@ -19,7 +19,7 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="exePath">The full path to the executable file.</param>
         /// <param name="arguments">The arguments to pass to the executable.</param>
         /// <returns>True if the process completed successfully, otherwise false.</returns>
-        public bool Execute(JobList jobList, MigrationUnit item, MigrationChunk chunk, double basePercent, double contribFactor, long targetCount, string exePath, string arguments)
+        public bool Execute(JobList jobList, MigrationUnit item, MigrationChunk chunk, int chunkIndex, double basePercent, double contribFactor, long targetCount, string exePath, string arguments)
         {
             int pid;
             string processType = string.Empty;
@@ -79,7 +79,7 @@ namespace OnlineMongoMigrationProcessor
                         if (!string.IsNullOrEmpty(args.Data))
                         {
                             errorBuffer.AppendLine(args.Data);
-                            ProcessErrorData(args.Data, processType, item, chunk, basePercent, contribFactor, targetCount, jobList);
+                            ProcessErrorData(args.Data, processType, item, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
                         }
                     };
 
@@ -127,7 +127,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private void ProcessErrorData(string data, string processType, MigrationUnit item, MigrationChunk chunk, double basePercent, double contribFactor, long targetCount, JobList jobList)
+        private void ProcessErrorData(string data, string processType, MigrationUnit item, MigrationChunk chunk,int chunkIndex, double basePercent, double contribFactor, long targetCount, JobList jobList)
         {
             string percentValue = ExtractPercentage(data);
             string docsProcessed = ExtractDocCount(data);
@@ -145,16 +145,16 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0 && targetCount>0)
             {
-                Log.AddVerboseMessage($"{processType} Chunk Percentage: {percent}");
+                Log.AddVerboseMessage($"{processType} for {item.DatabaseName}.{item.CollectionName} Chunk[{chunkIndex}] : {percent}%");
                 if (processType == "MongoRestore")
                 {
-                    item.RestorePercent = basePercent + (percent * contribFactor);
+                    item.RestorePercent = Math.Min(100,basePercent + (percent * contribFactor));
                     if (item.RestorePercent == 100)
                         item.RestoreComplete = true;
                 }
                 else
                 {
-                    item.DumpPercent = basePercent + (percent * contribFactor);
+                    item.DumpPercent = Math.Min(100, basePercent + (percent * contribFactor));
                     if (item.DumpPercent == 100)
                         item.DumpComplete = true;
                 }
