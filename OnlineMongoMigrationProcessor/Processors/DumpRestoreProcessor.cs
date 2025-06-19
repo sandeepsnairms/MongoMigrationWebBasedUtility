@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -23,6 +24,10 @@ namespace OnlineMongoMigrationProcessor
         private MigrationSettings? _config;
         private ProcessExecutor _processExecutor;
         private MongoChangeStreamProcessor _changeStreamProcessor;
+
+        private bool UploaderProcessing = false;
+
+        private SafeDictionary<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeDictionary<string, MigrationUnit>();
 
 
         public bool ProcessRunning { get; set; }
@@ -66,13 +71,12 @@ namespace OnlineMongoMigrationProcessor
             string colName = item.CollectionName;
 
             // Create mongodump output folder if it does not exist
-            string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{dbName}.{colName}";
+            string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
             Directory.CreateDirectory(folder);
 
             var database = _sourceClient.GetDatabase(dbName);
             var collection = database.GetCollection<BsonDocument>(colName);
-
-            bool restoreInvoked = false;
+                       
             
             DateTime migrationJobStartTime = DateTime.Now;
             
@@ -124,14 +128,10 @@ namespace OnlineMongoMigrationProcessor
 
                                     if (!continueDownlods)
                                     {
-                                        // invoke the uploader if not invoked already. let uploads cleanup the disk.
-                                        if (!restoreInvoked)
-                                        {
-                                            Log.WriteLine($"{dbName}.{colName} Uploader invoked");
-                                            Log.Save();
-                                            restoreInvoked = true;
-                                            Task.Run(() => Upload(item, targetConnectionString));
-                                        }
+                                        Log.WriteLine($"{dbName}.{colName} Uploader added");
+                                        Log.Save();
+                                        MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}",item);
+                                        Task.Run(() => Upload(item, targetConnectionString));
 
                                         Log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobs are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobs. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
                                         Log.Save();
@@ -167,14 +167,13 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 else
                                 {
-                                    docCount = item.MigrationChunks[i].DumpQueryDocCount;
+                                    docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount);
                                 }
-
 
                                 if (Directory.Exists($"folder\\{i}.bson"))
                                     Directory.Delete($"folder\\{i}.bson", true);
 
-                                var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongodump.exe", args));
+                                var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongodump.exe", args));
                                 task.Wait(); // Wait for the task to complete
                                 bool result = task.Result; // Capture the result after the task completes
 
@@ -184,14 +183,12 @@ namespace OnlineMongoMigrationProcessor
                                     item.MigrationChunks[i].IsDownloaded = true;
                                     _jobs?.Save(); // Persist state
                                     dumpAttempts = 0;
-
-                                    if (!restoreInvoked )
-                                    {
-                                        Log.WriteLine($"{dbName}.{colName} Uploader invoked");
-
-                                        restoreInvoked = true;
-                                        Task.Run(() => Upload(item, targetConnectionString));
-                                    }
+         
+                                    Log.WriteLine($"{dbName}.{colName} Uploader added");
+                                    Log.Save();
+                                    MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
+                                    Task.Run(() => Upload(item, targetConnectionString));
+          
                                 }
                                 else
                                 {
@@ -259,21 +256,25 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (item.DumpComplete && !_executionCancelled)
             {
-                if (!restoreInvoked)
-                {
-                    Log.WriteLine($"{dbName}.{colName} Uploader invoked");
-
-                    restoreInvoked = true;
-                    Task.Run(() => Upload(item, targetConnectionString));
-                }
+                Log.WriteLine($"{dbName}.{colName} Uploader added");
+                Log.Save();
+                MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
+                Task.Run(() => Upload(item, targetConnectionString));
             }
 #pragma warning restore CS8602 // Dereference of a possibly null reference.
 #pragma warning restore CS8604 // Possible null reference argument.
 #pragma warning restore CS8600 // 
         }
+        
 
-        private void Upload(MigrationUnit item, string targetConnectionString)
+        private void Upload(MigrationUnit item, string targetConnectionString, bool force=false)
         {
+
+            if (UploaderProcessing && !force)
+                return; // Prevent concurrent uploads
+
+            UploaderProcessing = true; // Set flag to indicate upload is in progress
+
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
 #pragma warning disable CS8600
@@ -282,10 +283,11 @@ namespace OnlineMongoMigrationProcessor
             int maxRetries = 10;
             string jobId = _job.Id;
 
+            string key = $"{item.DatabaseName}.{item.CollectionName}";
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
-            string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{dbName}.{colName}";
+            string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
 
             Log.WriteLine($"{dbName}.{colName} Uploader started");
 
@@ -336,9 +338,18 @@ namespace OnlineMongoMigrationProcessor
                                 skipRestore=false;
                                 try
                                 {
-                                    if (_processExecutor.Execute(_jobs, item, item.MigrationChunks[i], initialPercent, contributionFactor, item.MigrationChunks[i].DumpQueryDocCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args))
-                                    {
-                                        
+                                    long docCount;
+                                    if (item.MigrationChunks.Count > 1)
+                                        docCount = item.MigrationChunks[i].DumpQueryDocCount; 
+                                    else
+                                        docCount = docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount); ;
+
+                                    var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
+                                    task.Wait(); // Wait for the task to complete
+                                    bool result = task.Result; // Capture the result after the task completes
+                                    Log.WriteLine($"{dbName}.{colName}-{i} Uploader processing completed");
+                                    if (result)
+                                    {                                       
 
                                         if (item.MigrationChunks[i].RestoredFailedDocCount > 0)
                                         {
@@ -498,7 +509,6 @@ namespace OnlineMongoMigrationProcessor
             {
                 try
                 {
-
                     if (Directory.Exists(folder))
                         Directory.Delete(folder, true);
 
@@ -516,8 +526,21 @@ namespace OnlineMongoMigrationProcessor
                         Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(_job, item));
                     }
 
+                    //clear curretn item from upload queue
+                    MigrationUnitsPendingUpload.Remove(key);
+               
+
+                    //check if migration units items to upload.
+                    if (MigrationUnitsPendingUpload.TryGetFirst(out var nextItem))
+                    {                        
+                        Log.WriteLine($"Processing {nextItem.Value.DatabaseName}.{nextItem.Value.CollectionName} from upload queue");
+                        Log.Save();                        
+                        Upload(nextItem.Value, targetConnectionString,true);
+                        return;
+                    }
+
                     if (!_job.IsOnline && !_executionCancelled)
-                    {
+                    {                       
                         var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
                         if (Helper.IsOfflineJobCompleted(migrationJob))
                         {
@@ -529,12 +552,18 @@ namespace OnlineMongoMigrationProcessor
                             ProcessRunning = false;
                             _jobs?.Save();
                         }
+                       
                     }
+
+                    UploaderProcessing = false; // reset the flag to allow next upload to invoke uploader
+
                 }
                 catch
                 {
                     // Do nothing
                 }
+
+                
             }
 #pragma warning restore CS8602 // Dereference of a possibly null reference.
 #pragma warning restore CS8604 // Possible null reference argument.

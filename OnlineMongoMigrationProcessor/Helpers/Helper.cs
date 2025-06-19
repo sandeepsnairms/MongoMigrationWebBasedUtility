@@ -268,6 +268,23 @@ namespace OnlineMongoMigrationProcessor
             return Regex.Replace(input, pattern, replacement);
         }
 
+        public static string SafeFileName(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return string.Empty;
+            }
+            // Remove invalid characters and trim whitespace
+            string sanitizedFileName = Regex.Replace(fileName, @"[<>:""/\\|?*]", "_").Trim();
+            
+            // Ensure the file name is not too long
+            if (sanitizedFileName.Length > 255)
+            {
+                sanitizedFileName = sanitizedFileName.Substring(0, 255);
+            }
+            return sanitizedFileName;
+        }
+
         public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
         {
             if (migrationJob == null) return true;
