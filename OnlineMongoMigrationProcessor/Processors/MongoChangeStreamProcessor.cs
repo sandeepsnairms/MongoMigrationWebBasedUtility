@@ -71,7 +71,7 @@ namespace OnlineMongoMigrationProcessor
                         }
 
                         // Create a CancellationTokenSource with a timeout (e.g., 5 minutes)
-                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
                         CancellationToken cancellationToken = cancellationTokenSource.Token;
 
                         WatchCollection(job, item, options, sourceCollection, targetCollection, cancellationToken, skipFirst);
