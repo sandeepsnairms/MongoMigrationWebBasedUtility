@@ -43,6 +43,7 @@ namespace OnlineMongoMigrationProcessor
                 var targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
 
                 Log.WriteLine($"Replaying change stream for {databaseName}.{collectionName}");
+                bool skipFirst = false;
 
                 while (!ExecutionCancelled && item.DumpComplete)
                 {
@@ -70,61 +71,16 @@ namespace OnlineMongoMigrationProcessor
                         }
 
                         // Create a CancellationTokenSource with a timeout (e.g., 5 minutes)
-                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                         CancellationToken cancellationToken = cancellationTokenSource.Token;
 
-                        // Open a Change Stream
-                        using (var cursor = sourceCollection.Watch(options))
-                        {
-                            int counter = 0;
-
-                            // Continuously monitor the change stream
-                            //mongo 3.6 has different implementation for change stream
-                            if (job.SourceServerVersion.StartsWith("3"))
-                            {
-                                if (item.ResumeDocumentId != null && !item.ResumeDocumentId.IsBsonNull)                              
-                                {
-                                    //manually replay  the first change as the ResumeAfter skips the current item
-                                    ProcessFirstChangeManuallyForResumeToken(item.ResumeDocumentId, item.ResumeTokenOperation, sourceCollection, targetCollection);
-                                }
-
-                                //proceed with the rest of the changes
-                                foreach (ChangeStreamDocument<BsonDocument> change in cursor.ToEnumerable())
-                                {
-                                    if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
-                                    {
-                                        break;
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                while (cursor.MoveNext(cancellationToken))
-                                {
-                                    foreach (var change in cursor.Current)
-                                    {
-                                        if (ProcessCursor(job,change, cursor, targetCollection, item, ref counter) == false)
-                                        {
-                                            break;
-                                        }
-                                    }
-
-                                    // Break the outer loop if conditions are met
-                                    if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
-                                        break;
-                                }
-                            }
-                            Log.Save();
-                        }
+                        WatchCollection(job, item, options, sourceCollection, targetCollection, cancellationToken, skipFirst);
+                        skipFirst=true; // Skip the first change after the initial replay
+                        Log.AddVerboseMessage($"Monitoring change stream with new batch for {targetCollection.CollectionNamespace}");
 
                         // Pause briefly before next iteration (optional)
                         Thread.Sleep(100);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // Handle cancellation gracefully
-                        Log.AddVerboseMessage($"CS Batch duration expired while monitoring {targetCollection.CollectionNamespace}. CS will resume automatically");
-                    }
+                    }                    
                     catch (MongoCommandException ex) when (ex.ToString().Contains("Resume of change stream was not possible"))
                     {
                         // Handle other potential exceptions
@@ -148,6 +104,77 @@ namespace OnlineMongoMigrationProcessor
             {
                 Log.WriteLine($"Error processing change stream. Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
+            }
+        }
+
+        private void WatchCollection(MigrationJob job,MigrationUnit item, ChangeStreamOptions options, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken, bool skipFirst)
+        {
+
+            try
+            {
+                // Open a Change Stream
+                using (var cursor = sourceCollection.Watch(options))
+                {
+                    int counter = 0;
+
+                    // Continuously monitor the change stream
+                    //mongo 3.6 has different implementation for change stream
+                    if (job.SourceServerVersion.StartsWith("3"))
+                    {
+                        if (item.ResumeDocumentId != null && !item.ResumeDocumentId.IsBsonNull)
+                        {
+                            //manually replay  the first change as the ResumeAfter skips the current item
+                            ProcessFirstChangeManuallyForResumeToken(item.ResumeDocumentId, item.ResumeTokenOperation, sourceCollection, targetCollection);
+                        }
+
+                        //proceed with the rest of the changes
+                        foreach (ChangeStreamDocument<BsonDocument> change in cursor.ToEnumerable())
+                        {
+                            counter++;
+                            if(counter>1 || !skipFirst) // skip first change if skipFirst is true
+                            {
+                                if (ProcessCursor(job, change, cursor, targetCollection, item, ref counter) == false)
+                                {
+                                    break;
+                                }
+                            }                            
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+                    }
+                    else
+                    {
+                        while (cursor.MoveNext(cancellationToken))
+                        {
+                            foreach (var change in cursor.Current)
+                            {
+                                counter++;
+                                if (counter > 1 || !skipFirst) // skip first change if skipFirst is true
+                                {
+                                    if (ProcessCursor(job, change, cursor, targetCollection, item, ref counter) == false)
+                                    {
+                                        break;
+                                    }
+                                }
+                                cancellationToken.ThrowIfCancellationRequested();
+                            }
+
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            // Break the outer loop if conditions are met
+                            if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
+                                break;
+                        }
+                    }
+                    Log.Save();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Handled cancellation gracefully               
+            }
+            catch
+            {
+                throw; // Rethrow the exception to be handled by the caller
             }
         }
 
