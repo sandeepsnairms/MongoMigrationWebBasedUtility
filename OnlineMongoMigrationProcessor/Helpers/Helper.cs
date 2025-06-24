@@ -230,7 +230,9 @@ namespace OnlineMongoMigrationProcessor
         public static Tuple<bool, string> ValidateNamespaceFormat(string input)
         {
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
-            string pattern = @"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$";
+            //string pattern = @"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$";
+            string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?\s]+$";
+
 
             // Split the input by commas
             string[] items = input.Split(',');
@@ -264,6 +266,23 @@ namespace OnlineMongoMigrationProcessor
 
             // Redact the user ID and password
             return Regex.Replace(input, pattern, replacement);
+        }
+
+        public static string SafeFileName(string fileName)
+        {
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                return string.Empty;
+            }
+            // Remove invalid characters and trim whitespace
+            string sanitizedFileName = Regex.Replace(fileName, @"[<>:""/\\|?*]", "_").Trim();
+            
+            // Ensure the file name is not too long
+            if (sanitizedFileName.Length > 255)
+            {
+                sanitizedFileName = sanitizedFileName.Substring(0, 255);
+            }
+            return sanitizedFileName;
         }
 
         public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
