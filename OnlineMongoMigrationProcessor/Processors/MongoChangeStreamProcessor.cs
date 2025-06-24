@@ -18,8 +18,10 @@ namespace OnlineMongoMigrationProcessor
         private MongoClient _targetClient;
         private JobList? _jobs;
         private MigrationSettings? _config;
+        private bool skipFirst = false;
 
         public bool ExecutionCancelled { get; set; }
+        
 
         public MongoChangeStreamProcessor(MongoClient sourceClient, MongoClient targetClient, JobList jobs, MigrationSettings config)
         {
@@ -43,7 +45,7 @@ namespace OnlineMongoMigrationProcessor
                 var targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
 
                 Log.WriteLine($"Replaying change stream for {databaseName}.{collectionName}");
-                bool skipFirst = false;
+               
 
                 while (!ExecutionCancelled && item.DumpComplete)
                 {
@@ -75,7 +77,7 @@ namespace OnlineMongoMigrationProcessor
                         CancellationToken cancellationToken = cancellationTokenSource.Token;
 
                         WatchCollection(job, item, options, sourceCollection, targetCollection, cancellationToken, skipFirst);
-                        skipFirst=true; // Skip the first change after the initial replay
+                        
                         Log.AddVerboseMessage($"Monitoring change stream with new batch for {targetCollection.CollectionNamespace}");
 
                         // Pause briefly before next iteration (optional)
@@ -279,6 +281,7 @@ namespace OnlineMongoMigrationProcessor
                     Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
                     ProcessChange(change, targetCollection, job.IsSimulatedRun);
                 }
+                skipFirst = true; // Skip the first change after the initial replay
                 item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
                 _jobs?.Save(); // persists state
 
