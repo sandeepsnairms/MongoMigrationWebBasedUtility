@@ -52,11 +52,19 @@ namespace OnlineMongoMigrationProcessor
             {
                 lock (_fileLock)
                 {
-                    string json = JsonConvert.SerializeObject(this);
-                    //File.WriteAllText(_filePath, json);
+                    //string json = JsonConvert.SerializeObject(this);
                     string tempFile = _filePath + ".tmp";
-                    File.WriteAllText(tempFile, json);
-                    File.Move(tempFile, _filePath, true); // Atomic move on most OSes
+                    //File.WriteAllText(tempFile, json);
+
+                    using (var writer = new StreamWriter(tempFile))
+                    using (var jsonWriter = new JsonTextWriter(writer))
+                    {
+                        var serializer = new JsonSerializer();
+                        serializer.Serialize(jsonWriter, this);
+                    }
+
+                    // Atomic move on most OSes
+                    File.Move(tempFile, _filePath, true); 
 
                 }
                 return true;
@@ -91,6 +99,8 @@ namespace OnlineMongoMigrationProcessor
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
+        public bool SyncBackAfterMigration { get; set; }
+        public bool SyncBackStarted { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 
@@ -111,6 +121,11 @@ namespace OnlineMongoMigrationProcessor
         public BsonValue? ResumeDocumentId { get; set; }
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
+
+        public string? SyncBackResumeToken { get; set; }
+        public DateTime? SyncBackChangeStreamStartedOn { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
+
         public double DumpPercent { get; set; }
         public double RestorePercent { get; set; }
         public bool DumpComplete { get; set; }

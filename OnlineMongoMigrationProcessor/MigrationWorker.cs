@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Processors;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -29,6 +30,8 @@ namespace OnlineMongoMigrationProcessor
         private MongoClient? _sourceClient;
         private IMigrationProcessor _migrationProcessor;
 
+        
+
         public MigrationSettings? Config { get; set; }
         public string? CurrentJobId { get; set; }
 
@@ -49,11 +52,12 @@ namespace OnlineMongoMigrationProcessor
         }
 
         public void StopMigration()
-        {
+        {           
             _migrationCancelled = true;
             _migrationProcessor?.StopProcessing();
             _migrationProcessor.ProcessRunning = false;
             _migrationProcessor = null;
+
         }
 
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, bool doBulkCopy, bool trackChangeStreams)
@@ -74,6 +78,7 @@ namespace OnlineMongoMigrationProcessor
                 Config = new MigrationSettings();
                 Config.Load();
             }
+
 
             try
             {
@@ -174,7 +179,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (_job.IsOnline)
                     {
-                        Log.WriteLine("Checking if Change Stream is enabled on source");
+                        Log.WriteLine("Checking if Change Stream is enabled on Source");
                         Log.Save();
 
 
@@ -191,7 +196,8 @@ namespace OnlineMongoMigrationProcessor
 
                             _migrationProcessor?.StopProcessing();
                             return;
-                        }
+                        }                        
+
                     }
 
                     _migrationProcessor?.StopProcessing();
@@ -206,6 +212,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     _migrationProcessor.ProcessRunning = true;
 
+                    bool checkedCS = false;
                     foreach (var unit in _job.MigrationUnits)
                     {
                         if (_migrationCancelled) return;
@@ -236,11 +243,30 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-                                if (!_job.UseMongoDump && !job.IsSimulatedRun && !job.AppendMode)
+                                if (!job.IsSimulatedRun && !job.AppendMode)
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
                                     await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
+
+                                    if (_job.SyncBackAfterMigration && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
+                                    {
+                                        Log.WriteLine("Checking if Change Stream is enabled on Target for Sync Back");
+                                        Log.Save();
+
+                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit);
+                                        checkedCS = true;
+                                        if (!retValue.IsCSEnabled)
+                                        {
+                                            _job.CurrentlyActive = false;
+                                            _job.IsCompleted = true;
+                                            _jobs?.Save();
+                                            continueProcessing = false;
+
+                                            _migrationProcessor?.StopProcessing();
+                                            return;
+                                        }
+                                    }
                                 }                                
                             }
                            
@@ -256,6 +282,7 @@ namespace OnlineMongoMigrationProcessor
                     _jobs?.Save();
                     Log.Save();
 
+                    
                     foreach (var migrationUnit in _job.MigrationUnits)
                     {
                         if (_migrationCancelled) break;
@@ -271,7 +298,7 @@ namespace OnlineMongoMigrationProcessor
                                     Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
                                     Log.Save();
                                 }
-                                _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
+                                _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
     
                             }
                             else
@@ -321,6 +348,39 @@ namespace OnlineMongoMigrationProcessor
                 _migrationProcessor?.StopProcessing();
 
             }
+        }
+
+
+        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        {   
+            if (Config == null)
+            {
+                Config = new MigrationSettings();
+                Config.Load();
+            }
+
+            TimeSpan backoff = TimeSpan.FromSeconds(2);
+            bool continueProcessing = true;
+
+            _job = job;
+            _migrationCancelled = false;
+            CurrentJobId = _job.Id;
+
+            Log.Init(_job.Id);
+            Log.WriteLine($"{_job.Id} Sync Back started on {_job.StartedOn} (UTC)");
+            Log.Save();
+
+            job.SyncBackStarted = true;
+            _jobs.Save();
+
+            if(_migrationProcessor!=null)            
+                _migrationProcessor.StopProcessing();
+
+            _migrationProcessor = null;
+            _migrationProcessor = new SyncBackProcessor(_jobs, _job, null, Config, string.Empty);
+
+            _migrationProcessor.StartProcess(null, sourceConnectionString, targetConnectionString);
+
         }
 
         private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, string idField = "_id")

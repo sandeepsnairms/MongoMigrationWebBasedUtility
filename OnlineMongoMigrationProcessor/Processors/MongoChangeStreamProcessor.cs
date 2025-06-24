@@ -2,6 +2,7 @@
 using MongoDB.Driver;
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Reflection.Metadata;
@@ -107,9 +108,79 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        public async void  CollectionSyncBackAsync(MigrationJob job, MigrationUnit item)
+        {
+            try
+            {
+                string databaseName = item.DatabaseName;
+                string collectionName = item.CollectionName;
+
+                var sourceDb = _targetClient.GetDatabase(databaseName);
+                var sourceCollection = sourceDb.GetCollection<BsonDocument>(collectionName);
+
+                var targetDb = _sourceClient.GetDatabase(databaseName);
+                var targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
+
+                Log.WriteLine($"Collection Sync Back for {databaseName}.{collectionName}");
+
+                while (!ExecutionCancelled)
+                {
+                    try
+                    {
+                        ChangeStreamOptions options = new ChangeStreamOptions { };
+
+                        if (item.SyncBackResumeToken != null)
+                        {
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.SyncBackResumeToken) };
+                        }
+                        else if (item.SyncBackChangeStreamStartedOn.HasValue)
+                        {
+                            var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.SyncBackChangeStreamStartedOn);
+                            options = new ChangeStreamOptions { FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        }
+
+                        // Create a CancellationTokenSource with a timeout (e.g., 5 minutes)
+                        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                        CancellationToken cancellationToken = cancellationTokenSource.Token;
+
+                        // Open a Change Stream
+                        using (var cursor = sourceCollection.Watch(options))
+                        {
+                            int counter = 0;
+                            
+                            while (cursor.MoveNext(cancellationToken))
+                            {
+                                foreach (var change in cursor.Current)
+                                {
+                                    if (ProcessCursor(job, change, cursor, targetCollection, item, ref counter,true) == false)
+                                      
+                                       cancellationToken.ThrowIfCancellationRequested();
+                                }
+                            }
+
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            // Break the outer loop if conditions are met
+                            if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
+                                break;
+                        }
+                    }
+                    Log.Save();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Handled cancellation gracefully               
+            }
+            catch
+            {
+                throw; // Rethrow the exception to be handled by the caller
+            }
+        }
+
         private void WatchCollection(MigrationJob job,MigrationUnit item, ChangeStreamOptions options, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken, bool skipFirst)
         {
-
             try
             {
                 // Open a Change Stream
@@ -155,28 +226,48 @@ namespace OnlineMongoMigrationProcessor
                                         break;
                                     }
                                 }
-                                cancellationToken.ThrowIfCancellationRequested();
-                            }
 
-                            cancellationToken.ThrowIfCancellationRequested();
-
-                            // Break the outer loop if conditions are met
-                            if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
-                                break;
+                                // Break the outer loop if conditions are met
+                                if (counter > _config.ChangeStreamBatchSize || ExecutionCancelled)
+                                    break;
+                            }                            
+                            Log.Save();
                         }
+
+                        // Pause briefly before next iteration (optional)
+                        Thread.Sleep(100);
                     }
-                    Log.Save();
+                    catch (OperationCanceledException)
+                    {
+                        // Handle cancellation gracefully
+                        Log.AddVerboseMessage($"CS Batch duration expired while monitoring {targetCollection.CollectionNamespace}. CS will resume automatically");
+                    }
+                    catch (MongoCommandException ex) when (ex.ToString().Contains("Resume of change stream was not possible"))
+                    {
+                        // Handle other potential exceptions
+                        Log.WriteLine($"Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
+                        Log.Save();
+                        Thread.Sleep(1000 * 300);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Handle other potential exceptions
+                        Log.WriteLine($"Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
+                        Log.Save();
+                    }
+                    finally
+                    {
+                        Log.Save();
+                    }
                 }
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
-                // Handled cancellation gracefully               
-            }
-            catch
-            {
-                throw; // Rethrow the exception to be handled by the caller
+                Log.WriteLine($"Error processing change stream. Details : {ex.ToString()}", LogType.Error);
+                Log.Save();
             }
         }
+
 
         // This method retrieves the event associated with the ResumeToken
         private void ProcessFirstChangeManuallyForResumeToken(BsonValue? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection)
@@ -204,6 +295,7 @@ namespace OnlineMongoMigrationProcessor
                             break;
                         case ChangeStreamOperationType.Update:
                         case ChangeStreamOperationType.Replace:
+
                             if (result == null || result.IsBsonNull)
                             {
                                 Log.WriteLine($"No Document found. Deleting document with _id {documentId} for {opType}.");
@@ -248,8 +340,12 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter)
+        private bool ProcessCursor(MigrationJob job, ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref int counter, bool syncBack=false)
         {
+            string syncBackPrefix = string.Empty;
+            if(syncBack)
+                syncBackPrefix = "[R] ";
+
             try
             {
                 if (!job.SourceServerVersion.StartsWith("3") && change.ClusterTime!=null)
@@ -259,9 +355,12 @@ namespace OnlineMongoMigrationProcessor
                     var timestamp = change.ClusterTime; // Convert BsonTimestamp to DateTime
 
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
-                    ProcessChange(change, targetCollection,job.IsSimulatedRun);
-                    item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}");
+                    ProcessChange(change, targetCollection,job.IsSimulatedRun, syncBack);
+                    if(!syncBack)
+                        item.CursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp);
+                    else
+                        item.SyncBackCursorUtcTimestamp = MongoHelper.BsonTimestampToUtcDateTime(timestamp); //for reverse sync
                 }
                 else if (!job.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for vcore
                 {
@@ -269,15 +368,18 @@ namespace OnlineMongoMigrationProcessor
                     var timestamp = change.WallTime; 
 
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
-                    ProcessChange(change, targetCollection, job.IsSimulatedRun);
-                    item.CursorUtcTimestamp = timestamp.Value;
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}");
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun, syncBack);
+                    if (!syncBack)
+                        item.CursorUtcTimestamp = timestamp.Value;
+                    else
+                        item.SyncBackCursorUtcTimestamp = timestamp.Value;
                 }
                 else
                 {
                     // Output change details to the console
-                    Log.AddVerboseMessage($"{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
-                    ProcessChange(change, targetCollection, job.IsSimulatedRun);
+                    Log.AddVerboseMessage($"{syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]}");
+                    ProcessChange(change, targetCollection, job.IsSimulatedRun, syncBack);
                 }
                 item.ResumeToken = cursor.Current.FirstOrDefault().ResumeToken.ToJson();
                 _jobs?.Save(); // persists state
@@ -296,17 +398,21 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing cursor. Details : {ex.ToString()}", LogType.Error);
+                Log.WriteLine($"Error processing cursor. {syncBackPrefix}Details : {ex.ToString()}", LogType.Error);
                 Log.Save();
                 return false;
             }
         }
 
 
-        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated)
+        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated, bool syncBack)
         {
             if (isWriteSimulated)
                 return;
+
+            string syncBackPrefix = string.Empty;
+            if (syncBack)
+                syncBackPrefix = "[R] ";
 
             BsonValue idValue= BsonNull.Value;
 
@@ -326,11 +432,13 @@ namespace OnlineMongoMigrationProcessor
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
+
                         var filter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         if (change.FullDocument == null || change.FullDocument.IsBsonNull)
                         {
                             Log.WriteLine($"No Document found on source. Deleting document with _id {idValue} for {change.OperationType}.");
                             var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
+
                             try
                             {
                                 targetCollection.DeleteOne(deleteTTLFilter);
@@ -358,7 +466,9 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error processing operation {change.OperationType} on {targetCollection.CollectionNamespace} with _id {idValue}. Details : {ex.ToString()}", LogType.Error);
+
+                Log.WriteLine($"Error processing operation {syncBackPrefix}{change.OperationType} on {targetCollection.CollectionNamespace} with _id {change.DocumentKey["_id"]}. Details : {ex.ToString()}", LogType.Error);
+
                 Log.Save();
             }
         }
