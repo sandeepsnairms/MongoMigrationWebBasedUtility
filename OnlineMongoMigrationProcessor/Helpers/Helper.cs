@@ -10,7 +10,6 @@ using System.Web;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
-#pragma warning disable CS8600
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -104,15 +103,13 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<string> EnsureMongoToolsAvailableAsync(string toolsDestinationFolder, MigrationSettings config)
         {
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
-#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
 
             try
             {
-#pragma warning disable CS8604 // Possible null reference argument.
+
+
                 string toolsLaunchFolder = Path.Combine(toolsDestinationFolder, Path.GetFileNameWithoutExtension(toolsDownloadUrl), "bin");
-#pragma warning restore CS8604 // Possible null reference argument.
 
                 string mongodumpPath = Path.Combine(toolsLaunchFolder, "mongodump.exe");
                 string mongorestorePath = Path.Combine(toolsLaunchFolder, "mongorestore.exe");
@@ -183,9 +180,7 @@ namespace OnlineMongoMigrationProcessor
             }
             //back ward compatibility end
 
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
             string homePath = Environment.GetEnvironmentVariable("ResourceDrive");
-#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
 
             if (string.IsNullOrEmpty(homePath))
             {

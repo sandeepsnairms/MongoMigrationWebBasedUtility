@@ -1,4 +1,24 @@
-﻿.tooltip-text {
+﻿.checkbox-container {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.checkbox-group {
+    flex: 1; /* Equal width */
+    display: flex;
+    align-items: center;
+}
+
+.checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    cursor: pointer;
+}
+
+.tooltip-text {
     text-decoration: underline; /* Add underline to indicate interactivity */
     color: #007bff; /* Optional: Add a blue color similar to a link */
 }

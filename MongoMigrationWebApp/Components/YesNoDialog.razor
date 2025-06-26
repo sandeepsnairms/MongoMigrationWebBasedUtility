@@ -18,6 +18,14 @@
                         <button type="button" class="btn btn-primary" @onclick=@Ok>Cutover</button>
                         <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Cutover</button>
                         break;
+                    case Category.CompleteNot:
+                        <button type="button" class="btn btn-primary" @onclick=@Ok>Complete</button>
+                        <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Complete</button>
+                        break;
+                    case Category.SyncBackNot:
+                        <button type="button" class="btn btn-primary" @onclick=@Ok>Start Sync Back</button>
+                        <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Cutover</button>
+                        break;
                     case Category.DeleteNot:
                         <button type="button" class="btn btn-primary" @onclick=@Ok>Delete</button>
                         <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Delete</button>
@@ -31,23 +39,33 @@
 @code {
     [Parameter] public string? caption { get; set; }
     [Parameter] public string? message { get; set; }
-    [Parameter] public EventCallback<bool> onClose { get; set; }
+    [Parameter] public EventCallback<YesNoDialogResult> onClose { get; set; }
     [Parameter] public Category type { get; set; }
 
     private Task Cancel()
     {
-        return onClose.InvokeAsync(false);
+        
+        return onClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = false, DialogType = type });
     }
 
     private Task Ok()
     {
-        return onClose.InvokeAsync(true);
+        return onClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = true, DialogType = type });
     }
 
     public enum Category
     {
         Okay,
         CutoverNot,
+        CompleteNot,
+        SyncBackNot,
         DeleteNot
+
+    }
+
+    public class YesNoDialogResult
+    {
+        public bool IsConfirmed { get; set; }
+        public Category DialogType { get; set; }
     }
 }

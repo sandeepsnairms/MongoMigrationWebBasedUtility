@@ -5,10 +5,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
+#pragma warning disable CS8600
 namespace OnlineMongoMigrationProcessor
 {
-#pragma warning disable CS8600
-
     internal class ProcessExecutor
     {
         private static bool _migrationCancelled = false;

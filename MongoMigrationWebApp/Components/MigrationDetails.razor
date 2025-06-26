@@ -19,7 +19,7 @@
                 {
                     <div class="mb-3">
                         <label for="mongo-options">Data Migration Tool:</label>
-                        <select id="mongo-options" @onchange="OnSelectionChanged" >
+                        <select id="mongo-options" @onchange="OnSelectionChanged">
                             @if (AllowMongoDump)
                             {
                                 <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
@@ -28,21 +28,32 @@
                         </select>
                     </div>
                 }
-                <div class="mb-3">
-                    <div style="display: flex; gap: 1rem; align-items: center;">  
-                        <label class="form-label">
+                <div class="mb-3 checkbox-container">
+                    <div class="checkbox-group">
+                        <label title="Enables online migration, allowing live data replication during the process.">
                             <input type="checkbox" id="isOnline" disabled="@(!newMode)" @bind="isOnline" />
-                            Online
+                            Online Migration
                         </label>
-                        <label class="form-label">                            
-                            <input type="checkbox" id="copyIndex" disabled="@(!newMode)" @bind="appendMode" />
+                    </div>
+                    <div class="checkbox-group">                    
+                        <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
+                            <input type="checkbox" id="enableSyncBack" disabled="@(!newMode || !isOnline)" @bind="enableSyncBack" />
+                            Post Migration Sync Back
+                        </label>
+                    </div>
+                </div>
+                <div class="mb-3 checkbox-container">
+                    <div class="checkbox-group">
+                        <label title="Keep the target collection and append new data without deleting existing records.">
+                            <input type="checkbox" id="appendMode" disabled="@(!newMode)" @bind="appendMode" />
                             Append Mode
                         </label>
-                        <label class="form-label">                            
+                    </div>
+                    <div class="checkbox-group">                    
+                        <label title="Skip copying indexes from the source; only data will be migrated.">
                             <input type="checkbox" id="copyIndex" disabled="@(!newMode || appendMode)" @bind="skipIndexes" />
                             Skip Indexes
                         </label>
-                       
                     </div>
                 </div>
 
@@ -62,7 +73,7 @@
                 </div>
 
                 <div class="mb-3">
-                    <label for="isSimulatedRun" class="form-label">
+                    <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
                         <input type="checkbox" id="isSimulatedRun" disabled="@(!newMode)" @bind="isSimulatedRun" />
                         Simulation Mode (No Writes to Target)
                     </label>
@@ -83,7 +94,7 @@
 
 @code {
 
-    #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 #pragma warning disable CS8601
 #pragma warning disable CS8602
 
@@ -91,19 +102,7 @@
     public bool newMode { get; set; }
 
     [Parameter]
-    public string name { get; set; } = string.Empty;
-
-    [Parameter]
-    public bool isOnline { get; set; }
-
-    [Parameter]
-    public string sourceEndpoint { get; set; } = string.Empty;
-
-    [Parameter]
-    public string targetEndpoint { get; set; } = string.Empty;
-
-    [Parameter]
-    public string namespaces { get; set; } = string.Empty;
+    public MigrationJob Job { get; set; }
 
     public string sourceConnectionString { get; set; } = string.Empty;
 
@@ -115,23 +114,62 @@
     [Parameter]
     public Func<string, Task<bool>> CheckNameExists { get; set; }
 
-    private bool skipIndexes = false;// create indexes on Target
-    private bool appendMode = false;// if the target collection exists, it will be deleted
+
     private string errorMessage = string.Empty;
     private bool useMongoDump = true; // Variable to track the selected value
     private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
     private bool isSimulatedRun = false; // Variable to track the dummy run option
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
-    
+    private bool isOnline = true; // Default to online migration
+    private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
+    private bool skipIndexes = false;// create indexes on Target
+    private bool appendMode = false;// if the target collection exists, it will be deleted
+    private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
+    private string name = string.Empty; // Name of the migration job
+    private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
+    private string targetEndpoint = string.Empty;   // Target endpoint extracted from the connection string
+
     private void OnSelectionChanged(ChangeEventArgs e)
     {
         selectedOption = e.Value.ToString();
         useMongoDump = selectedOption == "Use MongoDump and MongoRestore"; // Set useMongoDump based on selection
     }
 
+
+    protected override void OnInitialized()
+    {
+        if (newMode)
+        {
+            name = string.Empty;
+            sourceConnectionString = string.Empty;
+            targetConnectionString = string.Empty;
+            namespaces = string.Empty;
+            isOnline = false;
+            enableSyncBack = false;
+            useMongoDump = true;
+            isSimulatedRun = false;
+            skipIndexes = false;
+            appendMode = false;
+        }
+        else
+        {
+            name = Job.Name;
+            sourceConnectionString = Job.SourceConnectionString;
+            targetConnectionString = Job.TargetConnectionString;
+            namespaces = Job.NameSpaces;
+            sourceEndpoint = Job.SourceEndpoint;
+            targetEndpoint = Job.TargetEndpoint;
+            isOnline = Job.IsOnline;
+            enableSyncBack = Job.SyncBankEnabled && isOnline && !Job.IsSimulatedRun; // Reverse sync only if online and not a simulated run
+            useMongoDump = Job.UseMongoDump;
+            isSimulatedRun = Job.IsSimulatedRun;
+            skipIndexes = Job.SkipIndexes;
+            appendMode = Job.AppendMode;
+        }
+    }
     private async void HandleSubmit()
     {
-       
+
         if (string.IsNullOrEmpty(name))
         {
             errorMessage = "Name can't be empty.";
@@ -188,20 +226,21 @@
         }
 
         var job = new MigrationJob
-            {
-                Name = name,
-                Id = Guid.NewGuid().ToString(),
-                IsOnline = isOnline,
-                SourceConnectionString = sourceConnectionString,
-                TargetConnectionString = targetConnectionString,
-                SourceEndpoint = tmpSrcEndpoint,
-                TargetEndpoint = tmpTgtEndpoint,
-                NameSpaces = namespaces,
-                UseMongoDump = useMongoDump,
-                IsSimulatedRun = isSimulatedRun,
-                SkipIndexes=skipIndexes,
-                AppendMode=appendMode
-            };
+        {
+            Name = name,
+            Id = Guid.NewGuid().ToString(),
+            IsOnline = isOnline,
+            SourceConnectionString = sourceConnectionString,
+            TargetConnectionString = targetConnectionString,
+            SourceEndpoint = tmpSrcEndpoint,
+            TargetEndpoint = tmpTgtEndpoint,
+            NameSpaces = namespaces,
+            UseMongoDump = useMongoDump,
+            IsSimulatedRun = isSimulatedRun,
+            SkipIndexes = skipIndexes,
+            AppendMode = appendMode,
+            SyncBankEnabled = (enableSyncBack && isOnline && !isSimulatedRun) ? true : false
+        };
         await OnSubmit.InvokeAsync(job);
     }
 
@@ -210,4 +249,3 @@
         return OnSubmit.InvokeAsync(null);
     }
 }
-
