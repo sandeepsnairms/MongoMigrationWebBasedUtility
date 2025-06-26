@@ -164,7 +164,7 @@
         }
     }
 
-    private void YesNoDialogSubmit(bool approved)
+    private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
     {
         if (_messageDialogOpen)
         {
@@ -175,7 +175,7 @@
         {
             _yesNoDialogOpen = false;
 
-            if (approved && (!_selectedMigrationJob.CurrentlyActive || !JobManager.MigrationWorker.IsProcessRunning()))
+            if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.MigrationWorker.IsProcessRunning()))
             {
 
                 if (_selectedMigrationJob != null)

@@ -15,7 +15,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (MigrationJob !=null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())))
+        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())))
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -23,7 +23,7 @@
                 </button>
                 <ul class="dropdown-menu" aria-labelledby="resumeJobDropdown">
                     <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
-                    @if (! string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
+                    @if (!string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
                     {
                         <li><a class="dropdown-item" @onclick="ResumeJob">With Existing Connection Strings</a></li>
                     }
@@ -31,13 +31,29 @@
             </div>
         }
 
-        @if (MigrationJob!=null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && JobManager.MigrationWorker != null && JobManager.MigrationWorker.IsProcessRunning())
+        @if (MigrationJob != null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && JobManager.MigrationWorker != null && JobManager.MigrationWorker.IsProcessRunning())
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
-            @if (MigrationJob.IsOnline)
+
+            @if (MigrationJob.IsOnline && MigrationJob.SyncBankEnabled && !MigrationJob.ProcessingSyncBank)
             {
-                <button class="btn btn-warning mx-2" title="Perform Cut Over" @onclick="CompleteJob" disabled="@(!CheckCutoverReadiness())">Cut Over</button>
+                <button class="btn btn-warning dropdown-toggle" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" data-bs-toggle="dropdown" aria-expanded="false">Cut Over</button>
+
+                <ul class="dropdown-menu" aria-labelledby="performCutOverDropdown">
+                    <li><a class="dropdown-item" @onclick="InitSyncBackJob">With Sync Back</a></li>
+                    <li><a class="dropdown-item" @onclick="CompleteJob">Without Sync Back</a></li>
+
+                </ul>
             }
+            else if (MigrationJob.IsOnline && MigrationJob.SyncBankEnabled && MigrationJob.ProcessingSyncBank)
+            {
+                <button class="btn btn-warning" title="Complete Job" @onclick="CompleteJob">Complete Job</button>
+            }
+            else if (MigrationJob.IsOnline && !MigrationJob.SyncBankEnabled)
+            {
+                <button class="btn btn-warning" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" @onclick="CompleteJob">Cut Over</button>
+            }
+
             <button class="btn btn-toolbar" title="Refresh" @onclick="Refresh">
                 <i class="bi bi-arrow-repeat"></i>
             </button>
@@ -45,6 +61,7 @@
 
     </div>
 </div>
+
 
 @if (!string.IsNullOrEmpty(_errorMessage))
 {
@@ -54,18 +71,15 @@
 
 @if (_migrationDetailsPopUpOpen && MigrationJob != null)
 {
-    <MongoMigrationWebApp.Components.MigrationDetails NewMode=false Name="@MigrationJob?.Name"
-    IsOnline="@MigrationJob.IsOnline"
-    SourceEndpoint="@MigrationJob.SourceEndpoint"
-    TargetEndpoint="@MigrationJob.TargetEndpoint"
-    NameSpaces="@MigrationJob.NameSpaces"
-    OnSubmit="@OnMigrationDetailsPopUpSubmit"
-    CheckNameExists="CheckIfNameExistsAsync" />
+    <MongoMigrationWebApp.Components.MigrationDetails NewMode=false
+                                                      Job="@MigrationJob"
+                                                      OnSubmit="@OnMigrationDetailsPopUpSubmit"
+                                                      CheckNameExists="CheckIfNameExistsAsync" />
 }
 
 @if (_yesNoDialogOpen)
 {
-    <YesNoDialog Type="YesNoDialog.Category.CutoverNot" Caption="Confirmation Required"  Message="@_message" OnClose="@YesNoDialogSubmit"  />
+   <YesNoDialog Type=_yesNoDialogType Caption="Confirmation Required" Message="@_message" OnClose="@YesNoDialogSubmit" />
 }
 
 @if (_manageCollectionDialogOpen && MigrationJob != null)
@@ -205,9 +219,10 @@
 }
 @code {
 
-#pragma warning disable CS8602
+    #pragma warning disable CS8602
 #pragma warning disable CS8603
 #pragma warning disable CS8604
+#pragma warning disable CS4014
 
     [Parameter]
     public string? JobId { get; set; }
@@ -223,6 +238,7 @@
     private Timer? _refreshTimer;
     private string _message = string.Empty;
     private bool _yesNoDialogOpen;
+    private YesNoDialog.Category _yesNoDialogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
 
     private string GetRowClass(string type, string message)
@@ -309,8 +325,11 @@
         if (MigrationJob?.MigrationUnits == null) return false;
         foreach (var item in MigrationJob.MigrationUnits)
         {
-            if (item.DumpPercent != 100 || item.RestorePercent != 100)
-                return false;
+            if (item.SourceStatus != CollectionStatus.NotFound)
+            {
+                if (item.DumpPercent != 100 || item.RestorePercent != 100)
+                    return false;
+            }
         }
         return true;
     }
@@ -355,8 +374,15 @@
             await Task.Run(() =>
             {
                 JobManager.DisposeLogs();
-#pragma warning disable CS4014
-                JobManager.MigrationWorker.StartMigrationAsync(MigrationJob, MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob.NameSpaces, true, MigrationJob.IsOnline);
+
+                if (MigrationJob.ProcessingSyncBank && !MigrationJob.IsSimulatedRun)
+                {
+                    JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
+                }
+                else
+                {
+                    JobManager.MigrationWorker.StartMigrationAsync(MigrationJob, MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob.NameSpaces, MigrationJob.UseMongoDump, MigrationJob.IsOnline);
+                }
             });
         }
         else
@@ -405,9 +431,25 @@
         return JobManager.MigrationWorker.IsProcessRunning();
     }
 
+    private void InitSyncBackJob()
+    {
+        _message = "You are about to initiate cutover and begin syncing data back to the source. Proceed only if all changes from the source have already been replicated to the target. This action is irreversible. Are you sure you want to cutover?";
+        _yesNoDialogType = YesNoDialog.Category.SyncBackNot;
+        _yesNoDialogOpen = true;      
+    }
+
     private void CompleteJob()
     {
-        _message = "You can't resume a job after its cutover. Are you sure you want to cutover?";
+        if (MigrationJob.ProcessingSyncBank)
+        {
+            _message = "You can't resume a job after its completed. Are you sure you want to complete the job?";
+            _yesNoDialogType = YesNoDialog.Category.CompleteNot;
+        }
+        else
+        {
+            _message = "You can't resume a job after its cutover. Are you sure you want to cutover?";
+            _yesNoDialogType = YesNoDialog.Category.CutoverNot;
+        }
         _yesNoDialogOpen = true;
     }
 
@@ -423,17 +465,26 @@
         }
     }
 
-    private void YesNoDialogSubmit(bool approved)
+    private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
     {
         _yesNoDialogOpen = false;
-        if (approved)
+        if (result.IsConfirmed)
         {
-            JobManager.MigrationWorker.StopMigration();
-            MigrationJob.IsCancelled = true;
-            MigrationJob.IsCompleted = true;
-            MigrationJob.CurrentlyActive = false;
-            JobManager.Save();
-            _refreshTimer = null;
+            if (result.DialogType == YesNoDialog.Category.CutoverNot || result.DialogType == YesNoDialog.Category.CompleteNot)
+            {
+                JobManager.MigrationWorker.StopMigration();
+                MigrationJob.IsCancelled = true;
+                MigrationJob.IsCompleted = true;
+                MigrationJob.CurrentlyActive = false;
+                JobManager.Save();
+                _refreshTimer = null;
+            }
+            else if (result.DialogType == YesNoDialog.Category.SyncBackNot)
+            {
+
+                JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
+                JobManager.Save();
+            }
         }
     }
 

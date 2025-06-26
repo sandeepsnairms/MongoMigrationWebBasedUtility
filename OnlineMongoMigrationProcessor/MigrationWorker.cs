@@ -1,23 +1,26 @@
-﻿using System;
+﻿using MongoDB.Bson;
+using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Processors;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using MongoDB.Bson;
-using MongoDB.Driver;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
-
-namespace OnlineMongoMigrationProcessor
-{
 #pragma warning disable CS8629
 #pragma warning disable CS8600
 #pragma warning disable CS8602
 #pragma warning disable CS8603
 #pragma warning disable CS8604
 #pragma warning disable CS8625
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
+namespace OnlineMongoMigrationProcessor
+{
+
 
     public class MigrationWorker
     {
@@ -28,6 +31,8 @@ namespace OnlineMongoMigrationProcessor
         private MigrationJob? _job;
         private MongoClient? _sourceClient;
         private IMigrationProcessor _migrationProcessor;
+
+
 
         public MigrationSettings? Config { get; set; }
         public string? CurrentJobId { get; set; }
@@ -54,10 +59,13 @@ namespace OnlineMongoMigrationProcessor
             _migrationProcessor?.StopProcessing();
             _migrationProcessor.ProcessRunning = false;
             _migrationProcessor = null;
+
         }
 
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, bool doBulkCopy, bool trackChangeStreams)
         {
+            _migrationProcessor?.StopProcessing();
+
             int maxRetries = 10;
             int attempts = 0;
 
@@ -74,6 +82,7 @@ namespace OnlineMongoMigrationProcessor
                 Config = new MigrationSettings();
                 Config.Load();
             }
+
 
             try
             {
@@ -124,12 +133,6 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if (_migrationCancelled) return;
 
-                    //string[] parts = fullName.Split('.');
-                    //if (parts.Length != 2) continue;
-
-                    //string dbName = parts[0].Trim();
-                    //string colName = parts[1].Trim();
-
                     int firstDotIndex = fullName.IndexOf('.');
                     if (firstDotIndex <= 0 || firstDotIndex == fullName.Length - 1) continue;
 
@@ -157,7 +160,7 @@ namespace OnlineMongoMigrationProcessor
                         Log.WriteLine("Simulated Run. No changes will be made to the target.");
                     }
                     else
-                    {                        
+                    {
                         if (job.AppendMode)
                         {
                             Log.WriteLine("Existing target collections will remain unchanged, and no indexes will be created.");
@@ -174,7 +177,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (_job.IsOnline)
                     {
-                        Log.WriteLine("Checking if Change Stream is enabled on source");
+                        Log.WriteLine("Checking if change stream is enabled on source");
                         Log.Save();
 
 
@@ -192,6 +195,7 @@ namespace OnlineMongoMigrationProcessor
                             _migrationProcessor?.StopProcessing();
                             return;
                         }
+
                     }
 
                     _migrationProcessor?.StopProcessing();
@@ -206,22 +210,23 @@ namespace OnlineMongoMigrationProcessor
                     }
                     _migrationProcessor.ProcessRunning = true;
 
+                    bool checkedCS = false;
                     foreach (var unit in _job.MigrationUnits)
                     {
                         if (_migrationCancelled) return;
-                        
+
                         if (await MongoHelper.CheckCollectionExists(_sourceClient, unit.DatabaseName, unit.CollectionName))
                         {
                             unit.SourceStatus = CollectionStatus.OK;
 
                             if (_job.IsOnline)
                             {
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
                                 Task.Run(async () =>
                                 {
                                     await MongoHelper.SetChangeStreamResumeTokenAsync(_sourceClient, unit);
                                 });
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
                             }
                             if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
                             {
@@ -236,14 +241,33 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-                                if (!_job.UseMongoDump && !job.IsSimulatedRun && !job.AppendMode)
+                                if (!job.IsSimulatedRun && !job.AppendMode)
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
                                     await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
-                                }                                
+
+                                    if (_job.SyncBankEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
+                                    {
+                                        Log.WriteLine("Sync Back: Checking if change stream is enabled on target");
+                                        Log.Save();
+
+                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit);
+                                        checkedCS = true;
+                                        if (!retValue.IsCSEnabled)
+                                        {
+                                            _job.CurrentlyActive = false;
+                                            _job.IsCompleted = true;
+                                            _jobs?.Save();
+                                            continueProcessing = false;
+
+                                            _migrationProcessor?.StopProcessing();
+                                            return;
+                                        }
+                                    }
+                                }
                             }
-                           
+
                         }
                         else
                         {
@@ -255,6 +279,7 @@ namespace OnlineMongoMigrationProcessor
 
                     _jobs?.Save();
                     Log.Save();
+
 
                     foreach (var migrationUnit in _job.MigrationUnits)
                     {
@@ -271,8 +296,8 @@ namespace OnlineMongoMigrationProcessor
                                     Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
                                     Log.Save();
                                 }
-                                _migrationProcessor.Migrate(migrationUnit, sourceConnectionString, targetConnectionString);
-    
+                                _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
+
                             }
                             else
                             {
@@ -306,7 +331,7 @@ namespace OnlineMongoMigrationProcessor
 
                     continueProcessing = true;
                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
-                   
+
                 }
             }
             if (attempts == maxRetries)
@@ -323,10 +348,43 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        {
+            if (Config == null)
+            {
+                Config = new MigrationSettings();
+                Config.Load();
+            }
+
+            TimeSpan backoff = TimeSpan.FromSeconds(2);
+            bool continueProcessing = true;
+
+            _job = job;
+            _migrationCancelled = false;
+            CurrentJobId = _job.Id;
+
+            Log.Init(_job.Id);
+            Log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
+            Log.Save();
+
+            job.ProcessingSyncBank = true;
+            _jobs.Save();
+
+            if (_migrationProcessor != null)
+                _migrationProcessor.StopProcessing();
+
+            _migrationProcessor = null;
+            _migrationProcessor = new SyncBackProcessor(_jobs, _job, null, Config, string.Empty);
+
+            _migrationProcessor.StartProcess(null, sourceConnectionString, targetConnectionString);
+
+        }
+
         private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, string idField = "_id")
         {
 
-            var stas=await MongoHelper.GetCollectionStatsAsync(_sourceClient, databaseName, collectionName);
+            var stas = await MongoHelper.GetCollectionStatsAsync(_sourceClient, databaseName, collectionName);
 
             long documentCount = stas.DocumentCount;
             long totalCollectionSizeBytes = stas.CollectionSizeBytes;
@@ -417,7 +475,7 @@ namespace OnlineMongoMigrationProcessor
                         if (!_job.UseMongoDump && (chunkBoundaries.Boundaries[i].SegmentBoundaries == null || chunkBoundaries.Boundaries[i].SegmentBoundaries.Count == 0))
                         {
                             chunk.Segments ??= new List<Segment>();
-                            chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false,Id="1" });
+                            chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false, Id = "1" });
                         }
 
                         if (!_job.UseMongoDump && chunkBoundaries.Boundaries[i].SegmentBoundaries.Count > 0)
@@ -428,7 +486,7 @@ namespace OnlineMongoMigrationProcessor
                                 var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, chunkBoundaries.Boundaries[i].SegmentBoundaries.Count, j, chunk.Lt, chunk.Gte);
 
                                 chunk.Segments ??= new List<Segment>();
-                                chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false , Id = (j+1).ToString() });
+                                chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false, Id = (j + 1).ToString() });
                             }
                         }
                     }

@@ -9,6 +9,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
+#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
+#pragma warning disable CS8604 // Possible null reference argument.\
+#pragma warning disable CS8600 // Possible null reference argument.
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -32,9 +36,9 @@ namespace OnlineMongoMigrationProcessor
 
         public bool ProcessRunning { get; set; }
 
-#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
         public DumpRestoreProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
-#pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
         {
             _jobs = jobs;
             _job = job;
@@ -57,11 +61,9 @@ namespace OnlineMongoMigrationProcessor
             
         }
 
-        public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-#pragma warning disable CS8602 // Dereference of a possibly null reference.
-#pragma warning disable CS8604 // Possible null reference argument.\
-#pragma warning disable CS8600 // Possible null reference argument.
+
             int maxRetries = 10;
             string jobId = _job.Id;
 
@@ -128,7 +130,7 @@ namespace OnlineMongoMigrationProcessor
 
                                     if (!continueDownlods)
                                     {
-                                        Log.WriteLine($"{dbName}.{colName} Uploader added");
+                                        Log.WriteLine($"{dbName}.{colName} added to uploader queue");
                                         Log.Save();
                                         MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}",item);
                                         Task.Run(() => Upload(item, targetConnectionString));
@@ -184,7 +186,7 @@ namespace OnlineMongoMigrationProcessor
                                     _jobs?.Save(); // Persist state
                                     dumpAttempts = 0;
          
-                                    Log.WriteLine($"{dbName}.{colName} Uploader added");
+                                    Log.WriteLine($"{dbName}.{colName} added to uploader queue");
                                     Log.Save();
                                     MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
                                     Task.Run(() => Upload(item, targetConnectionString));
@@ -256,14 +258,12 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (item.DumpComplete && !_executionCancelled)
             {
-                Log.WriteLine($"{dbName}.{colName} Uploader added");
+                Log.WriteLine($"{dbName}.{colName} added to uploader queue");
                 Log.Save();
                 MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
                 Task.Run(() => Upload(item, targetConnectionString));
             }
-#pragma warning restore CS8602 // Dereference of a possibly null reference.
-#pragma warning restore CS8604 // Possible null reference argument.
-#pragma warning restore CS8600 // 
+
         }
         
 
@@ -275,9 +275,7 @@ namespace OnlineMongoMigrationProcessor
 
             UploaderProcessing = true; // Set flag to indicate upload is in progress
 
-#pragma warning disable CS8602 // Dereference of a possibly null reference.
-#pragma warning disable CS8604 // Possible null reference argument.
-#pragma warning disable CS8600
+
             string dbName = item.DatabaseName;
             string colName = item.CollectionName;
             int maxRetries = 10;
@@ -289,7 +287,7 @@ namespace OnlineMongoMigrationProcessor
 
             string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
 
-            Log.WriteLine($"{dbName}.{colName} Uploader started");
+            Log.WriteLine($"{dbName}.{colName} starting uploader");
 
             while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive && !_job.IsSimulatedRun)
             {
@@ -326,7 +324,7 @@ namespace OnlineMongoMigrationProcessor
                             double contributionFactor = (double)item.MigrationChunks[i].DumpQueryDocCount / Math.Max(item.ActualDocCount, item.EstimatedDocCount);
                             if (item.MigrationChunks.Count == 1) contributionFactor = 1;
 
-                            Log.WriteLine($"{dbName}.{colName}-{i} Uploader processing");
+                            Log.WriteLine($"{dbName}.{colName}-{i} uploader processing");
 
                             int restoreAttempts = 0;
                             backoff = TimeSpan.FromSeconds(2);
@@ -347,7 +345,7 @@ namespace OnlineMongoMigrationProcessor
                                     var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
                                     task.Wait(); // Wait for the task to complete
                                     bool result = task.Result; // Capture the result after the task completes
-                                    Log.WriteLine($"{dbName}.{colName}-{i} Uploader processing completed");
+                                    Log.WriteLine($"{dbName}.{colName}-{i} uploader processing completed");
                                     if (result)
                                     {                                       
 
@@ -565,8 +563,6 @@ namespace OnlineMongoMigrationProcessor
 
                 
             }
-#pragma warning restore CS8602 // Dereference of a possibly null reference.
-#pragma warning restore CS8604 // Possible null reference argument.
         }
     }
 }

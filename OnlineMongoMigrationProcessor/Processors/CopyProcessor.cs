@@ -9,6 +9,8 @@ using System.Threading.Tasks;
 #pragma warning disable CS8604
 #pragma warning disable CS8600
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
 namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor : IMigrationProcessor
@@ -43,12 +45,8 @@ namespace OnlineMongoMigrationProcessor
                 _changeStreamProcessor.ExecutionCancelled = true;
         }
 
-        //public void Upload(MigrationUnit item, string targetConnectionString)
-        //{
-        //    throw new NotImplementedException();
-        //}
 
-        public void Migrate(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             int maxRetries = 10;
             string jobId = _job.Id;
@@ -69,14 +67,12 @@ namespace OnlineMongoMigrationProcessor
             {
                 item.EstimatedDocCount = collection.EstimatedDocumentCount();
 
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 Task.Run(() =>
                 {
                     long count = MongoHelper.GetActualDocumentCount(collection, item);
                     item.ActualDocCount = count;
                     _jobs?.Save();
                 });
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
                 long downloadCount = 0;
 
@@ -226,9 +222,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _config);
 
-#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                         Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(_job,item));
-#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                     }
 
                     if (!_job.IsOnline && !_executionCancelled)

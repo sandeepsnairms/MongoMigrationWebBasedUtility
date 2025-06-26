@@ -7,6 +7,7 @@ using MongoDB.Driver;
 using Newtonsoft.Json;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
 namespace OnlineMongoMigrationProcessor
 {
     public class JobList
@@ -91,6 +92,8 @@ namespace OnlineMongoMigrationProcessor
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
+        public bool SyncBankEnabled { get; set; }
+        public bool ProcessingSyncBank { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 
@@ -111,6 +114,12 @@ namespace OnlineMongoMigrationProcessor
         public BsonValue? ResumeDocumentId { get; set; }
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
+
+        public string? SyncBackResumeToken { get; set; }
+        public DateTime? SyncBackChangeStreamStartedOn { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
+
+
         public double DumpPercent { get; set; }
         public double RestorePercent { get; set; }
         public bool DumpComplete { get; set; }
@@ -243,7 +252,7 @@ namespace OnlineMongoMigrationProcessor
         public DataType DataType { get; set; }
         public List<Segment> Segments { get; set; }
 
-#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+
         public MigrationChunk(string startId, string endId, DataType dataType, bool? downloaded, bool? uploaded)
         {
             Gte = startId;
