@@ -92,8 +92,10 @@ namespace OnlineMongoMigrationProcessor
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
-        public bool SyncBankEnabled { get; set; }
-        public bool ProcessingSyncBank { get; set; }
+        public bool SyncBackEnabled { get; set; }
+        public bool ProcessingSyncBack { get; set; }
+        public bool CSStartsAfterAllUploads { get; set; }
+        public bool CSPostProcessingStarted { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 
@@ -170,8 +172,10 @@ namespace OnlineMongoMigrationProcessor
         public string? MongoToolsDownloadUrl { get; set; }
         public bool HasUuid { get; set; }
         public long ChunkSizeInMb { get; set; }
-        public int ChangeStreamBatchSize { get; set; }
-        public int MongoCopyPageSize { get; set; }
+        public int ChangeStreamMaxDocsInBatch { get; set; }
+		public int ChangeStreamBatchDuration { get; set; }
+		public int ChangeStreamMaxCollsInBatch { get; set; }
+		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
 
         public MigrationSettings()
@@ -191,8 +195,10 @@ namespace OnlineMongoMigrationProcessor
                     HasUuid = loadedObject.HasUuid;
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
-                    ChangeStreamBatchSize = loadedObject.ChangeStreamBatchSize;
-                    MongoCopyPageSize=loadedObject.MongoCopyPageSize;
+					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
+					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 1 : loadedObject.ChangeStreamBatchDuration;
+					ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
+					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     initialized = true;
                 }
             }
@@ -201,9 +207,11 @@ namespace OnlineMongoMigrationProcessor
                 HasUuid = false;
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMb = 5120;
-                ChangeStreamBatchSize = 10000;
-                MongoCopyPageSize = 500;
-            }
+				MongoCopyPageSize = 500;
+				ChangeStreamMaxDocsInBatch = 10000;                
+                ChangeStreamBatchDuration = 1;
+                ChangeStreamMaxCollsInBatch = 5;
+			}
         }
 
         public bool Save()

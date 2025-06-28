@@ -76,9 +76,12 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString, MigrationUnit unit)
+        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString, MigrationUnit unit, bool createCollection=false)
         {
             string version = string.Empty;
+            string collectionName = string.Empty;
+            string databaseName = string.Empty;
+            MongoClient client = null;
             try
             {
                 //// Connect to the MongoDB server
@@ -86,25 +89,47 @@ namespace OnlineMongoMigrationProcessor
                 var mongoUrl = new MongoUrl(connectionString);
                 var settings = MongoClientSettings.FromUrl(mongoUrl);
                 settings.ReadConcern = ReadConcern.Majority;
-                var client = new MongoClient(settings);
+                client = new MongoClient(settings);
+                
+                if (createCollection)
+                {
+                    databaseName = Guid.NewGuid().ToString();
+                    collectionName = "test";
 
+                    var database = client.GetDatabase(databaseName);
+                    var collection = database.GetCollection<BsonDocument>(collectionName);
+
+                    // Insert a dummy document
+                    var dummyDoc = new BsonDocument
+                    {
+                        { "name", "dummy" },
+                        { "timestamp", DateTime.UtcNow }
+                    };
+
+                    await collection.InsertOneAsync(dummyDoc);
+                }
+                else
+                {
+                    databaseName = unit.DatabaseName;
+                    collectionName = unit.CollectionName;
+                }
 
                 if (connectionString.Contains("mongocluster.cosmos.azure.com")) //for vcore
                 {
-                    var database = client.GetDatabase(unit.DatabaseName);
-                    var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                    var database = client.GetDatabase(databaseName);
+                    var collection = database.GetCollection<BsonDocument>(collectionName);
 
                     var options = new ChangeStreamOptions
                     {
                         FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
                     };
-                    var cursor = await collection.WatchAsync(options) ;
+                    var cursor = await collection.WatchAsync(options);
 
                     return (IsCSEnabled: true, Version: "");
                 }
                 else
                 {
-                    
+
 
                     // Check the server status to verify replica set or sharded cluster
                     var adminDatabase = client.GetDatabase("admin");
@@ -145,6 +170,13 @@ namespace OnlineMongoMigrationProcessor
                 Log.Save();
                 //return (IsCSEnabled: false, Version: version);
                 throw ex;
+            }
+            finally
+            {
+                if (createCollection)
+                {
+                    await client.DropDatabaseAsync(databaseName); //drop the dummy database created to test CS
+                }
             }
         }
 

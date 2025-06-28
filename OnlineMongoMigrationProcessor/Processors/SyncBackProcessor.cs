@@ -11,19 +11,20 @@ namespace OnlineMongoMigrationProcessor.Processors
     internal class SyncBackProcessor : IMigrationProcessor
     {
         public bool ProcessRunning { get; set; }
-        private MongoChangeStreamProcessor _syncBackToSource;
+        private MongoChangeStreamProcessor? _syncBackToSource;
         private JobList? _jobs;
         private MigrationJob? _job;
         private bool _executionCancelled = false;
 
         private MigrationSettings? _config;
+        private CancellationTokenSource _cts;
 
 
         public SyncBackProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
         {
-            _jobs = jobs;
-            _job = job;
-            _config = config;
+            _jobs = jobs ?? throw new ArgumentNullException(nameof(jobs), "JobList cannot be null.");
+            _job = job ?? throw new ArgumentNullException(nameof(job), "MigrationJob cannot be null.");
+            _config = config ?? throw new ArgumentNullException(nameof(config), "MigrationSettings cannot be null.");
         }
 
         public void StopProcessing()
@@ -31,7 +32,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             ProcessRunning = false;
 
             _executionCancelled = true;
-
+            _cts?.Cancel();
             if (_syncBackToSource != null)
                 _syncBackToSource.ExecutionCancelled = true;
 
@@ -48,7 +49,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetClient = new MongoClient(targetConnectionString);
 
             _syncBackToSource = null;
-            _syncBackToSource = new MongoChangeStreamProcessor(sourceClient, targetClient, _jobs, _config,true);
+            _syncBackToSource = new MongoChangeStreamProcessor(sourceClient, targetClient, _jobs, _job,_config,true);
+
+            _cts=new CancellationTokenSource();
 
             bool continueProcessing = true;
 
@@ -58,15 +61,13 @@ namespace OnlineMongoMigrationProcessor.Processors
                 attempts++;
                 try
                 {
-                    foreach (var migrationUnit in _job.MigrationUnits)
-                    {
-                        if (_executionCancelled) break;
+                    Log.WriteLine($"Sync back to source starting.");
+                    Log.Save();
+                    
+                    var result = _syncBackToSource.RunCSPostProcessingAsync(_cts);
 
-                        if (migrationUnit.SourceStatus == CollectionStatus.OK)
-                        {
-                            Task.Run(() => _syncBackToSource.ProcessCollectionChangeStream(_job, migrationUnit));
-                        }
-                    }
+                    //Log.WriteLine($"Sync back to source completed successfully.");
+                    //Log.Save();
                     continueProcessing = false;
                 }
                 catch (MongoExecutionTimeoutException ex)

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using static System.Reflection.Metadata.BlobBuilder;
 
 #pragma warning disable CS8602
 #pragma warning disable CS8604
@@ -15,7 +16,7 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor : IMigrationProcessor
     {
-        private JobList? _jobs;
+        private JobList? _jobList;
         private MigrationJob? _job;
         private bool _executionCancelled = false;
         private MongoClient? _sourceClient;
@@ -23,12 +24,15 @@ namespace OnlineMongoMigrationProcessor
         private MigrationSettings? _config;
         private CancellationTokenSource _cts;
         private MongoChangeStreamProcessor _changeStreamProcessor;
+        private bool _postUploadCSProcessing = false;
+
 
         public bool ProcessRunning { get; set; }
 
+
         public CopyProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
         {
-            _jobs = jobs;
+            _jobList = jobs;
             _job = job;
             _sourceClient = sourceClient;
             _config = config;
@@ -61,6 +65,27 @@ namespace OnlineMongoMigrationProcessor
 
             DateTime migrationJobStartTime = DateTime.Now;
 
+            //when resuming a job, we need to check if post-upload change stream processing is already in progress
+
+            if (_postUploadCSProcessing)
+                return; // Skip processing if post-upload CS processing is already in progress
+
+            if (_job.IsOnline && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
+            {
+                _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
+
+                if (_targetClient == null)
+                    _targetClient = new MongoClient(targetConnectionString);
+
+                if (_changeStreamProcessor == null)
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
+
+                var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
+                return;
+            }
+
+            // starting the  regular document copy process
+
             Log.WriteLine($"{dbName}.{colName} Document copy started");
 
             if (!item.DumpComplete && !_executionCancelled)
@@ -71,7 +96,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     long count = MongoHelper.GetActualDocumentCount(collection, item);
                     item.ActualDocCount = count;
-                    _jobs?.Save();
+                    _jobList?.Save();
                 });
 
                 long downloadCount = 0;
@@ -134,7 +159,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 var documentCopier = new MongoDocumentCopier();
                                 documentCopier.Initialize(_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
-                                var result = documentCopier.CopyDocumentsAsync(_jobs, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token,_job.IsSimulatedRun).GetAwaiter().GetResult();
+                                var result = documentCopier.CopyDocumentsAsync(_jobList, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token,_job.IsSimulatedRun).GetAwaiter().GetResult();
 
                                 if (result)
                                 {
@@ -144,7 +169,7 @@ namespace OnlineMongoMigrationProcessor
                                         item.MigrationChunks[i].IsDownloaded = true;
                                         item.MigrationChunks[i].IsUploaded = true;                                        
                                     }
-                                    _jobs?.Save(); // Persist state
+                                    _jobList?.Save(); // Persist state
                                     dumpAttempts = 0;
                                 }
                                 else
@@ -164,7 +189,7 @@ namespace OnlineMongoMigrationProcessor
                                     Log.Save();
 
                                     _job.CurrentlyActive = false;
-                                    _jobs?.Save();
+                                    _jobList?.Save();
 
                                     ProcessRunning = false;
                                 }
@@ -183,14 +208,14 @@ namespace OnlineMongoMigrationProcessor
                                 Log.Save();
 
                                 _job.CurrentlyActive = false;
-                                _jobs?.Save();
+                                _jobList?.Save();
                                 ProcessRunning = false;
                             }
                         }
                         if (dumpAttempts == maxRetries)
                         {
                             _job.CurrentlyActive = false;
-                            _jobs?.Save();
+                            _jobList?.Save();
                             ProcessRunning = false;
                         }
                     }
@@ -217,18 +242,17 @@ namespace OnlineMongoMigrationProcessor
                         if (_targetClient == null)
                             _targetClient = new MongoClient(targetConnectionString);
 
-                        Log.WriteLine($"{dbName}.{colName} ProcessCollectionChangeStream invoked");
-
+             
                         if (_changeStreamProcessor == null)
-                            _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _config);
+                            _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
 
-                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(_job,item));
+                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(item));
                     }
 
-                    if (!_job.IsOnline && !_executionCancelled)
+                    if ( !_executionCancelled)
                     {
-                        var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
-                        if (Helper.IsOfflineJobCompleted(migrationJob))
+                        var migrationJob = _jobList.MigrationJobs.Find(m => m.Id == jobId);
+                        if (!_job.IsOnline &&  Helper.IsOfflineJobCompleted(migrationJob))
                         {
                             Log.WriteLine($"{migrationJob.Id} Completed");
 
@@ -236,7 +260,13 @@ namespace OnlineMongoMigrationProcessor
                             migrationJob.CurrentlyActive = false;
                             _job.CurrentlyActive = false;
                             ProcessRunning = false;
-                            _jobs?.Save();
+                            _jobList?.Save();
+                        }
+                        else if (_job.IsOnline &&_job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)
+                        {
+                            // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
+                            _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
+                            var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                         }
                     }
                 }

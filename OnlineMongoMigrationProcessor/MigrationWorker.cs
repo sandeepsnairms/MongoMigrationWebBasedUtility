@@ -247,12 +247,13 @@ namespace OnlineMongoMigrationProcessor
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
                                     await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
 
-                                    if (_job.SyncBankEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
+                                    if (_job.SyncBackEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
                                     {
                                         Log.WriteLine("Sync Back: Checking if change stream is enabled on target");
                                         Log.Save();
 
-                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit);
+                                        //Thread.Sleep(30*1000); // Wait for 30 seconds to ensure the target is ready
+                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit,true);
                                         checkedCS = true;
                                         if (!retValue.IsCSEnabled)
                                         {
@@ -293,12 +294,26 @@ namespace OnlineMongoMigrationProcessor
 
                                 if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                                 {
-                                    Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
-                                    Log.Save();
-                                }
+                                    if (!_job.CSPostProcessingStarted)
+                                    {
+                                        Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");                                        
+                                    }
+                                    else
+                                    {
+                                        Log.WriteLine($"Change stream processing will resume.");
+									}
+									Log.Save();
+								}
                                 _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
 
-                            }
+								// since CS processsing has started, we can break the loop. No need to process all collections
+								if (_job.IsOnline && _job.SyncBackEnabled && _job.CSPostProcessingStarted)
+                                {
+									continueProcessing = false;
+									break;
+								}
+
+							}
                             else
                             {
                                 migrationUnit.SourceStatus = CollectionStatus.NotFound;
@@ -368,7 +383,7 @@ namespace OnlineMongoMigrationProcessor
             Log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
             Log.Save();
 
-            job.ProcessingSyncBank = true;
+            job.ProcessingSyncBack = true;
             _jobs.Save();
 
             if (_migrationProcessor != null)

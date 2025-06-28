@@ -35,7 +35,7 @@
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
 
-            @if (MigrationJob.IsOnline && MigrationJob.SyncBankEnabled && !MigrationJob.ProcessingSyncBank)
+            @if (MigrationJob.IsOnline && MigrationJob.SyncBackEnabled && !MigrationJob.ProcessingSyncBack)
             {
                 <button class="btn btn-warning dropdown-toggle" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" data-bs-toggle="dropdown" aria-expanded="false">Cut Over</button>
 
@@ -45,11 +45,11 @@
 
                 </ul>
             }
-            else if (MigrationJob.IsOnline && MigrationJob.SyncBankEnabled && MigrationJob.ProcessingSyncBank)
+            else if (MigrationJob.IsOnline && MigrationJob.SyncBackEnabled && MigrationJob.ProcessingSyncBack)
             {
                 <button class="btn btn-warning" title="Complete Job" @onclick="CompleteJob">Complete Job</button>
             }
-            else if (MigrationJob.IsOnline && !MigrationJob.SyncBankEnabled)
+            else if (MigrationJob.IsOnline && !MigrationJob.SyncBackEnabled)
             {
                 <button class="btn btn-warning" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" @onclick="CompleteJob">Cut Over</button>
             }
@@ -138,7 +138,7 @@
     </tbody>
 </table>
 <div class="d-flex align-items-center mb-3">
-    <button class="btn btn-primary mx-2" title="Update Collections" @onclick="ManageCollections">Update Collections</button>
+    <button class="btn btn-primary mx-2" title="Update Collections"  @onclick="ManageCollections">Update Collections</button>
 </div>
 
 <h5 class="pt-4">
@@ -375,7 +375,7 @@
             {
                 JobManager.DisposeLogs();
 
-                if (MigrationJob.ProcessingSyncBank && !MigrationJob.IsSimulatedRun)
+                if (MigrationJob.ProcessingSyncBack && !MigrationJob.IsSimulatedRun)
                 {
                     JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
                 }
@@ -394,13 +394,16 @@
     private void ManageCollections()
     {
         _errorMessage = string.Empty;
-        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs())
+        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
         {
             _manageCollectionDialogOpen = true;
         }
         else
         {
-            _errorMessage = "Please pause the job, before updating collections.";
+            if (MigrationJob.ProcessingSyncBack)
+                _errorMessage = "You cannot update collections after sync back has started.";
+            else
+                _errorMessage = "Please pause the job before updating collections.";
         }
     }
     private async Task ResumeJobWithNewConnectionString()
@@ -413,7 +416,7 @@
     private async Task ResumeJob()
     {
         _errorMessage = string.Empty;
-        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs())
+        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() )
         {
             if (string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
                 _migrationDetailsPopUpOpen = true;
@@ -440,7 +443,7 @@
 
     private void CompleteJob()
     {
-        if (MigrationJob.ProcessingSyncBank)
+        if (MigrationJob.ProcessingSyncBack)
         {
             _message = "You can't resume a job after its completed. Are you sure you want to complete the job?";
             _yesNoDialogType = YesNoDialog.Category.CompleteNot;
