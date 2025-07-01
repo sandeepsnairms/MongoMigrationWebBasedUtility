@@ -46,7 +46,7 @@
                     <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
                         Migration Mode:
                     </label>                
-                    <select id="migration-mode" class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
+                    <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
                         <option value="Offline">Offline</option>
                         <option value="Online">Online</option>
                     </select>
@@ -103,7 +103,7 @@
 
 @code {
 
-#pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
+    #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 #pragma warning disable CS8601
 #pragma warning disable CS8602
 
@@ -134,10 +134,10 @@
     private string name = string.Empty; // Name of the migration job
     private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
     private string targetEndpoint = string.Empty;   // Target endpoint extracted from the connection string
-
+    private string SelectedMode = "Offline"; // default or loaded value
     private string sourceConnectionString { get; set; } = string.Empty;
     private string targetConnectionString { get; set; } = string.Empty;
-
+   
 
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
@@ -180,6 +180,15 @@
             isSimulatedRun = Job.IsSimulatedRun;
             skipIndexes = Job.SkipIndexes;
             appendMode = Job.AppendMode;
+
+            if(isOnline)
+            {
+                SelectedMode = "Online";
+            }
+            else
+            {
+                SelectedMode = "Offline";
+            }
         }
     }
     private async void HandleSubmit()

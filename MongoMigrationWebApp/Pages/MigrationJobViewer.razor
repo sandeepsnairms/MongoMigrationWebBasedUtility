@@ -101,9 +101,13 @@
             {
                 <th>Copy Status</th>
             }
-            @if (MigrationJob != null && MigrationJob.IsOnline)
+            @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
             {
                 <th>Time Since Last Change</th>
+            }
+            @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
+            {
+                <th>Time Since Last Sync Back</th>
             }
         </tr>
     </thead>
@@ -337,6 +341,12 @@
     protected override async Task OnParametersSetAsync()
     {
         MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
+
+        if (MigrationJob == null) // Fixed the condition to check for null
+        {
+            return;
+        }
+
         LogBucket = JobManager.GetLogBucket(JobId);
 
         if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning()))

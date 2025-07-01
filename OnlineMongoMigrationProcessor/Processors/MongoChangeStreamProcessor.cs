@@ -91,7 +91,7 @@ namespace OnlineMongoMigrationProcessor
 
             var keys = _chnageStreamsToProcess.Keys.ToList();
 
-            Log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {keys.Count} collections. Each round-robin batch will process {Math.Min(_concurrentProcessors,keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
+            Log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {keys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors,keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
             Log.Save();
 
             
