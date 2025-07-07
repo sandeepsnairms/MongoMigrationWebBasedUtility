@@ -2,14 +2,14 @@
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">@caption</h5>
+                <h5 class="modal-title">@Caption</h5>
                 <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
             </div>
             <div class="modal-body">
-                <p>@message</p>
+                <p>@Message</p>
             </div>
             <div class="modal-footer">
-                @switch (type)
+                @switch (Type)
                 {
                     case Category.Okay:
                         <button type="button" class="btn btn-primary" @onclick=@Ok>OK</button>
@@ -37,20 +37,21 @@
 </div>
 
 @code {
-    [Parameter] public string? caption { get; set; }
-    [Parameter] public string? message { get; set; }
-    [Parameter] public EventCallback<YesNoDialogResult> onClose { get; set; }
-    [Parameter] public Category type { get; set; }
+
+    [Parameter] public string? Caption { get; set; }
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public EventCallback<YesNoDialogResult> OnClose { get; set; }
+    [Parameter] public Category Type { get; set; }
 
     private Task Cancel()
     {
         
-        return onClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = false, DialogType = type });
+        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = false, DialogType = Type });
     }
 
     private Task Ok()
     {
-        return onClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = true, DialogType = type });
+        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = true, DialogType = Type });
     }
 
     public enum Category

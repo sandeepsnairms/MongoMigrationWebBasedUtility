@@ -287,8 +287,8 @@ Follow these steps to migrate data from an on-premises MongoDB VM. You can deplo
 1. Prepare the Windows Server
     - Log in to the Windows Server using Remote Desktop or a similar method.
     - Ensure the server has internet access to download required components.
-2. Install .NET 6 Runtime
-    - Download the .NET 6 Hosting Bundle:
+2. Install .NET 9 Runtime
+    - Download the [.NET 9 Hosting Bundle](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-9.0.6-windows-hosting-bundle-installer):
     - Visit the .NET Download Page.
     - Download the Hosting Bundle under the Runtime section.
     - Install the Hosting Bundle:
@@ -493,6 +493,16 @@ Time Since Last Change refers to the time difference between the timestamp of th
 - Ensure the job is not paused and is processing requests. Resume the job if necessary.
 - Monitor for new write operations on the source. If no new changes are detected, the lag will increase. However, this is not an issue since all changes have already been processed.
 - Check if the transactions per second on the source are very high; in this case, you may need a larger app service plan or a dedicated web app for the collection.
+
+### Time Since Sync Back
+
+Time Since Sync Back indicates the time elapsed between the most recent Sync Back operation and the current time. This metric becomes relevant after the application cutover, once the target account begins receiving traffic.
+
+Initially, you may not see updates here until the application cutover is complete. Once active, the value should update regularly. If it doesn't, consider the following:
+
+- Confirm that the target account is live and actively receiving traffic.
+- Ensure the Sync Back process is running and not paused.
+- Monitor for incoming changes on the target. If no new writes are occurring, the lag may grow, which is expected in the absence of new data.
 
 
 ### Update Web App Settings

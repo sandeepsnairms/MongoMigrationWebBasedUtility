@@ -10,27 +10,38 @@
             </div>
             <div class="modal-body">
                 <div class="mb-3">
-                    <label for="mongo-url" class="form-label">Mongo Tools Download URL:</label>
-                    <input type="text" id="mongo-url" class="form-control" @bind="configuration.MongoToolsDownloadUrl" />
+                    <label for="mongo-url" class="form-label">Mongo Tools Download URL</label>
+                    <input type="text" id="mongo-url" class="form-control" @bind="Configuration.MongoToolsDownloadUrl" />
                 </div>
                 <div class="mb-3">
-                    <label for="has-uuid" class="form-label">UUID used in _id :</label>
-                    <input type="checkbox" id="has-uuid" @bind="configuration.HasUuid" />
+                    <label for="has-uuid" class="form-label">UUID used in _id</label>
+                    <input type="checkbox" id="has-uuid" @bind="Configuration.HasUuid" />
                 </div>
                 <div class="mb-3">
-                    <label for="chunk-size" class="form-label">Chunk Size (in MB) for MongoDump:</label>
-                    <input type="number" id="chunk-size" class="form-control" @bind="configuration.ChunkSizeInMb" />
+                    <label for="chunk-size" class="form-label">Chunk Size (in MB) for MongoDump</label>
+                    <input type="number" id="chunk-size" class="form-control" @bind="Configuration.ChunkSizeInMb" />
                 </div>
 
                 <div class="mb-3">
-                    <label for="csbatchsize" class="form-label">change stream Batch Size:</label>
-                    <input type="number" id="csbatchsize" class="form-control" @bind="configuration.ChangeStreamBatchSize" />
+                    <label for="csbatchsize" class="form-label">Mongo Copy Page Size</label>
+                    <input type="number" id="csbatchsize" class="form-control" @bind="Configuration.MongoCopyPageSize" />
                 </div>
 
                 <div class="mb-3">
-                    <label for="csbatchsize" class="form-label">Mongo Copy Page Size:</label>
-                    <input type="number" id="csbatchsize" class="form-control" @bind="configuration.MongoCopyPageSize" />
+                    <label for="csbatchsize" class="form-label">Max Documents per Change Stream Batch</label>
+                    <input type="number" id="csbatchsize" class="form-control" @bind="Configuration.ChangeStreamMaxDocsInBatch" />
                 </div>
+
+                <div class="mb-3">
+                    <label for="csbatchduration" class="form-label">Duration (in minutes) Change Stream Batch</label>
+                <input type="number" id="csbatchduration" class="form-control" @bind="Configuration.ChangeStreamBatchDuration" />
+                </div>
+
+                <div class="mb-3">
+                    <label for="cs-colls-inbatch" class="form-label">Max Collections per Change Stream Batch</label>
+                    <input type="number" id="cs-colls-inbatch" class="form-control" @bind="Configuration.ChangeStreamMaxCollsInBatch" />
+                </div>
+     
 
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
@@ -48,7 +59,7 @@
 @code
 {
     [Parameter]
-    public OnlineMongoMigrationProcessor.MigrationSettings? configuration { get; set; }
+    public OnlineMongoMigrationProcessor.MigrationSettings? Configuration { get; set; }
 
     [Parameter]
     public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings> OnConfigurationSaved { get; set; }
@@ -57,25 +68,36 @@
 
     private void HandleSubmit()
     {
-        if (configuration.MongoCopyPageSize < 50 || configuration.MongoCopyPageSize > 40000)
+        
+        if (Configuration.ChangeStreamBatchDuration < 1 || Configuration.ChangeStreamBatchDuration > 60)
+        {
+            errorMessage = "Batch Duration should be between 1 and 60 minutes.";
+            return;
+        }
+        if (Configuration.ChangeStreamMaxCollsInBatch < 1 || Configuration.ChangeStreamMaxCollsInBatch > 30)
+        {
+            errorMessage = "Max Collections per Batch should be between 1 and 30.";
+            return;
+        }
+        if (Configuration.MongoCopyPageSize < 50 || Configuration.MongoCopyPageSize > 40000)
         {
             errorMessage = "Page Size should be between 50 and 40000.";
             return;
         }
 
-        if (configuration.ChangeStreamBatchSize < 100 || configuration.ChangeStreamBatchSize > 1000000) // Fixed condition to compare correctly
+        if (Configuration.ChangeStreamMaxDocsInBatch < 100 || Configuration.ChangeStreamMaxDocsInBatch > 1000000) // Fixed condition to compare correctly
         {
-            errorMessage = "Batch Size should be between 100 and 1000000."; // Corrected error message
+            errorMessage = "Max Documents per Batch should be between 100 and 1000000."; // Corrected error message
             return;
         }
 
-        if (configuration.ChunkSizeInMb < 2 || configuration.ChunkSizeInMb > 5120)
+        if (Configuration.ChunkSizeInMb < 2 || Configuration.ChunkSizeInMb > 5120)
         {
             errorMessage = "Chunk Size (in MB) should be between 2 and 5120.";
             return;
         }
 
-        if (!Regex.Match(configuration.MongoToolsDownloadUrl, @"^https://.*\.zip$").Success)
+        if (!Regex.Match(Configuration.MongoToolsDownloadUrl, @"^https://.*\.zip$").Success)
         {
             errorMessage = "URL must start with 'https://' and end with '.zip'.";
             return;
@@ -83,7 +105,7 @@
 
         if (OnConfigurationSaved.HasDelegate)
         {
-            OnConfigurationSaved.InvokeAsync(configuration);
+            OnConfigurationSaved.InvokeAsync(Configuration);
         }
     }
 
