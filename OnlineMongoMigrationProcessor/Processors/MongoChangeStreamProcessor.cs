@@ -53,24 +53,26 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
-            if (_isCSProcessing)
+            try
             {
-                return; //already processing    
-            }
+                if (_isCSProcessing)
+                {
+                    return; //already processing    
+                }
 
-            _isCSProcessing = true;
+                _isCSProcessing = true;
 
-            cts = new CancellationTokenSource();
-            var token = cts.Token;
+                cts = new CancellationTokenSource();
+                var token = cts.Token;
 
 
-            int index = 0;
+                int index = 0;
 
-            _job.CSPostProcessingStarted = true;
-            _jobList?.Save(); // persist state
+                _job.CSPostProcessingStarted = true;
+                _jobList?.Save(); // persist state
 
-            //if(_syncBack || _job.CSStartsAfterAllUploads==true)
-            //{
+                //if(_syncBack || _job.CSStartsAfterAllUploads==true)
+                //{
                 _chnageStreamsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
                 {
@@ -79,44 +81,59 @@ namespace OnlineMongoMigrationProcessor
                         _chnageStreamsToProcess.Add($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", migrationUnit);
                     }
                 }
-            //}
+                //}
 
-            if (_chnageStreamsToProcess.Count == 0)
-            {
-                Log.WriteLine($"{_syncBackPrefix}No change streams to process.");
-                Log.Save();
-                _isCSProcessing = false;
-                return;
-            }
-
-            var keys = _chnageStreamsToProcess.Keys.ToList();
-
-            Log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {keys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors,keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
-            Log.Save();
-
-            
-            while (!token.IsCancellationRequested && !ExecutionCancelled)
-            {
-                var tasks = new List<Task>();
-
-                for (int i = 0; i < Math.Min(_concurrentProcessors, keys.Count); i++)
+                if (_chnageStreamsToProcess.Count == 0)
                 {
-                    var key = keys[index];
-                    var unit = _chnageStreamsToProcess[key];
-
-                    // Run synchronous method in background
-                    tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit,true), token));
-
-                    index = (index + 1) % keys.Count;
+                    Log.WriteLine($"{_syncBackPrefix}No change streams to process.");
+                    Log.Save();
+                    _isCSProcessing = false;
+                    return;
                 }
 
-                await Task.WhenAll(tasks);
+                var keys = _chnageStreamsToProcess.Keys.ToList();
 
-                // Pause briefly before next iteration
-                Thread.Sleep(100);
+                Log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {keys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors,keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
+                Log.Save();
+
+
+                while (!token.IsCancellationRequested && !ExecutionCancelled)
+                {
+                    var tasks = new List<Task>();
+
+                    for (int i = 0; i < Math.Min(_concurrentProcessors, keys.Count); i++)
+                    {
+                        var key = keys[index];
+                        var unit = _chnageStreamsToProcess[key];
+                      
+                        // Run synchronous method in background
+                        tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit,true), token));
+
+                        index = (index + 1) % keys.Count;
+                    }
+
+                    await Task.WhenAll(tasks);
+
+                    // Pause briefly before next iteration
+                    Thread.Sleep(100);
+                }
+
+                Log.WriteLine($"{_syncBackPrefix}Change stream processing completed.");
+                Log.Save();
+                _isCSProcessing = false;
             }
-
-            _isCSProcessing= false;
+            catch (OperationCanceledException)
+            {
+                Log.WriteLine($"{_syncBackPrefix}Change stream processing was cancelled.");
+                Log.Save();
+                _isCSProcessing = false;
+            }
+            catch (Exception ex)
+            {
+                Log.WriteLine($"{_syncBackPrefix}Error during change stream processing: {ex.ToString()}", LogType.Error);
+                Log.Save();
+                _isCSProcessing = false;
+            }
         }
 
         public void ProcessCollectionChangeStream(MigrationUnit item, bool IsCSProcessingRun=false)
