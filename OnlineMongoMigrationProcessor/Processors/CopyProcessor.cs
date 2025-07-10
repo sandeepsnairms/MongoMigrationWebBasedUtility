@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -75,7 +76,7 @@ namespace OnlineMongoMigrationProcessor
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                 if (_targetClient == null)
-                    _targetClient = new MongoClient(targetConnectionString);
+                    _targetClient = MongoClientFactory.Create(targetConnectionString);
 
                 if (_changeStreamProcessor == null)
                     _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
@@ -155,7 +156,7 @@ namespace OnlineMongoMigrationProcessor
                                 _cts = new CancellationTokenSource();
 
                                 if (_targetClient == null)
-                                    _targetClient = new MongoClient(targetConnectionString);
+                                    _targetClient = MongoClientFactory.Create(targetConnectionString);
 
                                 var documentCopier = new MongoDocumentCopier();
                                 documentCopier.Initialize(_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
@@ -240,9 +241,8 @@ namespace OnlineMongoMigrationProcessor
                     if (_job.IsOnline && !_executionCancelled)
                     {
                         if (_targetClient == null)
-                            _targetClient = new MongoClient(targetConnectionString);
+                            _targetClient = MongoClientFactory.Create(targetConnectionString);
 
-             
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
 

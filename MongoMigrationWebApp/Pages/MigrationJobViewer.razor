@@ -130,10 +130,16 @@
                             @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
                         </td>
                     }
-                    @if (MigrationJob != null && MigrationJob.IsOnline)
+                    @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
                     {
                         <td>
                             @GetChangeStreamLag(unit.CursorUtcTimestamp)
+                        </td>
+                    }
+                    @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
+                    {
+                        <td>
+                            @GetChangeStreamLag(unit.SyncBackCursorUtcTimestamp)
                         </td>
                     }
                 </tr>
