@@ -246,7 +246,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                    await MongoHelper.DeleteAndCopyIndexesAsync(string.Empty,targetConnectionString, collection, job.SkipIndexes);
+                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
 
                                     if (_job.SyncBackEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
                                     {
