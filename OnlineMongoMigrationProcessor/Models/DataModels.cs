@@ -169,6 +169,7 @@ namespace OnlineMongoMigrationProcessor
 
     public class MigrationSettings
     {
+        public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
         public bool HasUuid { get; set; }
         public long ChunkSizeInMb { get; set; }
@@ -199,6 +200,7 @@ namespace OnlineMongoMigrationProcessor
 					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 1 : loadedObject.ChangeStreamBatchDuration;
 					ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
 					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
+                    CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     initialized = true;
                 }
             }
@@ -211,7 +213,8 @@ namespace OnlineMongoMigrationProcessor
 				ChangeStreamMaxDocsInBatch = 10000;                
                 ChangeStreamBatchDuration = 1;
                 ChangeStreamMaxCollsInBatch = 5;
-			}
+                CACertContentsForSourceServer = string.Empty;
+            }
         }
 
         public bool Save()

@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Processors;
 using System;
 using System.Collections;
@@ -153,7 +154,7 @@ namespace OnlineMongoMigrationProcessor
                 attempts++;
                 try
                 {
-                    _sourceClient = new MongoClient(sourceConnectionString);
+                    _sourceClient = MongoClientFactory.Create(sourceConnectionString,false, Config.CACertContentsForSourceServer);
                     Log.WriteLine("Source Client Created");
                     if (job.IsSimulatedRun)
                     {
@@ -181,7 +182,7 @@ namespace OnlineMongoMigrationProcessor
                         Log.Save();
 
 
-                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.SourceConnectionString, _job.MigrationUnits[0]);
+                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(Config.CACertContentsForSourceServer,_job.SourceConnectionString, _job.MigrationUnits[0]);
                         _job.SourceServerVersion = retValue.Version;
                         _jobs?.Save();
 
@@ -245,7 +246,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
                                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                    await MongoHelper.DeleteAndCopyIndexesAsync(targetConnectionString, collection, job.SkipIndexes);
+                                    await MongoHelper.DeleteAndCopyIndexesAsync(string.Empty,targetConnectionString, collection, job.SkipIndexes);
 
                                     if (_job.SyncBackEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
                                     {
@@ -253,7 +254,7 @@ namespace OnlineMongoMigrationProcessor
                                         Log.Save();
 
                                         //Thread.Sleep(30*1000); // Wait for 30 seconds to ensure the target is ready
-                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_job.TargetConnectionString, unit,true);
+                                        var retValue = await MongoHelper.IsChangeStreamEnabledAsync(string.Empty,_job.TargetConnectionString, unit,true);
                                         checkedCS = true;
                                         if (!retValue.IsCSEnabled)
                                         {
@@ -290,7 +291,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (await MongoHelper.CheckCollectionExists(_sourceClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                             {
-                                var targetClient = new MongoClient(targetConnectionString);
+                                var targetClient = MongoClientFactory.Create(targetConnectionString);
 
                                 if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                                 {

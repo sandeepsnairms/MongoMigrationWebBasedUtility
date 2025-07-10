@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -76,7 +77,7 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string connectionString, MigrationUnit unit, bool createCollection=false)
+        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string PEMFileContents,string connectionString, MigrationUnit unit, bool createCollection=false)
         {
             string version = string.Empty;
             string collectionName = string.Empty;
@@ -85,11 +86,8 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 //// Connect to the MongoDB server
-                //var client = new MongoClient(connectionString);
-                var mongoUrl = new MongoUrl(connectionString);
-                var settings = MongoClientSettings.FromUrl(mongoUrl);
-                settings.ReadConcern = ReadConcern.Majority;
-                client = new MongoClient(settings);
+                client = MongoClientFactory.Create(connectionString,true, PEMFileContents);
+
                 
                 if (createCollection)
                 {
@@ -303,7 +301,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
+        public static async Task<bool> DeleteAndCopyIndexesAsync(string PEMFileContents,string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
         {
             try
             {
@@ -312,7 +310,7 @@ namespace OnlineMongoMigrationProcessor
                 var sourceCollectionName = sourceCollection.CollectionNamespace.CollectionName;
 
                 // Connect to the target database
-                var targetClient = new MongoClient(targetConnectionString);
+                var targetClient = MongoClientFactory.Create(targetConnectionString);
                 var targetDatabaseName = sourceDatabase.DatabaseNamespace.DatabaseName;
                 var targetDatabase = targetClient.GetDatabase(targetDatabaseName);
                 var targetCollectionName = sourceCollectionName;

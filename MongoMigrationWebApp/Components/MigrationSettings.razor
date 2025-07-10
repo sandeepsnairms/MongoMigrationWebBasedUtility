@@ -41,7 +41,18 @@
                     <label for="cs-colls-inbatch" class="form-label">Max Collections per Change Stream Batch</label>
                     <input type="number" id="cs-colls-inbatch" class="form-control" @bind="Configuration.ChangeStreamMaxCollsInBatch" />
                 </div>
-     
+                <div class="mb-3">
+                    <label for="pem-text" class="form-label">CA Certificate file for Source Server(.pem)</label>
+                    <InputFile OnChange="OnPemFileUpload" />
+
+                    @if (!string.IsNullOrWhiteSpace(Configuration.CACertContentsForSourceServer))
+                    {
+                        <button class="btn btn-outline-danger btn-sm mt-2" @onclick="ClearPem">
+                            Delete Saved Certificate
+                        </button>
+                    }
+                </div>
+
 
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
@@ -65,6 +76,19 @@
     public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings> OnConfigurationSaved { get; set; }
 
     private string errorMessage = string.Empty;
+
+    private void ClearPem()
+    {
+        Configuration.CACertContentsForSourceServer = string.Empty;
+    }
+
+    private async Task OnPemFileUpload(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 1024 * 1024));
+        Configuration.CACertContentsForSourceServer = await reader.ReadToEndAsync();
+    }
+
 
     private void HandleSubmit()
     {

@@ -1,4 +1,5 @@
 ﻿using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -45,8 +46,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             int attempts = 0;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
-            var sourceClient = new MongoClient(sourceConnectionString);
-            var targetClient = new MongoClient(targetConnectionString);
+            var sourceClient = MongoClientFactory.Create( sourceConnectionString,false, _config.CACertContentsForSourceServer);
+            var targetClient = MongoClientFactory.Create(targetConnectionString);
 
             _syncBackToSource = null;
             _syncBackToSource = new MongoChangeStreamProcessor(sourceClient, targetClient, _jobs, _job,_config,true);

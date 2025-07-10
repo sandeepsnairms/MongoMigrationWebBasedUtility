@@ -96,7 +96,7 @@ namespace OnlineMongoMigrationProcessor
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                 if (_targetClient == null)
-                    _targetClient = new MongoClient(targetConnectionString);
+                    _targetClient = MongoClientFactory.Create(targetConnectionString);
 
                 if (_changeStreamProcessor == null)
                     _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _job, _config);
@@ -376,7 +376,7 @@ namespace OnlineMongoMigrationProcessor
                                         if (item.MigrationChunks[i].RestoredFailedDocCount > 0)
                                         {
                                             if (_targetClient == null)
-                                                _targetClient = new MongoClient(targetConnectionString);
+                                                _targetClient = MongoClientFactory.Create(targetConnectionString);
 
                                             var targetDb = _targetClient.GetDatabase(item.DatabaseName);
                                             var targetCollection = targetDb.GetCollection<BsonDocument>(item.CollectionName);
@@ -538,8 +538,7 @@ namespace OnlineMongoMigrationProcessor
                     if (_job.IsOnline && !_executionCancelled)
                     {
                         if (_targetClient == null)
-                            _targetClient = new MongoClient(targetConnectionString);
-                       
+                            _targetClient = MongoClientFactory.Create(targetConnectionString);
 
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs,_job, _config);
