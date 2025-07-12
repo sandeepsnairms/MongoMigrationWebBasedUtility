@@ -242,7 +242,7 @@ namespace OnlineMongoMigrationProcessor
                                 }
 
 
-                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
+                                Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} chunk(s)");
                                 Log.Save();
 
                                 unit.MigrationChunks= chunks;
@@ -309,14 +309,17 @@ namespace OnlineMongoMigrationProcessor
                                    
 									Log.Save();
 								}
-                                _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
-
-								// since CS processsing has started, we can break the loop. No need to process all collections
-								if (_job.IsOnline && _job.SyncBackEnabled && _job.CSPostProcessingStarted)
+                                if (_migrationProcessor != null)
                                 {
-									continueProcessing = false;
-									break;
-								}
+                                    _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
+
+                                    // since CS processsing has started, we can break the loop. No need to process all collections
+                                    if (_job.IsOnline && _job.SyncBackEnabled && _job.CSPostProcessingStarted)
+                                    {
+                                        continueProcessing = false;
+                                        break;
+                                    }
+                                }
 
 							}
                             else
@@ -444,9 +447,9 @@ namespace OnlineMongoMigrationProcessor
 
                 List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
 
-                if (Config.HasUuid)
+                if (Config.ReadBinary)
                 {
-                    dataTypes.Add(DataType.UUID);
+                    dataTypes.Add(DataType.Binary);
                 }
 
                 foreach (var dataType in dataTypes)

@@ -30,7 +30,8 @@ namespace OnlineMongoMigrationProcessor
         private MongoChangeStreamProcessor _changeStreamProcessor;
         private CancellationTokenSource _cts;
 
-        private bool _uploaderProcessing = false;
+        //private bool _uploaderProcessing = false;
+        private static readonly SemaphoreSlim _uploadLock = new(1, 1);
         private bool _postUploadCSProcessing = false;
 
         private SafeDictionary<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeDictionary<string, MigrationUnit>();
@@ -82,8 +83,15 @@ namespace OnlineMongoMigrationProcessor
 
             var database = _sourceClient.GetDatabase(dbName);
             var collection = database.GetCollection<BsonDocument>(colName);
-                       
-            
+
+            try
+            {
+                _uploadLock.Release(); // reset the flag 
+            }
+            catch
+            {
+                // Do nothing, just reset the flag
+            }
             DateTime migrationJobStartTime = DateTime.Now;
 
             //when resuming a job, we need to check if post-upload change stream processing is already in progress
@@ -294,11 +302,11 @@ namespace OnlineMongoMigrationProcessor
         private void Upload(MigrationUnit item, string targetConnectionString, bool force=false)
         {
 
-            if (_uploaderProcessing && !force)
+            if (!_uploadLock.WaitAsync(0).GetAwaiter().GetResult()) // don't wait, just check
+            {
                 return; // Prevent concurrent uploads
-
-            _uploaderProcessing = true; // Set flag to indicate upload is in progress
-
+            }
+                      
 
             string dbName = item.DatabaseName;
             string colName = item.CollectionName;
@@ -589,7 +597,7 @@ namespace OnlineMongoMigrationProcessor
                        
                     }
 
-                    _uploaderProcessing = false; // reset the flag to allow next upload to invoke uploader
+                    _uploadLock.Release(); // reset the flag to allow next upload to invoke uploader
 
                 }
                 catch

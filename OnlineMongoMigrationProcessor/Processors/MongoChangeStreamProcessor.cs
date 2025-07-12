@@ -119,13 +119,14 @@ namespace OnlineMongoMigrationProcessor
                 while (!token.IsCancellationRequested && !ExecutionCancelled)
                 {
                     var tasks = new List<Task>();
-
+                    var collectionProcessed = new List<string>();
                     for (int i = 0; i < Math.Min(_concurrentProcessors, keys.Count); i++)
                     {
                         int currentCount=keys.Count;
                         var key = keys[index];
                         var unit = _chnageStreamsToProcess[key];
-                      
+
+                        collectionProcessed.Add(key);
                         // Run synchronous method in background
                         tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit,true), token));
 
@@ -137,6 +138,8 @@ namespace OnlineMongoMigrationProcessor
                         index = (index + 1) % keys.Count;
                     }
 
+                    Log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}");
+                    Log.Save();
                     await Task.WhenAll(tasks);
 
                     // Pause briefly before next iteration
@@ -218,14 +221,15 @@ namespace OnlineMongoMigrationProcessor
                     if (!_syncBack)
                     {
 
-                        if (item.CursorUtcTimestamp > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3"))
+                        if (item.CursorUtcTimestamp > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3") && !item.ResetChangeStream) //skip CursorUtcTimestamp if its reset 
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(item.CursorUtcTimestamp.ToLocalTime());
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
-                        else if (item.ResumeToken != null)
+                        else if (item.ResumeToken != null && !item.ResetChangeStream) //skip resume token if its reset
                         {
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
+                           
                         }
                         else if (item.ResumeToken == null && _job.SourceServerVersion.StartsWith("3"))
                         {
@@ -235,6 +239,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                            item.ResetChangeStream = false; //reset the start time after setting resume token
                         }
                     }
                     else
@@ -297,7 +302,8 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                using var cursor = sourceCollection.Watch(options);
+                //using var cursor = sourceCollection.Watch(options);
+                using var cursor = sourceCollection.Watch(options, cancellationToken);
                 int counter = 0;
 
                 if (_job.SourceServerVersion.StartsWith("3"))
