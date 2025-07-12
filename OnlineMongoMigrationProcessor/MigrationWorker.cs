@@ -234,14 +234,21 @@ namespace OnlineMongoMigrationProcessor
 
                                 var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
 
+                                if(chunks.Count==0)
+                                {  
+                                    Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has no records to migrate", LogType.Error);
+                                    unit.SourceStatus = CollectionStatus.NotFound;                                    
+                                    continue;
+                                }
+
+
                                 Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} Chunks");
                                 Log.Save();
 
-                                unit.MigrationChunks = chunks;
-                                unit.ChangeStreamStartedOn = DateTime.Now;
+                                unit.MigrationChunks= chunks;
+                                unit.ChangeStreamStartedOn = DateTime.Now;  
 
-
-
+                                
                                 if (!job.IsSimulatedRun && !job.AppendMode)
                                 {
                                     var database = _sourceClient.GetDatabase(unit.DatabaseName);
@@ -299,10 +306,7 @@ namespace OnlineMongoMigrationProcessor
                                     {
                                         Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");                                        
                                     }
-                                    else
-                                    {
-                                        Log.WriteLine($"Change stream processing will resume.");
-									}
+                                   
 									Log.Save();
 								}
                                 _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);
@@ -441,7 +445,9 @@ namespace OnlineMongoMigrationProcessor
                 List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
 
                 if (Config.HasUuid)
+                {
                     dataTypes.Add(DataType.UUID);
+                }
 
                 foreach (var dataType in dataTypes)
                 {

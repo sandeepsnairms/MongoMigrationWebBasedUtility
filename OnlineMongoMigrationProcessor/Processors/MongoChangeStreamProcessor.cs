@@ -49,7 +49,27 @@ namespace OnlineMongoMigrationProcessor
             _processorRunDurationInMin = _config?.ChangeStreamBatchDuration ?? 1;
         }
 
-
+        public bool AddCollectionsToProcess(MigrationUnit item, CancellationTokenSource cts)
+        {
+            string key = $"{item.DatabaseName}.{item.CollectionName}";
+            if (item.SourceStatus != CollectionStatus.OK || item.DumpComplete != true || item.RestoreComplete != true)
+            {
+                Log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams to process.", LogType.Error);
+                return false;
+            }            
+            if (!_chnageStreamsToProcess.ContainsKey(key))
+            {
+                _chnageStreamsToProcess.Add(key, item);
+                Log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.");
+                Log.Save();
+                var result=RunCSPostProcessingAsync(cts);
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
@@ -71,17 +91,16 @@ namespace OnlineMongoMigrationProcessor
                 _job.CSPostProcessingStarted = true;
                 _jobList?.Save(); // persist state
 
-                //if(_syncBack || _job.CSStartsAfterAllUploads==true)
-                //{
+
                 _chnageStreamsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
                 {
-                    if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                    if (migrationUnit.SourceStatus == CollectionStatus.OK && migrationUnit.DumpComplete==true && migrationUnit.RestoreComplete==true)
                     {
                         _chnageStreamsToProcess.Add($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", migrationUnit);
                     }
                 }
-                //}
+
 
                 if (_chnageStreamsToProcess.Count == 0)
                 {
@@ -103,12 +122,18 @@ namespace OnlineMongoMigrationProcessor
 
                     for (int i = 0; i < Math.Min(_concurrentProcessors, keys.Count); i++)
                     {
+                        int currentCount=keys.Count;
                         var key = keys[index];
                         var unit = _chnageStreamsToProcess[key];
                       
                         // Run synchronous method in background
                         tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit,true), token));
 
+                        keys = _chnageStreamsToProcess.Keys.ToList();//get latest keys after each iteration,new items could have been added.
+                        if( currentCount!= keys.Count)
+                        {
+                            Log.WriteLine($"{_syncBackPrefix}Change stream processing updated to {keys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
+                        }
                         index = (index + 1) % keys.Count;
                     }
 
@@ -136,14 +161,14 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public void ProcessCollectionChangeStream(MigrationUnit item, bool IsCSProcessingRun=false)
+        private void ProcessCollectionChangeStream(MigrationUnit item, bool IsCSProcessingRun=false)
         {
             try
             {
                 string databaseName = item.DatabaseName;
                 string collectionName = item.CollectionName;
 
-
+                /*
                 if(_job.CSStartsAfterAllUploads==true && !_job.CSPostProcessingStarted)
                 {
                     if (!Helper.IsOfflineJobCompleted(_job) || (Helper.IsOfflineJobCompleted(_job) && _job.SyncBackEnabled && !_job.ProcessingSyncBack))
@@ -158,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
                 else if (_job.CSStartsAfterAllUploads == true && _job.CSPostProcessingStarted && !IsCSProcessingRun)
                 {
                     return;
-                }
+                }*/
 
 
                 IMongoDatabase sourceDb;
