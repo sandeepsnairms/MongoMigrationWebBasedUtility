@@ -1,0 +1,104 @@
+﻿@using OnlineMongoMigrationProcessor
+@using System.Text.RegularExpressions;
+
+<div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
+    <div class="modal-dialog bg-dark">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h4 class="modal-title">Reset Change Stream</h4>
+                <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
+            </div>
+            <div class="modal-body">
+                <table class="table table-borderless">
+                    <thead>
+                        <tr>
+                            <th>Collection</th>
+                            <th>Reset</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var mu in MigrationUnits)
+                        {
+                            <tr>
+                                <td>@mu.DatabaseName.@mu.CollectionName</td>
+                                <td>
+                                    <input type="checkbox"
+                                           class="form-check-input"
+                                           checked="@IsUnitToggled(mu)"
+                                           @onchange="(e) => OnCollectionToggleChanged(e, mu)" />
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+               
+            </div>
+
+            @if (updatedMigrationUnits.Count > 0)
+            {
+                <div class="alert alert-danger mt-2"> Resetting the change stream will reprocess all changes for the selected collections from the beginning of the migration. This may increase the migration workload and potentially delay processing for other collections. </div>
+            }
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" @onclick=@HandleSubmit>Ok</button>
+                <button type="button" class="btn btn-secondary" @onclick="@Cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code
+{
+    [Parameter]
+    public List<MigrationUnit>? MigrationUnits { get; set; }
+
+    [Parameter]
+    public EventCallback<List<MigrationUnit>> OnCollectionsUpdated { get; set; }
+
+    private List<MigrationUnit> updatedMigrationUnits = new List<MigrationUnit>();
+
+    protected override void OnInitialized()
+    {
+        updatedMigrationUnits = MigrationUnits?.Where(mu => mu.ResetChangeStream).ToList() ?? new List<MigrationUnit>();
+    }
+
+    private void OnCollectionToggleChanged(ChangeEventArgs e, MigrationUnit mu)
+    {
+        bool isChecked = (bool)e.Value;
+        if (!isChecked)
+        {
+            updatedMigrationUnits.Remove(mu);
+        }
+        else
+        {
+            updatedMigrationUnits.Add(mu);
+        }        
+    }   
+
+    private bool IsUnitToggled(MigrationUnit mu)
+    {
+        if(updatedMigrationUnits.Contains(mu))
+        {
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
+
+    private void HandleSubmit()
+    {
+        if (OnCollectionsUpdated.HasDelegate)
+        {
+            OnCollectionsUpdated.InvokeAsync(updatedMigrationUnits);
+        }
+    }
+
+    private void Cancel()
+    {
+        if (OnCollectionsUpdated.HasDelegate)
+        {
+            OnCollectionsUpdated.InvokeAsync(null);
+        }
+    }
+}

@@ -49,7 +49,27 @@ namespace OnlineMongoMigrationProcessor
             _processorRunDurationInMin = _config?.ChangeStreamBatchDuration ?? 1;
         }
 
-
+        public bool AddCollectionsToProcess(MigrationUnit item, CancellationTokenSource cts)
+        {
+            string key = $"{item.DatabaseName}.{item.CollectionName}";
+            if (item.SourceStatus != CollectionStatus.OK || item.DumpComplete != true || item.RestoreComplete != true)
+            {
+                Log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams to process.", LogType.Error);
+                return false;
+            }            
+            if (!_chnageStreamsToProcess.ContainsKey(key))
+            {
+                _chnageStreamsToProcess.Add(key, item);
+                Log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.");
+                Log.Save();
+                var result=RunCSPostProcessingAsync(cts);
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
@@ -71,17 +91,16 @@ namespace OnlineMongoMigrationProcessor
                 _job.CSPostProcessingStarted = true;
                 _jobList?.Save(); // persist state
 
-                //if(_syncBack || _job.CSStartsAfterAllUploads==true)
-                //{
+
                 _chnageStreamsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
                 {
-                    if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                    if (migrationUnit.SourceStatus == CollectionStatus.OK && migrationUnit.DumpComplete==true && migrationUnit.RestoreComplete==true)
                     {
                         _chnageStreamsToProcess.Add($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", migrationUnit);
                     }
                 }
-                //}
+
 
                 if (_chnageStreamsToProcess.Count == 0)
                 {
@@ -100,18 +119,27 @@ namespace OnlineMongoMigrationProcessor
                 while (!token.IsCancellationRequested && !ExecutionCancelled)
                 {
                     var tasks = new List<Task>();
-
+                    var collectionProcessed = new List<string>();
                     for (int i = 0; i < Math.Min(_concurrentProcessors, keys.Count); i++)
                     {
+                        int currentCount=keys.Count;
                         var key = keys[index];
                         var unit = _chnageStreamsToProcess[key];
-                      
+
+                        collectionProcessed.Add(key);
                         // Run synchronous method in background
                         tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit,true), token));
 
+                        keys = _chnageStreamsToProcess.Keys.ToList();//get latest keys after each iteration,new items could have been added.
+                        if( currentCount!= keys.Count)
+                        {
+                            Log.WriteLine($"{_syncBackPrefix}Change stream processing updated to {keys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, keys.Count)} collections for {_processorRunDurationInMin} minute(s).");
+                        }
                         index = (index + 1) % keys.Count;
                     }
 
+                    Log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}");
+                    Log.Save();
                     await Task.WhenAll(tasks);
 
                     // Pause briefly before next iteration
@@ -136,14 +164,14 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public void ProcessCollectionChangeStream(MigrationUnit item, bool IsCSProcessingRun=false)
+        private void ProcessCollectionChangeStream(MigrationUnit item, bool IsCSProcessingRun=false)
         {
             try
             {
                 string databaseName = item.DatabaseName;
                 string collectionName = item.CollectionName;
 
-
+                /*
                 if(_job.CSStartsAfterAllUploads==true && !_job.CSPostProcessingStarted)
                 {
                     if (!Helper.IsOfflineJobCompleted(_job) || (Helper.IsOfflineJobCompleted(_job) && _job.SyncBackEnabled && !_job.ProcessingSyncBack))
@@ -158,7 +186,7 @@ namespace OnlineMongoMigrationProcessor
                 else if (_job.CSStartsAfterAllUploads == true && _job.CSPostProcessingStarted && !IsCSProcessingRun)
                 {
                     return;
-                }
+                }*/
 
 
                 IMongoDatabase sourceDb;
@@ -193,14 +221,15 @@ namespace OnlineMongoMigrationProcessor
                     if (!_syncBack)
                     {
 
-                        if (item.CursorUtcTimestamp > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3"))
+                        if (item.CursorUtcTimestamp > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3") && !item.ResetChangeStream) //skip CursorUtcTimestamp if its reset 
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(item.CursorUtcTimestamp.ToLocalTime());
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
-                        else if (item.ResumeToken != null)
+                        else if (item.ResumeToken != null && !item.ResetChangeStream) //skip resume token if its reset
                         {
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(item.ResumeToken) };
+                           
                         }
                         else if (item.ResumeToken == null && _job.SourceServerVersion.StartsWith("3"))
                         {
@@ -210,6 +239,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)item.ChangeStreamStartedOn);
                             options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                            item.ResetChangeStream = false; //reset the start time after setting resume token
                         }
                     }
                     else
@@ -272,7 +302,8 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                using var cursor = sourceCollection.Watch(options);
+                //using var cursor = sourceCollection.Watch(options);
+                using var cursor = sourceCollection.Watch(options, cancellationToken);
                 int counter = 0;
 
                 if (_job.SourceServerVersion.StartsWith("3"))

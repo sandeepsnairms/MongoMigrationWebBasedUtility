@@ -87,6 +87,11 @@
     <ManageCollections MigrationUnits="@MigrationJob.MigrationUnits" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
+@if (_resetChangeStreamDialogOpen && MigrationJob != null)
+{
+    <ResetChangeStream MigrationUnits="@MigrationJob.MigrationUnits.Where(mu => mu.SourceStatus == CollectionStatus.OK).ToList()" OnCollectionsUpdated="@OnCSReset" />
+}
+
 <table class="table">
     <thead>
         <tr>
@@ -133,13 +138,13 @@
                     @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
                     {
                         <td>
-                            @GetChangeStreamLag(unit.CursorUtcTimestamp)
+                            @GetChangeStreamLag(unit)
                         </td>
                     }
                     @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
                     {
                         <td>
-                            @GetChangeStreamLag(unit.SyncBackCursorUtcTimestamp)
+                            @GetChangeStreamLag(unit,true)
                         </td>
                     }
                 </tr>
@@ -148,7 +153,11 @@
     </tbody>
 </table>
 <div class="d-flex align-items-center mb-3">
-    <button class="btn btn-primary mx-2" title="Update Collections"  @onclick="ManageCollections">Update Collections</button>
+    <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections">Update Collections</button>
+    @if (MigrationJob.IsOnline)
+    {
+        <button class="btn btn-primary mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">Reset Change Stream</button>
+    }
 </div>
 
 <h5 class="pt-4">
@@ -250,6 +259,7 @@
     private bool _yesNoDialogOpen;
     private YesNoDialog.Category _yesNoDialogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
+    private bool _resetChangeStreamDialogOpen;
 
     private string GetRowClass(string type, string message)
     {
@@ -312,15 +322,25 @@
         return Task.FromResult(false);
     }
 
-    private string GetChangeStreamLag(DateTime cursorUtcTimestamp)
+    private string GetChangeStreamLag(MigrationUnit unit, bool isSyncBack=false)
     {
-        if (cursorUtcTimestamp == DateTime.MinValue)
+        DateTime timestamp;
+        if (isSyncBack)
+        {
+            timestamp = unit.SyncBackCursorUtcTimestamp;
+        }
+        else
+        {
+            timestamp = unit.CursorUtcTimestamp;
+        }
+
+        if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
         {
             return "NA";
         }
 
         var currentUtc = DateTime.UtcNow;
-        var lag = currentUtc - cursorUtcTimestamp;
+        var lag = currentUtc - timestamp;
 
         if (lag.TotalSeconds < 0)
         {
@@ -406,7 +426,21 @@
             MigrationJob.CurrentlyActive = false;
         }
     }
-
+    private void ResetChangeStream()
+    {
+        _errorMessage = string.Empty;
+        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
+        {
+            _resetChangeStreamDialogOpen = true;
+        }
+        else
+        {
+            if (MigrationJob.ProcessingSyncBack)
+                _errorMessage = "You cannot reset change stream after sync back has started.";
+            else
+                _errorMessage = "Please pause the job before resetting change stream.";
+        }
+    }
     private void ManageCollections()
     {
         _errorMessage = string.Empty;
@@ -472,9 +506,28 @@
         _yesNoDialogOpen = true;
     }
 
+
+    private void OnCSReset(List<MigrationUnit> migrationUnits)
+    {
+        _resetChangeStreamDialogOpen = false;
+        if (migrationUnits != null)
+        {
+            for (int i = 0; i < MigrationJob.MigrationUnits.Count; i++)
+            {
+                if (migrationUnits.Contains(MigrationJob.MigrationUnits[i]))
+                    MigrationJob.MigrationUnits[i].ResetChangeStream = true; // Reset change stream for every second collection
+                else
+                    MigrationJob.MigrationUnits[i].ResetChangeStream = false; // Ensure other collections are not reset
+            }
+            JobManager.Save();
+        }
+    }
+
+
     private void OnCollectionsUpdated(List<MigrationUnit> migrationUnits)
     {
         _manageCollectionDialogOpen = false;
+
 
         if (migrationUnits != null)
         {

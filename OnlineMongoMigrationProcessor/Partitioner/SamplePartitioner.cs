@@ -170,42 +170,54 @@ namespace OnlineMongoMigrationProcessor
             Boundary segmentBoundary = null;
             Boundary chunkBoundary = null;
 
-
-            for (int i = 0; i < partitionValues.Count; i++)
+            if (dataType == DataType.Other)
             {
-                var min = partitionValues[i];
-                var max = i == partitionValues.Count - 1 ? BsonMaxKey.Value : partitionValues[i + 1];
-
-                if (i % segmentCount == 0) // Parent boundary
+                // If the data type is Other, we treat it as a single chunk, no lte and gte
+                chunkBoundary = new Boundary
                 {
-                    chunkBoundary = new Boundary
-                    {
-                        StartId = min,
-                        EndId = max,
-                        SegmentBoundaries = new List<Boundary>() // Initialize SegmentBoundaries here
-                    };
-
-                    chunkBoundaries.Boundaries ??= new List<Boundary>(); // Use null-coalescing assignment
-                    chunkBoundaries.Boundaries.Add(chunkBoundary);
-                }
-                else // Child boundary
+                    StartId = BsonNull.Value,
+                    EndId = BsonNull.Value,
+                    SegmentBoundaries = new List<Boundary>() // Initialize SegmentBoundaries here
+                };
+                chunkBoundaries.Boundaries ??= new List<Boundary>(); // Use null-coalescing assignment
+                chunkBoundaries.Boundaries.Add(chunkBoundary);
+            }
+            else
+            {
+                for (int i = 0; i < partitionValues.Count; i++)
                 {
-                    if (chunkBoundary == null)
+                    var min = partitionValues[i];
+                    var max = i == partitionValues.Count - 1 ? BsonMaxKey.Value : partitionValues[i + 1];
+
+                    if (i % segmentCount == 0) // Parent boundary
                     {
-                        throw new Exception("Parent boundary not found");
+                        chunkBoundary = new Boundary
+                        {
+                            StartId = min,
+                            EndId = max,
+                            SegmentBoundaries = new List<Boundary>() // Initialize SegmentBoundaries here
+                        };
+
+                        chunkBoundaries.Boundaries ??= new List<Boundary>(); // Use null-coalescing assignment
+                        chunkBoundaries.Boundaries.Add(chunkBoundary);
                     }
-
-                    segmentBoundary = new Boundary
+                    else // Child boundary
                     {
-                        StartId = min,
-                        EndId = max
-                    };
+                        if (chunkBoundary == null)
+                        {
+                            throw new Exception("Parent boundary not found");
+                        }
 
-                    chunkBoundary.SegmentBoundaries.Add(segmentBoundary);
-                    chunkBoundary.EndId = max; // Update the EndId of the parent boundary to match the last segment.
+                        segmentBoundary = new Boundary
+                        {
+                            StartId = min,
+                            EndId = max
+                        };
+
+                        chunkBoundary.SegmentBoundaries.Add(segmentBoundary);
+                        chunkBoundary.EndId = max; // Update the EndId of the parent boundary to match the last segment.
+                    }
                 }
-
-
             }
 
 
@@ -262,11 +274,16 @@ namespace OnlineMongoMigrationProcessor
                 case DataType.Date:
                     matchCondition = new BsonDocument(idField, new BsonDocument("$type", 9)); // 9 is BSON type for Date
                     break;
-                case DataType.UUID:
-                    matchCondition = new BsonDocument(idField, new BsonDocument("$type", 4)); // 4 is BSON type for Binary (UUID)
+                case DataType.Binary:
+                    matchCondition = new BsonDocument(idField, new BsonDocument("$type", 5)); // 5 is BSON type for Binary
                     break;
                 case DataType.Object:
                     matchCondition = new BsonDocument(idField, new BsonDocument("$type", 3)); // 3 is BSON type for embedded document (Object)
+                    break;
+                case DataType.Other:
+                    // Exclude all known types to catch "others"
+                    var excludedTypes = new BsonArray { 2, 3, 5, 7, 9, 16, 18, 19 };
+                    matchCondition = new BsonDocument(idField, new BsonDocument("$nin", new BsonDocument("$type", excludedTypes)));
                     break;
                 default:
                     throw new ArgumentException($"Unsupported DataType: {dataType}");
@@ -328,11 +345,12 @@ namespace OnlineMongoMigrationProcessor
                     lt ??= new BsonDateTime(DateTime.Parse(ltString));
                     break;
 
-                case DataType.UUID:
-                    gte ??= new BsonBinaryData(Guid.Parse(gteStrring).ToByteArray(), BsonBinarySubType.UuidStandard);
-                    lt ??= new BsonBinaryData(Guid.Parse(ltString).ToByteArray(), BsonBinarySubType.UuidStandard);
+                case DataType.Binary:
+                case DataType.Other:
+                    // For these, we treat it as a special case with no specific bounds
+                    gte ??= BsonNull.Value;
+                    lt ??= BsonMaxKey.Value;
                     break;
-
                 default:
                     throw new ArgumentException($"Unsupported data type: {dataType}");
             }

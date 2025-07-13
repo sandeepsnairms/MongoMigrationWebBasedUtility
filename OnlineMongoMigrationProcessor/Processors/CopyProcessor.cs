@@ -238,7 +238,7 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     // Process change streams
-                    if (_job.IsOnline && !_executionCancelled)
+                    if (_job.IsOnline && !_executionCancelled && !_job.CSStartsAfterAllUploads)
                     {
                         if (_targetClient == null)
                             _targetClient = MongoClientFactory.Create(targetConnectionString);
@@ -246,7 +246,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
 
-                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(item));
+                        _changeStreamProcessor.AddCollectionsToProcess(item, _cts);
                     }
 
                     if ( !_executionCancelled)
@@ -266,6 +266,13 @@ namespace OnlineMongoMigrationProcessor
                         {
                             // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
                             _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
+
+                            if (_targetClient == null)
+                                _targetClient = MongoClientFactory.Create(targetConnectionString);
+
+                            if (_changeStreamProcessor == null)
+                                _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
+
                             var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                         }
                     }

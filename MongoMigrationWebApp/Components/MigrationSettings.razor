@@ -14,8 +14,10 @@
                     <input type="text" id="mongo-url" class="form-control" @bind="Configuration.MongoToolsDownloadUrl" />
                 </div>
                 <div class="mb-3">
-                    <label for="has-uuid" class="form-label">UUID used in _id</label>
-                    <input type="checkbox" id="has-uuid" @bind="Configuration.HasUuid" />
+                    <label for="has-uuid" class="form-label">
+                        <input type="checkbox" id="has-uuid" @bind="Configuration.ReadBinary" />
+                        Binary format utilized for the _id
+                    </label>
                 </div>
                 <div class="mb-3">
                     <label for="chunk-size" class="form-label">Chunk Size (in MB) for MongoDump</label>
@@ -34,7 +36,7 @@
 
                 <div class="mb-3">
                     <label for="csbatchduration" class="form-label">Duration (in minutes) Change Stream Batch</label>
-                <input type="number" id="csbatchduration" class="form-control" @bind="Configuration.ChangeStreamBatchDuration" />
+                    <input type="number" id="csbatchduration" class="form-control" @bind="Configuration.ChangeStreamBatchDuration" />
                 </div>
 
                 <div class="mb-3">

@@ -1,10 +1,12 @@
-﻿using System;
+﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
+using MongoDB.Driver;
+using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Helpers;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
-using MongoDB.Bson;
-using MongoDB.Driver;
-using Newtonsoft.Json;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -113,19 +115,29 @@ namespace OnlineMongoMigrationProcessor
         public string CollectionName { get; set; }
         public string? ResumeToken { get; set; }
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
-        public BsonValue? ResumeDocumentId { get; set; }
+
+        [JsonProperty("ResumeDocumentId")]
+        private object? _resumeDocumentIdRaw { get; set; }
+
+        [JsonIgnore]
+        public BsonValue? ResumeDocumentId
+        {
+            get => _resumeDocumentIdRaw != null ? BsonValue.Create(_resumeDocumentIdRaw) : null;
+            set => _resumeDocumentIdRaw = value;
+        }
+
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
-
+        
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
-
 
         public double DumpPercent { get; set; }
         public double RestorePercent { get; set; }
         public bool DumpComplete { get; set; }
         public bool RestoreComplete { get; set; }
+        public bool ResetChangeStream { get; set; }
         public long EstimatedDocCount { get; set; }
         public CollectionStatus SourceStatus { get; set; }
         public long ActualDocCount { get; set; }
@@ -171,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
     {
         public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
-        public bool HasUuid { get; set; }
+        public bool ReadBinary { get; set; }
         public long ChunkSizeInMb { get; set; }
         public int ChangeStreamMaxDocsInBatch { get; set; }
 		public int ChangeStreamBatchDuration { get; set; }
@@ -193,7 +205,7 @@ namespace OnlineMongoMigrationProcessor
                 var loadedObject = JsonConvert.DeserializeObject<MigrationSettings>(json);
                 if (loadedObject != null)
                 {
-                    HasUuid = loadedObject.HasUuid;
+                    ReadBinary = loadedObject.ReadBinary;
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
 					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
@@ -206,7 +218,7 @@ namespace OnlineMongoMigrationProcessor
             }
             if (!initialized)
             {
-                HasUuid = false;
+                ReadBinary = false;
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMb = 5120;
 				MongoCopyPageSize = 500;
@@ -281,9 +293,10 @@ namespace OnlineMongoMigrationProcessor
         Int64,
         Decimal128,
         Date,
-        UUID,
+        Binary,
         String,
-        Object
+        Object,
+        Other
     }
 }
 

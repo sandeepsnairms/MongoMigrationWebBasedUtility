@@ -30,7 +30,8 @@ namespace OnlineMongoMigrationProcessor
         private MongoChangeStreamProcessor _changeStreamProcessor;
         private CancellationTokenSource _cts;
 
-        private bool _uploaderProcessing = false;
+        //private bool _uploaderProcessing = false;
+        private static readonly SemaphoreSlim _uploadLock = new(1, 1);
         private bool _postUploadCSProcessing = false;
 
         private SafeDictionary<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeDictionary<string, MigrationUnit>();
@@ -82,14 +83,27 @@ namespace OnlineMongoMigrationProcessor
 
             var database = _sourceClient.GetDatabase(dbName);
             var collection = database.GetCollection<BsonDocument>(colName);
-                       
-            
+
+            try
+            {
+                _uploadLock.Release(); // reset the flag 
+            }
+            catch
+            {
+                // Do nothing, just reset the flag
+            }
             DateTime migrationJobStartTime = DateTime.Now;
 
             //when resuming a job, we need to check if post-upload change stream processing is already in progress
 
             if (_postUploadCSProcessing)
-                return; // Skip processing if post-upload CS processing is already in progress
+                return; // S
+
+            if (_job.CSPostProcessingStarted && !Helper.IsOfflineJobCompleted(_job))
+            {
+                _job.CSPostProcessingStarted = false;
+                _jobs?.Save(); // Save the job state to indicate that CS post-processing has started
+            }
 
             if (_job.IsOnline && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
             {
@@ -105,13 +119,13 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
-            // starting the  regular dump and restore process
-
-            Log.WriteLine($"{dbName}.{colName} Downloader started");
+            // starting the  regular dump and restore process                       
 
             // MongoDump
             if (!item.DumpComplete && !_executionCancelled)
             {
+                Log.WriteLine($"{dbName}.{colName} Downloader started");
+
                 item.EstimatedDocCount = collection.EstimatedDocumentCount();
 
                 Task.Run(() =>
@@ -280,7 +294,7 @@ namespace OnlineMongoMigrationProcessor
                     item.DumpComplete = true;
                 }
             }
-            else if (item.DumpComplete && !_executionCancelled)
+            else if (item.DumpComplete && !item.RestoreComplete && !_executionCancelled)
             {
                 Log.WriteLine($"{dbName}.{colName} added to uploader queue");
                 Log.Save();
@@ -294,11 +308,11 @@ namespace OnlineMongoMigrationProcessor
         private void Upload(MigrationUnit item, string targetConnectionString, bool force=false)
         {
 
-            if (_uploaderProcessing && !force)
+            if (!_uploadLock.WaitAsync(0).GetAwaiter().GetResult()) // don't wait, just check
+            {
                 return; // Prevent concurrent uploads
-
-            _uploaderProcessing = true; // Set flag to indicate upload is in progress
-
+            }
+                      
 
             string dbName = item.DatabaseName;
             string colName = item.CollectionName;
@@ -535,7 +549,7 @@ namespace OnlineMongoMigrationProcessor
                         Directory.Delete(folder, true);
 
                     // Process change streams
-                    if (_job.IsOnline && !_executionCancelled)
+                    if (_job.IsOnline && !_executionCancelled && !_job.CSStartsAfterAllUploads)
                     {
                         if (_targetClient == null)
                             _targetClient = MongoClientFactory.Create(targetConnectionString);
@@ -543,7 +557,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_changeStreamProcessor == null)
                             _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs,_job, _config);
 
-                        Task.Run(() => _changeStreamProcessor.ProcessCollectionChangeStream(item));
+                        _changeStreamProcessor.AddCollectionsToProcess(item, _cts);
                     }
 
                     //clear curretn item from upload queue
@@ -576,12 +590,20 @@ namespace OnlineMongoMigrationProcessor
                         {
                             // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
                             _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
+
+                            if (_targetClient == null)
+                                _targetClient = MongoClientFactory.Create(targetConnectionString);
+
+                            if (_changeStreamProcessor == null)
+                                _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _job, _config);
+
+
                             var result=_changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                         }
                        
                     }
 
-                    _uploaderProcessing = false; // reset the flag to allow next upload to invoke uploader
+                    _uploadLock.Release(); // reset the flag to allow next upload to invoke uploader
 
                 }
                 catch

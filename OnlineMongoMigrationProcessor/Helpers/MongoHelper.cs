@@ -1,4 +1,5 @@
 ﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
 using System;
@@ -188,25 +189,33 @@ namespace OnlineMongoMigrationProcessor
                 ChangeStreamOperationType? changeType = null;
                 BsonValue? documentId = null;
                 try
-                {
-                    if (!string.IsNullOrEmpty(unit.ResumeToken))
-                    {
-                        Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
-                        Log.Save();
-                        return;
-                    }
-
+                {                   
 
                     BsonDocument resumeToken = new BsonDocument();
-
+                    bool resetCS= unit.ResetChangeStream;
                     var database = client.GetDatabase(unit.DatabaseName);
                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
 
-                    var options = new ChangeStreamOptions
+                    ChangeStreamOptions options = null;
+                    if(resetCS)
                     {
-                        FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
-                    };
+                        var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)unit.ChangeStreamStartedOn);
+                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                    }
+                    else
+                    {
+                        if (!string.IsNullOrEmpty(unit.ResumeToken))
+                        {
+                            Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                            Log.Save();
+                            return;
+                        }
 
+                        options = new ChangeStreamOptions
+                        {
+                            FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
+                        };
+                    }
 
                     using (var cursor = await collection.WatchAsync(options))
                     {
@@ -233,15 +242,25 @@ namespace OnlineMongoMigrationProcessor
                     }
                     else
                     {
-                        Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
-                        Log.Save();
+                        if (resetCS)
+                        {
+                            Log.WriteLine($"Change stream start time for {unit.DatabaseName}.{unit.CollectionName} reset to {unit.ChangeStreamStartedOn?.ToUniversalTime()} (UTC)");
+                            Log.Save();
+                        }
+                        else
+                        { 
+                            Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+                            Log.Save();
+                        }
 
-                        unit.ResumeToken = resumeToken.ToJson();
-
+                        unit.ResumeToken = resumeToken.ToJson();                        
                         if (changeType != null)
                         {
                             unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
-                            unit.ResumeDocumentId = documentId;
+
+                            string json = documentId.ToJson(); // save as string
+                            // Deserialize the BsonValue to ensure it is stored correctly
+                            unit.ResumeDocumentId = BsonSerializer.Deserialize<BsonValue>(json); ;
                         }
 
                     }
@@ -401,7 +420,6 @@ namespace OnlineMongoMigrationProcessor
                 DataType.String => filterBuilder.Lt(fieldName, value.AsString),
                 DataType.Decimal128 => filterBuilder.Lt(fieldName, value.AsDecimal128),
                 DataType.Date => filterBuilder.Lt(fieldName, ((BsonDateTime)value).ToUniversalTime()),
-                DataType.UUID => filterBuilder.Lt(fieldName, value.AsGuid),
                 DataType.Object => filterBuilder.Lt(fieldName, value.AsBsonDocument),
                 _ => throw new ArgumentException($"Unsupported DataType: {dataType}")
             };
@@ -421,7 +439,6 @@ namespace OnlineMongoMigrationProcessor
                 DataType.String => filterBuilder.Gte(fieldName, value.AsString),
                 DataType.Decimal128 => filterBuilder.Gte(fieldName, value.AsDecimal128),
                 DataType.Date => filterBuilder.Gte(fieldName, ((BsonDateTime)value).ToUniversalTime()),
-                DataType.UUID => filterBuilder.Gte(fieldName, value.AsGuid),
                 DataType.Object => filterBuilder.Gte(fieldName, value.AsBsonDocument),
                 _ => throw new ArgumentException($"Unsupported DataType: {dataType}")
             };
@@ -437,7 +454,6 @@ namespace OnlineMongoMigrationProcessor
                 DataType.String => "string",
                 DataType.Decimal128 => "decimal",
                 DataType.Date => "date",
-                DataType.UUID => "binData",
                 DataType.Object => "object",
                 _ => throw new ArgumentException($"Unsupported DataType: {dataType}")
             };
@@ -489,7 +505,6 @@ namespace OnlineMongoMigrationProcessor
                 DataType.String => $"\\\"{value.AsString}\\\"",
                 DataType.Decimal128 => $"{{\\\"$numberDecimal\\\":\\\"{value.AsDecimal128}\\\"}}",
                 DataType.Date => $"{{\\\"$date\\\":\\\"{((BsonDateTime)value).ToUniversalTime():yyyy-MM-ddTHH:mm:ssZ}\\\"}}",
-                DataType.UUID => $"{{\\\"$binary\\\":\\\"{value.AsGuid}\\\", \\\"$type\\\":\\\"04\\\"}}",
                 DataType.Object => value.AsBsonDocument.ToString(),
                 _ => throw new ArgumentException($"Unsupported DataType: {dataType}")
             };
