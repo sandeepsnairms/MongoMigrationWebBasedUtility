@@ -97,7 +97,13 @@ namespace OnlineMongoMigrationProcessor
             //when resuming a job, we need to check if post-upload change stream processing is already in progress
 
             if (_postUploadCSProcessing)
-                return; // Skip processing if post-upload CS processing is already in progress
+                return; // S
+
+            if (_job.CSPostProcessingStarted && !Helper.IsOfflineJobCompleted(_job))
+            {
+                _job.CSPostProcessingStarted = false;
+                _jobs?.Save(); // Save the job state to indicate that CS post-processing has started
+            }
 
             if (_job.IsOnline && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
             {
@@ -113,13 +119,13 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
-            // starting the  regular dump and restore process
-
-            Log.WriteLine($"{dbName}.{colName} Downloader started");
+            // starting the  regular dump and restore process                       
 
             // MongoDump
             if (!item.DumpComplete && !_executionCancelled)
             {
+                Log.WriteLine($"{dbName}.{colName} Downloader started");
+
                 item.EstimatedDocCount = collection.EstimatedDocumentCount();
 
                 Task.Run(() =>
@@ -288,7 +294,7 @@ namespace OnlineMongoMigrationProcessor
                     item.DumpComplete = true;
                 }
             }
-            else if (item.DumpComplete && !_executionCancelled)
+            else if (item.DumpComplete && !item.RestoreComplete && !_executionCancelled)
             {
                 Log.WriteLine($"{dbName}.{colName} added to uploader queue");
                 Log.Save();

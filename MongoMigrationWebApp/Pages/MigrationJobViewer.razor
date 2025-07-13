@@ -153,10 +153,10 @@
     </tbody>
 </table>
 <div class="d-flex align-items-center mb-3">
-    <button class="btn btn-primary mx-2" title="Update Collections"  @onclick="ManageCollections">Update Collections</button>
+    <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections">Update Collections</button>
     @if (MigrationJob.IsOnline)
     {
-        <button class="btn btn-primary mx-2" title="Reset Change Stream" @onclick="ResetChangeStream">Reset Change Stream</button>
+        <button class="btn btn-primary mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">Reset Change Stream</button>
     }
 </div>
 
@@ -516,6 +516,8 @@
             {
                 if (migrationUnits.Contains(MigrationJob.MigrationUnits[i]))
                     MigrationJob.MigrationUnits[i].ResetChangeStream = true; // Reset change stream for every second collection
+                else
+                    MigrationJob.MigrationUnits[i].ResetChangeStream = false; // Ensure other collections are not reset
             }
             JobManager.Save();
         }

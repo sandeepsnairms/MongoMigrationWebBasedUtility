@@ -56,7 +56,10 @@
 
     private List<MigrationUnit> updatedMigrationUnits = new List<MigrationUnit>();
 
-   
+    protected override void OnInitialized()
+    {
+        updatedMigrationUnits = MigrationUnits?.Where(mu => mu.ResetChangeStream).ToList() ?? new List<MigrationUnit>();
+    }
 
     private void OnCollectionToggleChanged(ChangeEventArgs e, MigrationUnit mu)
     {
