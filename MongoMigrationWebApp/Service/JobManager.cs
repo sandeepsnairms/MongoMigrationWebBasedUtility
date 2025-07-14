@@ -41,7 +41,7 @@ namespace MongoMigrationWebApp.Service
 
         public List<MigrationJob> GetMigrations() => _jobList.MigrationJobs;
 
-        public LogBucket GetLogBucket(string id) => Log.GetLogBucket(id);
+        public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.GetLogBucket(id, out logBackupFile);
 
         public void DisposeLogs()
         {

@@ -15,7 +15,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())))
+        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())) || _logBackupFile != string.Empty)
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -160,14 +160,14 @@
     }
 </div>
 
-<h5 class="pt-4">
-    Monitor
-</h5>
-<div>
-    <table class="table message-output">
-        <tbody>
-            @if (LogBucket !=null && LogBucket.GetVerboseMessages() != null && LogBucket.GetVerboseMessages().Count > 0)
-            {
+@if (LogBucket != null && LogBucket.GetVerboseMessages() != null && LogBucket.GetVerboseMessages().Count > 0 && _logBackupFile == string.Empty)
+ {
+    <h5 class="pt-4">
+        Monitor
+    </h5>
+    <div>
+        <table class="table message-output">
+            <tbody>           
                 @foreach (var logObject in LogBucket.GetVerboseMessages())
                 {
                     <tr class="@GetRowClass(logObject.Type.ToString(), logObject.Message)">
@@ -183,14 +183,12 @@
                         </td>
                     </tr>
                 }
+            </tbody>
+        </table>
+    </div>
+}
 
-            }
-        </tbody>
-    </table>
-</div>
-
-
-@if (LogBucket!=null && LogBucket.Logs != null)
+@if (LogBucket != null && LogBucket.Logs != null && _logBackupFile == string.Empty)
 {
     <h5 class=" pt-4">
         <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
@@ -236,6 +234,21 @@
 
 
 }
+else if (@_logBackupFile !=string.Empty )
+{
+    <div class="alert alert-danger">
+        <p>
+            Failed to load the log file. It appears to be corrupt and has been backed up.
+            Use the button below to download the previous log. A new log file will be created
+            when the job is resumed.
+        </p>
+        <button class="btn btn-primary mx-2"
+                @onclick="DownloadLogBackupFile"
+                title="Download Log File">
+            Download Backup File
+        </button>
+    </div>
+}
 @code {
 
     #pragma warning disable CS8602
@@ -260,6 +273,7 @@
     private YesNoDialog.Category _yesNoDialogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
     private bool _resetChangeStreamDialogOpen;
+    private string _logBackupFile = string.Empty;
 
     private string GetRowClass(string type, string message)
     {
@@ -289,9 +303,21 @@
         _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
     }
 
+
+    private async Task DownloadLogBackupFile()
+    {
+        await Downloader(_logBackupFile, $"Backup_{_logBackupFile}");
+    }
+
+
     private async Task DownloadFile()
     {
-        var url = $"/api/File/download/log/{JobId}"; // Adjust the API URL if needed
+        await Downloader(JobId, JobId);
+    }
+
+    private async Task Downloader(string fileName, string displayName)
+    {
+        var url = $"/api/File/download/log/{fileName}"; 
         var response = await HttpClient.GetAsync(url);
 
         if (response.IsSuccessStatusCode)
@@ -300,18 +326,27 @@
             var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
 
             // Use JavaScript to trigger the file download
-            await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{JobId}.json", contentType);
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{displayName}.json", contentType);
         }
         else
         {
-            Console.Error.WriteLine($"Failed to download log file: {JobId}.json");
+            Console.Error.WriteLine($"Failed to download log file: {displayName}.json");
         }
     }
 
     private void Refresh(object? state)
     {
         MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
-        LogBucket = JobManager.GetLogBucket(JobId);
+        LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile);
+
+        if (logBackupFile != JobId)
+        {
+            _logBackupFile = logBackupFile;
+        }
+        else
+        {
+            _logBackupFile = string.Empty;
+        }
 
         InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
     }
@@ -373,9 +408,17 @@
             return;
         }
 
-        LogBucket = JobManager.GetLogBucket(JobId);
+        LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile);
+        if (logBackupFile != JobId)
+        {
+            _logBackupFile = logBackupFile;
+        }
+        else
+        {
+            _logBackupFile = string.Empty;
+        }
 
-        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning()))
+        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning() && _logBackupFile==string.Empty))
         {
             await ResumeJob();
         }

@@ -59,12 +59,15 @@ namespace OnlineMongoMigrationProcessor
         private static LogBucket? _logBucket;
         private static string _currentId = string.Empty;
 
-        public static void Init(string id)
+        public static string Init(string id)
         {
+            string logBackupFile = string.Empty;
             _currentId = id;
             Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationlogs");
 
-            _logBucket = GetLogBucket(_currentId);
+            _logBucket = GetLogBucket(_currentId, out logBackupFile,true);
+
+            return logBackupFile;
         }
 
         public static void AddVerboseMessage(string message, LogType logType = LogType.Message)
@@ -117,20 +120,27 @@ namespace OnlineMongoMigrationProcessor
             string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(sourceFilePath);
             string extension = Path.GetExtension(sourceFilePath);
             string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string newFileName = $"{fileNameWithoutExtension}_{timestamp}{extension}";
-            string newFilePath = Path.Combine(directory, newFileName);
+            string newFileName = $"{fileNameWithoutExtension}_{timestamp}";
+            string newFilePath = Path.Combine(directory, $"{newFileName}{extension}");
 
-            File.Copy(sourceFilePath, newFilePath);
+            if (!File.Exists(newFilePath))
+            {
+                File.Copy(sourceFilePath, newFilePath);
+            }
 
-           return newFilePath;
+           return newFileName;
         }
 
-        public static LogBucket GetLogBucket(string id)
+        public static LogBucket GetLogBucket(string id, out string fileName, bool force=false)
         {
             try
             {
+                fileName = id;
+
                 if (id == _currentId && _logBucket != null)
+                {
                     return _logBucket;
+                }
 
                 var path = $"{Helper.GetWorkingFolder()}migrationlogs\\{id}.txt";
                 if (File.Exists(path))
@@ -143,12 +153,24 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch
                     {
-                        string newFilePath=CreateFileCopyWithTimestamp(path);
-                        System.IO.File.Delete(path);
-                        var logBucket= new LogBucket();
-                        logBucket.Logs ??= new List<LogObject>();
-                        logBucket.Logs.Add(new LogObject(LogType.Error, $"Error loading existing log. Log file is backed up at {newFilePath}"));
-                        return logBucket;
+                        fileName = CreateFileCopyWithTimestamp(path);
+                        if (force)
+                        {                           
+                            System.IO.File.Delete(path);
+
+                            var logBucket = new LogBucket();
+                            logBucket.Logs ??= new List<LogObject>();
+                            logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file as it appears to be corrupt. A new log file will be created, and the original has been backed up as {fileName}."));
+                            Save();
+                            fileName = id;
+                            return logBucket;
+                        }
+                        else
+                        {
+                            var logBucket = new LogBucket();
+                            logBucket.Logs ??= new List<LogObject>();
+                            return logBucket;
+                        } 
                     }
                 }
                 else
@@ -156,7 +178,7 @@ namespace OnlineMongoMigrationProcessor
                     return new LogBucket();
                 }
             }
-            catch
+            catch(Exception ex)
             {
                 throw new Exception("Log Init failed");
             }

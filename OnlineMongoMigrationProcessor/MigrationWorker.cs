@@ -96,7 +96,11 @@ namespace OnlineMongoMigrationProcessor
             _migrationCancelled = false;
             CurrentJobId = _job.Id;
 
-            Log.Init(_job.Id);
+            string logfile=Log.Init(_job.Id);
+            if (logfile != _job.Id)
+            {
+                Log.WriteLine($"Error in reading Log. Orginal log backed up as {logfile}");
+            }
             Log.WriteLine($"{_job.Id} Started on {_job.StartedOn} (UTC)");
             Log.Save();
 
@@ -387,7 +391,11 @@ namespace OnlineMongoMigrationProcessor
             _migrationCancelled = false;
             CurrentJobId = _job.Id;
 
-            Log.Init(_job.Id);
+            string logfile = Log.Init(_job.Id);
+            if (logfile != _job.Id)
+            {
+                Log.WriteLine($"Error in reading Log. Orginal log backed up as {logfile}");
+            }
             Log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
             Log.Save();
 
