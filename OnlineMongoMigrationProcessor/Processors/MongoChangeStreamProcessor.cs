@@ -37,9 +37,7 @@ namespace OnlineMongoMigrationProcessor
         private Dictionary<string, MigrationUnit> _migrationUnitsToProcess = new Dictionary<string, MigrationUnit>();
 
 
-        private List<ChangeStreamDocument<BsonDocument>> _docsToBeInserted = new List<ChangeStreamDocument<BsonDocument>>();
-        private List<ChangeStreamDocument<BsonDocument>> _docsToBeUpdated = new List<ChangeStreamDocument<BsonDocument>>();
-        private List<ChangeStreamDocument<BsonDocument>> _docsToBeDeleted = new List<ChangeStreamDocument<BsonDocument>>();
+       
 
         public bool ExecutionCancelled { get; set; }        
 
@@ -294,11 +292,14 @@ namespace OnlineMongoMigrationProcessor
 
             long counter = 0;
 
+            ChnageStreamsDocuments chnageStreamsDocuments = new ChnageStreamsDocuments();
+
             try
             {
-                _docsToBeInserted.Clear();
-                _docsToBeUpdated.Clear();
-                _docsToBeDeleted.Clear();
+                
+                //_docsToBeInserted.Clear();
+                //_docsToBeUpdated.Clear();
+                //_docsToBeDeleted.Clear();
 
                 //using var cursor = sourceCollection.Watch(options);
                 using var cursor = sourceCollection.Watch(options, cancellationToken);
@@ -327,7 +328,7 @@ namespace OnlineMongoMigrationProcessor
 
                         if (counter > 1 || !skipFirst)
                         {
-                            if (!ProcessCursor(change, cursor, targetCollection, item, ref counter))
+                            if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
                                 return;
                         }
                     }
@@ -358,7 +359,7 @@ namespace OnlineMongoMigrationProcessor
 
                             //if (counter > 1 || !skipFirst || isVCore)
                             //{
-                                if (!ProcessCursor(change, cursor, targetCollection, item, ref counter))
+                                if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
                                     return;
                             //}
                         }
@@ -382,9 +383,9 @@ namespace OnlineMongoMigrationProcessor
                 {
                     BulkProcessChangesAsync(
                         targetCollection,
-                        insertEvents: _docsToBeInserted,
-                        updateEvents: _docsToBeUpdated,
-                        deleteEvents: _docsToBeDeleted).GetAwaiter().GetResult();
+                        insertEvents: chnageStreamsDocuments.DocsToBeInserted,
+                        updateEvents: chnageStreamsDocuments.DocsToBeUpdated,
+                        deleteEvents: chnageStreamsDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
 
                     item.CSUpdatesInLastBatch = counter;
                     _jobList?.Save();
@@ -468,7 +469,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ref long counter)
+        private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item, ChnageStreamsDocuments chnageStreamsDocuments, ref long counter)
         {
 
             try
@@ -481,7 +482,7 @@ namespace OnlineMongoMigrationProcessor
 
                     // Output change details to the console
                     Log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {MongoHelper.BsonTimestampToUtcDateTime(timestamp)}.  Sequence in Batch # {counter}");
-                    ProcessChange(change, targetCollection,_job.IsSimulatedRun);
+                    ProcessChange(change, targetCollection, chnageStreamsDocuments,_job.IsSimulatedRun);
 
 
                     if (!_syncBack)
@@ -496,7 +497,7 @@ namespace OnlineMongoMigrationProcessor
 
                     // Output change details to the monito
                     Log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}. Update # {counter}");
-                    ProcessChange(change, targetCollection, _job.IsSimulatedRun);
+                    ProcessChange(change, targetCollection, chnageStreamsDocuments,_job.IsSimulatedRun);
                     if (!_syncBack)
                         item.CursorUtcTimestamp = timestamp.Value;
                     else
@@ -505,7 +506,7 @@ namespace OnlineMongoMigrationProcessor
                 else
                 {
                     // Output change details to the monito
-                    ProcessChange(change, targetCollection, _job.IsSimulatedRun);
+                    ProcessChange(change, targetCollection, chnageStreamsDocuments, _job.IsSimulatedRun);
                 }
 
                 //only add if not added before
@@ -543,7 +544,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, bool isWriteSimulated)
+        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, ChnageStreamsDocuments chnageStreamsDocuments, bool isWriteSimulated)
         {
             if (isWriteSimulated)
                 return;
@@ -564,7 +565,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     case ChangeStreamOperationType.Insert:
                         //targetCollection.InsertOne(change.FullDocument);
-                        _docsToBeInserted.Add(change);
+                        chnageStreamsDocuments.DocsToBeInserted.Add(change);
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
@@ -583,13 +584,13 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             //targetCollection.ReplaceOne(filter, change.FullDocument, new ReplaceOptions { IsUpsert = true });
-                            _docsToBeUpdated.Add(change);
+                            chnageStreamsDocuments.DocsToBeUpdated.Add(change);
                         }
                         break;
                     case ChangeStreamOperationType.Delete:
                         //var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         //targetCollection.DeleteOne(deleteFilter);
-                        _docsToBeDeleted.Add(change);
+                        chnageStreamsDocuments.DocsToBeDeleted.Add(change);
                         break;
                     default:
                         Log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {change.OperationType}");

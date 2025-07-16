@@ -287,6 +287,13 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 
+    public class ChnageStreamsDocuments
+    {
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeInserted = new List<ChangeStreamDocument<BsonDocument>>();
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeUpdated = new List<ChangeStreamDocument<BsonDocument>>();
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeDeleted = new List<ChangeStreamDocument<BsonDocument>>();
+    }
+
     public enum DataType
     {
         ObjectId,
