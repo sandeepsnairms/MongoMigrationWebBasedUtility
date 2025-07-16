@@ -109,10 +109,12 @@
             @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
             {
                 <th>Time Since Last Change</th>
+                <th>Last Batch – Total Changes</th>
             }
             @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
             {
                 <th>Time Since Last Sync Back</th>
+                <th>Last Batch – Total Changes</th>
             }
         </tr>
     </thead>
@@ -138,15 +140,13 @@
                     @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
                     {
                         <td>
-                            @GetChangeStreamLag(unit)
+                            @GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack)
                         </td>
-                    }
-                    @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
-                    {
                         <td>
-                            @GetChangeStreamLag(unit,true)
+                            @unit.CSUpdatesInLastBatch
                         </td>
                     }
+                   
                 </tr>
             }
         }

@@ -128,7 +128,8 @@ namespace OnlineMongoMigrationProcessor
 
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
-        
+        public long CSUpdatesInLastBatch { get; set; }
+
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
