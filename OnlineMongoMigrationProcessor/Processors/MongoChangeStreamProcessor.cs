@@ -266,6 +266,11 @@ namespace OnlineMongoMigrationProcessor
                     Log.Save();
                     Thread.Sleep(1000 * 300);
                 }
+                catch (MongoCommandException ex) when (ex.Message.Contains("Expired resume token") || ex.Message.Contains("cursor"))
+                {
+                    Log.WriteLine($"Resume token expired or cursor invalid for {targetCollection.CollectionNamespace}. Using last datetime to continue.");
+                    item.ResumeToken = null; // Reset the resume token
+                }
                 catch (Exception ex)
                 {
                     // Handle other potential exceptions
