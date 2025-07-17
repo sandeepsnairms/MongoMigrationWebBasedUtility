@@ -2,6 +2,7 @@
 using MongoDB.Driver;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
@@ -32,9 +33,9 @@ namespace OnlineMongoMigrationProcessor
         private bool _isCSProcessing = false;
 
 
-        private Dictionary<string, string> _resumeTokenCache = new Dictionary<string, string>();
-        private  Dictionary<string, bool> _processingStartedList = new Dictionary<string, bool>();
-        private Dictionary<string, MigrationUnit> _migrationUnitsToProcess = new Dictionary<string, MigrationUnit>();
+        private ConcurrentDictionary<string, string> _resumeTokenCache = new ConcurrentDictionary<string, string>();
+        private ConcurrentDictionary<string, bool> _processingStartedList = new ConcurrentDictionary<string, bool>();
+        private ConcurrentDictionary<string, MigrationUnit> _migrationUnitsToProcess = new ConcurrentDictionary<string, MigrationUnit>();
 
 
        
@@ -66,7 +67,7 @@ namespace OnlineMongoMigrationProcessor
             }            
             if (!_migrationUnitsToProcess.ContainsKey(key))
             {
-                _migrationUnitsToProcess.Add(key, item);
+                _migrationUnitsToProcess.TryAdd(key, item);
                 Log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.");
                 Log.Save();
                 var result=RunCSPostProcessingAsync(cts);
@@ -104,7 +105,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if (migrationUnit.SourceStatus == CollectionStatus.OK && migrationUnit.DumpComplete==true && migrationUnit.RestoreComplete==true)
                     {
-                        _migrationUnitsToProcess.Add($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", migrationUnit);
+                        _migrationUnitsToProcess[$"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}"] = migrationUnit;
                     }
                 }
 
@@ -501,7 +502,7 @@ namespace OnlineMongoMigrationProcessor
                     var timestamp = change.WallTime;
 
                     // Output change details to the monito
-                    Log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}. Update # {counter}");
+                    Log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {targetCollection.CollectionNamespace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timestamp.Value}.  Sequence in Batch # {counter}");
                     ProcessChange(change, targetCollection, chnageStreamsDocuments,_job.IsSimulatedRun);
                     if (!_syncBack)
                         item.CursorUtcTimestamp = timestamp.Value;
@@ -516,7 +517,7 @@ namespace OnlineMongoMigrationProcessor
 
                 //only add if not added before
                 if (!_processingStartedList.ContainsKey($"{targetCollection.CollectionNamespace}"))
-                    _processingStartedList.Add($"{targetCollection.CollectionNamespace}", true);
+                    _processingStartedList.TryAdd($"{targetCollection.CollectionNamespace}", true);
                 else
                     _processingStartedList[$"{targetCollection.CollectionNamespace}"] = true; // Update to true after first run
 
@@ -525,7 +526,7 @@ namespace OnlineMongoMigrationProcessor
 
                 //only add if not added before
                 if (!_resumeTokenCache.ContainsKey($"{targetCollection.CollectionNamespace}"))
-                    _resumeTokenCache.Add($"{targetCollection.CollectionNamespace}", item.ResumeToken);
+                    _resumeTokenCache.TryAdd($"{targetCollection.CollectionNamespace}", item.ResumeToken);
                 else
                     _resumeTokenCache[$"{targetCollection.CollectionNamespace}"] = item.ResumeToken; 
                 
