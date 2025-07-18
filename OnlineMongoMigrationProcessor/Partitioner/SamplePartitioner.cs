@@ -38,7 +38,7 @@ namespace OnlineMongoMigrationProcessor
            
 
             Log.AddVerboseMessage($"Counting documents before sampling data for {dataType}");
-            Log.Save();
+            
 
             try
             {
@@ -48,7 +48,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 Log.WriteLine($"Exception occurred while counting documents: {ex.ToString()}", LogType.Error);
                 Log.WriteLine($"Using Estimated document count");
-                Log.Save();
+                
                 docCountByType = GetDocumentCountByDataType(collection, idField, dataType, true);
             }
 
@@ -56,20 +56,20 @@ namespace OnlineMongoMigrationProcessor
             if (docCountByType == 0)
             {
                 Log.WriteLine($"No documents where {idField} is {dataType}");
-                Log.Save();
+                
                 return null;
             }
             else if (docCountByType < minDocsPerChunk)
             {
                 Log.WriteLine($"Document count where {idField} is {dataType}:{docCountByType} is less than min chunk size.");
-                Log.Save();
+                
                 sampleCount = 1;
                 chunkCount = 1;
             }
             else
             {
                 Log.WriteLine($"Document count where {idField} is {dataType}:{docCountByType} : {docCountByType}");
-                Log.Save();
+                
             }
 
             if (chunkCount > MaxSamples)
@@ -120,7 +120,7 @@ namespace OnlineMongoMigrationProcessor
             // Step 2: Sample the data
 
             Log.WriteLine($"Sampling data where {idField} is {dataType} with {sampleCount} samples, Chunk Count: {chunkCount}");
-            Log.Save();
+            
 
             var pipeline = new[]
             {
@@ -151,7 +151,7 @@ namespace OnlineMongoMigrationProcessor
                 catch (Exception ex)
                 {
                     Log.WriteLine($"Attempt {i} encountered error sampling data for {dataType}: {ex.ToString()}");
-                    Log.Save();
+                    
                 }
             }
 
@@ -159,7 +159,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 docCountByType = 0;
                 Log.WriteLine($"No data found for {dataType}");
-                Log.Save();
+                
                 return null;
             }
             // Step 3: Calculate partition boundaries
@@ -223,7 +223,7 @@ namespace OnlineMongoMigrationProcessor
 
 
             Log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} where {idField} is {dataType}");
-            Log.Save();
+            
 
             return chunkBoundaries;
             

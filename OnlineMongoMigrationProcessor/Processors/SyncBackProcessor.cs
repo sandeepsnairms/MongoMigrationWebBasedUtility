@@ -63,12 +63,12 @@ namespace OnlineMongoMigrationProcessor.Processors
                 try
                 {
                     Log.WriteLine($"Sync back to source starting.");
-                    Log.Save();
+                    
                     
                     var result = _syncBackToSource.RunCSPostProcessingAsync(_cts);
 
                     //Log.WriteLine($"Sync back to source completed successfully.");
-                    //Log.Save();
+                    //
                     continueProcessing = false;
                 }
                 catch (MongoExecutionTimeoutException ex)
@@ -77,7 +77,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
-                    Log.Save();
+                    
 
                     continueProcessing = true;
                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
-                    Log.Save();
+                    
 
                     continueProcessing = true;
                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -98,7 +98,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             if (attempts == maxRetries)
             {
                 Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
-                Log.Save();
+                
 
                 _job.CurrentlyActive = false;
                 _jobs?.Save();

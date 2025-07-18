@@ -114,14 +114,14 @@ namespace OnlineMongoMigrationProcessor
                     else
                         jobList.ActiveDumpProcessId = 0;
 
-                    Log.Save();
+                    
                     return process.ExitCode == 0;
                 }
             }
             catch (Exception ex)
             {
                 Log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-                Log.Save();
+                
                 return false;
             }
         }

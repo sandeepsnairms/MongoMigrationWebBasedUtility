@@ -130,7 +130,7 @@ namespace OnlineMongoMigrationProcessor
                                     var lt = bounds.lt;
 
                                     Log.WriteLine($"{dbName}.{colName}-Chunk [{i}] generating query");
-                                    Log.Save();
+                                    
 
                                     // Generate query and get document count
                                     filter = MongoHelper.GenerateQueryFilter(gte, lt, item.MigrationChunks[i].DataType);
@@ -142,7 +142,7 @@ namespace OnlineMongoMigrationProcessor
                                     downloadCount += item.MigrationChunks[i].DumpQueryDocCount;
 
                                     Log.WriteLine($"{dbName}.{colName}- Chunk [{i}] Count is  {docCount}");
-                                    Log.Save();
+                                    
                                 }
                                 else
                                 {
@@ -187,7 +187,7 @@ namespace OnlineMongoMigrationProcessor
                                 if (dumpAttempts >= maxRetries)
                                 {
                                     Log.WriteLine("Maximum Document copy attempts reached. Aborting operation.", LogType.Error);
-                                    Log.Save();
+                                    
 
                                     _job.CurrentlyActive = false;
                                     _jobList?.Save();
@@ -198,7 +198,7 @@ namespace OnlineMongoMigrationProcessor
                                 // Wait for the backoff duration before retrying
                                 Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                                 Thread.Sleep(backoff);
-                                Log.Save();
+                                
 
                                 // Exponentially increase the backoff duration
                                 backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -206,7 +206,7 @@ namespace OnlineMongoMigrationProcessor
                             catch (Exception ex)
                             {
                                 Log.WriteLine(ex.ToString(), LogType.Error);
-                                Log.Save();
+                                
 
                                 _job.CurrentlyActive = false;
                                 _jobList?.Save();

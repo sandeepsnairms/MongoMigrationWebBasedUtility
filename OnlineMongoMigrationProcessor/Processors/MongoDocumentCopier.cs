@@ -56,7 +56,7 @@ namespace OnlineMongoMigrationProcessor
             if (percent > 0)
             {
                 Log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
-                Log.Save();
+                
                 item.DumpPercent = basePercent + (percent * contribFactor);
                 item.RestorePercent = item.DumpPercent;
                 item.DumpComplete = item.DumpPercent == 100;
@@ -86,7 +86,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 Log.WriteLine($"Document copy for Chunk [{migrationChunkIndex}] with {item.MigrationChunks[migrationChunkIndex].Segments.Count}. Segments started");
-                Log.Save();
+                
 
                 List<Task> tasks = new List<Task>();
                 int segmentIndex = 0;
@@ -150,14 +150,14 @@ namespace OnlineMongoMigrationProcessor
             catch (OperationCanceledException)
             {
                 Log.WriteLine("Document copy process was canceled");
-                Log.Save();
+                
                 return false;
             }
 
             if (!errors.IsEmpty)
             {
                 Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process");
-                Log.Save();
+                
             }
 
             if (item.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0)
@@ -168,7 +168,7 @@ namespace OnlineMongoMigrationProcessor
                 var lt = bounds.lt;
 
                 Log.WriteLine($"Document copy for chunk[{ migrationChunkIndex}], counting documents on target");
-                Log.Save();
+                
 
                 try
                 {
@@ -177,7 +177,7 @@ namespace OnlineMongoMigrationProcessor
                 catch (Exception ex)
                 {
                     Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}] encountered error while counting documents on target. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
-                    Log.Save();
+                    
                     ResetSegmentsInChunk(item.MigrationChunks[migrationChunkIndex]);
                     return false;
                 }
@@ -185,12 +185,12 @@ namespace OnlineMongoMigrationProcessor
                 if (item.MigrationChunks[migrationChunkIndex].DocCountInTarget == item.MigrationChunks[migrationChunkIndex].DumpQueryDocCount)
                 {
                     Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}], verified no documents missing, count in target: {item.MigrationChunks[migrationChunkIndex].DocCountInTarget}");
-                    Log.Save();
+                    
                 }
                 else
                 {
                     Log.WriteLine($"Document copy for chunk [{migrationChunkIndex}] count mismatch. Chunk will be reprocessed.", LogType.Error);
-                    Log.Save();
+                    
                     return false;
                 }
                 jobList?.Save(); //persists state
@@ -224,12 +224,12 @@ namespace OnlineMongoMigrationProcessor
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
             Log.WriteLine($"Document copy started for segment [{migrationChunkIndex}.{segmentId}]");
-            Log.Save();
+            
 
             if (segment.IsProcessed == true)
             {
                 Log.WriteLine($"Skipping processed segment [{migrationChunkIndex}.{segmentId}]");
-                Log.Save();
+                
 
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
                 return;
@@ -272,7 +272,7 @@ namespace OnlineMongoMigrationProcessor
                     catch (OutOfMemoryException ex)
                     {
                         Log.WriteLine($"Document copy encountered out of memory error for segment [{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize in settings. Details: {ex.ToString()}", LogType.Error);
-                        Log.Save();
+                        
                         throw;
                     }
                     catch (MongoException mex) when (mex.Message.Contains("DuplicateKey"))
@@ -290,14 +290,14 @@ namespace OnlineMongoMigrationProcessor
                     catch (Exception ex) when (ex.ToString().Contains("canceled."))
                     {
                         Log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentId}]");
-                        Log.Save();
+                        
                     }
                     catch (Exception ex)
                     {
                         errors.Add(ex);
                         Interlocked.Add(ref _failureCount, set.Count);
                         Log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentId}]. Details : {ex.ToString()}", LogType.Error);
-                        Log.Save();
+                        
 
                         failed=true;
 
@@ -317,7 +317,7 @@ namespace OnlineMongoMigrationProcessor
                 if(!cancellationToken.IsCancellationRequested)
                 {
                     Log.WriteLine($"Document copy Operation completed for chunk [{migrationChunkIndex}.{segmentId}] with status {!failed}");
-                    Log.Save();
+                    
 
                     segment.IsProcessed = !failed;
                     jobList.Save();
@@ -328,7 +328,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 errors.Add(ex);
                 Log.WriteLine($"Document copy encountered error while processing segment [{migrationChunkIndex}.{segmentId}], Details: {ex.ToString()}", LogType.Error);
-                Log.Save();
+                
             }
         }
 
@@ -365,7 +365,7 @@ namespace OnlineMongoMigrationProcessor
             foreach (var error in ex.WriteErrors)
             {
                 Log.WriteLine($"Document copy encountered WriteErrors, Details: {ex.ToString()}");
-                Log.Save();
+                
             }
         }
     }

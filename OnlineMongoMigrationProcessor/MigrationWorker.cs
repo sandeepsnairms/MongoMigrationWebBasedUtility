@@ -102,7 +102,7 @@ namespace OnlineMongoMigrationProcessor
                 Log.WriteLine($"Error in reading Log. Orginal log backed up as {logfile}");
             }
             Log.WriteLine($"{_job.Id} Started on {_job.StartedOn} (UTC)");
-            Log.Save();
+            
 
             string[] collectionsInput = namespacesToMigrate
                 .Split(',')
@@ -178,12 +178,12 @@ namespace OnlineMongoMigrationProcessor
                             }
                         }
                     }
-                    Log.Save();
+                    
 
                     if (_job.IsOnline)
                     {
                         Log.WriteLine("Checking if change stream is enabled on source");
-                        Log.Save();
+                        
 
 
                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(Config.CACertContentsForSourceServer,_job.SourceConnectionString, _job.MigrationUnits[0]);
@@ -247,7 +247,7 @@ namespace OnlineMongoMigrationProcessor
 
 
                                 Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} chunk(s)");
-                                Log.Save();
+                                
 
                                 unit.MigrationChunks= chunks;
                                 unit.ChangeStreamStartedOn = DateTime.Now;  
@@ -262,7 +262,7 @@ namespace OnlineMongoMigrationProcessor
                                     if (_job.SyncBackEnabled && !job.IsSimulatedRun && _job.IsOnline && !checkedCS)
                                     {
                                         Log.WriteLine("Sync Back: Checking if change stream is enabled on target");
-                                        Log.Save();
+                                        
 
                                         //Thread.Sleep(30*1000); // Wait for 30 seconds to ensure the target is ready
                                         var retValue = await MongoHelper.IsChangeStreamEnabledAsync(string.Empty,_job.TargetConnectionString, unit,true);
@@ -286,12 +286,12 @@ namespace OnlineMongoMigrationProcessor
                         {
                             unit.SourceStatus = CollectionStatus.NotFound;
                             Log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
-                            Log.Save();
+                            
                         }
                     }
 
                     _jobs?.Save();
-                    Log.Save();
+                    
 
 
                     foreach (var migrationUnit in _job.MigrationUnits)
@@ -311,7 +311,7 @@ namespace OnlineMongoMigrationProcessor
                                         Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");                                        
                                     }
                                    
-									Log.Save();
+									
 								}
                                 if (_migrationProcessor != null)
                                 {
@@ -330,7 +330,7 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 migrationUnit.SourceStatus = CollectionStatus.NotFound;
                                 Log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records", LogType.Error);
-                                Log.Save();
+                                
                             }
                         }
                     }
@@ -343,7 +343,7 @@ namespace OnlineMongoMigrationProcessor
 
                     Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
-                    Log.Save();
+                    
 
                     continueProcessing = true;
                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -354,7 +354,7 @@ namespace OnlineMongoMigrationProcessor
 
                     Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
-                    Log.Save();
+                    
 
                     continueProcessing = true;
                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -364,7 +364,7 @@ namespace OnlineMongoMigrationProcessor
             if (attempts == maxRetries)
             {
                 Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
-                Log.Save();
+                
 
                 _job.CurrentlyActive = false;
                 _jobs?.Save();
@@ -397,7 +397,7 @@ namespace OnlineMongoMigrationProcessor
                 Log.WriteLine($"Error in reading Log. Orginal log backed up as {logfile}");
             }
             Log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
-            Log.Save();
+            
 
             job.ProcessingSyncBack = true;
             _jobs.Save();
@@ -450,7 +450,7 @@ namespace OnlineMongoMigrationProcessor
             if (totalChunks > 1 || !_job.UseMongoDump)
             {
                 Log.WriteLine($"Chunking {databaseName}.{collectionName}");
-                Log.Save();
+                
 
 
                 List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };

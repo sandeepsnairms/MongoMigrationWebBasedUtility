@@ -83,6 +83,8 @@ namespace OnlineMongoMigrationProcessor
                 _logBucket.Logs ??= new List<LogObject>();
 
                 _logBucket.Logs.Add(new LogObject(logType, message));
+
+                Save();
             }
             catch { }
         }

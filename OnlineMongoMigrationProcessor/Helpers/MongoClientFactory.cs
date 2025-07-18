@@ -87,7 +87,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 catch (Exception ex)
                 {
                     Log.WriteLine($"Certificate validation failed: { ex.ToString()}");
-                    Log.Save();
+                    
                     return false;
                 }
             };
