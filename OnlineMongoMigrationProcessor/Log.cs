@@ -1,7 +1,9 @@
-﻿using Newtonsoft.Json;
+﻿//using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -95,17 +97,53 @@ namespace OnlineMongoMigrationProcessor
             _logBucket = null;
         }
 
+        //public static void Save()
+        //{
+        //    try
+        //    {
+        //        string json = JsonConvert.SerializeObject(_logBucket);
+        //        var path = $"{Helper.GetWorkingFolder()}migrationlogs\\{_currentId}.txt";
+        //        File.WriteAllText(path, json);
+        //    }
+        //    catch { }
+        //}
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            PropertyNamingPolicy = null,
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            WriteIndented = false,
+            Converters = { new JsonStringEnumConverter() }
+        };
+
+        private static readonly object _syncLock = new(); // Thread safety
+
         public static void Save()
         {
+            var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
+            var filePath = Path.Combine(folder, $"{_currentId}.txt");
+            var tempPath = filePath + ".tmp";
+
             try
             {
-                string json = JsonConvert.SerializeObject(_logBucket);
-                var path = $"{Helper.GetWorkingFolder()}migrationlogs\\{_currentId}.txt";
-                File.WriteAllText(path, json);
-            }
-            catch { }
-        }
+                Directory.CreateDirectory(folder);
 
+                lock (_syncLock)
+                {
+                    using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 32768, FileOptions.WriteThrough);
+
+                    JsonSerializer.Serialize(fileStream, _logBucket, _jsonOptions);
+
+                    fileStream.Flush(); // Ensure all buffered bytes are written
+                }
+
+                // Replace old file atomically
+                File.Move(tempPath, filePath, true);
+            }
+            catch (Exception ex)
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
+        }
         private static string CreateFileCopyWithTimestamp(string sourceFilePath)
         {
             if (string.IsNullOrEmpty(sourceFilePath))
@@ -150,7 +188,8 @@ namespace OnlineMongoMigrationProcessor
                     string json = File.ReadAllText(path);
                     try
                     {
-                        var loadedObject = JsonConvert.DeserializeObject<LogBucket>(json);
+                        //var loadedObject = JsonConvert.DeserializeObject<LogBucket>(json);
+                        LogBucket loadedObject = JsonSerializer.Deserialize<LogBucket>(json);
                         return loadedObject ?? new LogBucket();
                     }
                     catch

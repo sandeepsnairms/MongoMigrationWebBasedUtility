@@ -129,6 +129,8 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
         public long CSUpdatesInLastBatch { get; set; }
+        public long CSNormalizedUpdatesInLastBatch { get; set; }
+        public int CSLastBatchDurationSeconds { get; set; }
 
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
@@ -215,6 +217,8 @@ namespace OnlineMongoMigrationProcessor
 					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     initialized = true;
+                    if (ChangeStreamMaxDocsInBatch > 10000)
+                        ChangeStreamMaxDocsInBatch = 10000;
                 }
             }
             if (!initialized)

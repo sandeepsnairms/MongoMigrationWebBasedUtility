@@ -156,7 +156,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Get the latest sorted keys
                 var sortedKeys = _migrationUnitsToProcess
-                    .OrderByDescending(kvp => kvp.Value.CSUpdatesInLastBatch)
+                    .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
                     .Select(kvp => kvp.Key)
                     .ToList();
 
@@ -181,10 +181,10 @@ namespace OnlineMongoMigrationProcessor
 
 
                         //total of batchUnits.All(u => u.CSUpdatesInLastBatch)
-                        long totalUpdatesInBatch = batchUnits.Sum(u => u.CSUpdatesInLastBatch);
+                        long totalUpdatesInBatch = batchUnits.Sum(u => u.CSNormalizedUpdatesInLastBatch);
 
                         //total of  _migrationUnitsToProcess
-                        long totalUpdatesInAll = _migrationUnitsToProcess.Sum(kvp => kvp.Value.CSUpdatesInLastBatch);
+                        long totalUpdatesInAll = _migrationUnitsToProcess.Sum(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch);
 
                         float timeFactor = totalUpdatesInAll > 0 ? (float)totalUpdatesInBatch / totalUpdatesInAll : 0;
 
@@ -194,6 +194,7 @@ namespace OnlineMongoMigrationProcessor
                             if (_migrationUnitsToProcess.TryGetValue(key, out var unit))
                             {
                                 collectionProcessed.Add(key);
+                                unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
                                 tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit, true, seconds), token));
                             }
                         }
@@ -209,11 +210,12 @@ namespace OnlineMongoMigrationProcessor
                         // Pause briefly before next batch
                         Thread.Sleep(100);
                     }
+ 
 
                     index = 0;
                     // Sort the dictionary after all processing is complete
                     sortedKeys = _migrationUnitsToProcess
-                        .OrderByDescending(kvp => kvp.Value.CSUpdatesInLastBatch)
+                        .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
                         .Select(kvp => kvp.Key)
                         .ToList();
 
@@ -402,6 +404,7 @@ namespace OnlineMongoMigrationProcessor
                         if (lastProcessedToken == change.ResumeToken.ToJson())
                         {
                             item.CSUpdatesInLastBatch = 0;
+                            item.CSNormalizedUpdatesInLastBatch = 0;
                             return; // Skip processing if the event has already been processed
                         }
 
@@ -432,6 +435,7 @@ namespace OnlineMongoMigrationProcessor
                             if (lastProcessedToken == change.ResumeToken.ToJson())
                             {
                                 item.CSUpdatesInLastBatch = 0;
+                                item.CSNormalizedUpdatesInLastBatch = 0;
                                 return; // Skip processing if the event has already been processed
                             }
                            
@@ -467,6 +471,7 @@ namespace OnlineMongoMigrationProcessor
                         deleteEvents: chnageStreamsDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
 
                     item.CSUpdatesInLastBatch = counter;
+                    item.CSNormalizedUpdatesInLastBatch=(long)(counter/(item.CSLastBatchDurationSeconds > 0 ? item.CSLastBatchDurationSeconds : 1));
                     _jobList?.Save();
                 }
                 catch (Exception ex)
