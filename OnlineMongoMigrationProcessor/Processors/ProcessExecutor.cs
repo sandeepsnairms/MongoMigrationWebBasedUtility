@@ -11,14 +11,20 @@ namespace OnlineMongoMigrationProcessor
     internal class ProcessExecutor
     {
         private static bool _migrationCancelled = false;
+        private Log _log;
 
-        /// <summary>
-        /// Executes a process with the given executable path and arguments.
-        /// </summary>
-        /// <param name="exePath">The full path to the executable file.</param>
-        /// <param name="arguments">The arguments to pass to the executable.</param>
-        /// <returns>True if the process completed successfully, otherwise false.</returns>
-        public bool Execute(JobList jobList, MigrationUnit item, MigrationChunk chunk, int chunkIndex, double basePercent, double contribFactor, long targetCount, string exePath, string arguments)
+		public ProcessExecutor(Log log)
+        {
+            // Constructor logic if needed
+            _log = log;
+		}
+		/// <summary>
+		/// Executes a process with the given executable path and arguments.
+		/// </summary>
+		/// <param name="exePath">The full path to the executable file.</param>
+		/// <param name="arguments">The arguments to pass to the executable.</param>
+		/// <returns>True if the process completed successfully, otherwise false.</returns>
+		public bool Execute(JobList jobList, MigrationUnit item, MigrationChunk chunk, int chunkIndex, double basePercent, double contribFactor, long targetCount, string exePath, string arguments)
         {
             int pid;
             string processType = string.Empty;
@@ -69,7 +75,7 @@ namespace OnlineMongoMigrationProcessor
                         if (!string.IsNullOrEmpty(args.Data))
                         {
                             outputBuffer.AppendLine(args.Data);
-                            Log.WriteLine(Helper.RedactPii(args.Data));
+                            _log.WriteLine(Helper.RedactPii(args.Data));
                         }
                     };
 
@@ -98,13 +104,13 @@ namespace OnlineMongoMigrationProcessor
                             try
                             {
                                 process.Kill();
-                                Log.WriteLine($"{processType} Process terminated due to cancellation.");
+                                _log.WriteLine($"{processType} Process terminated due to cancellation.");
                                 _migrationCancelled = false;
                                 break;
                             }
                             catch (Exception ex)
                             {
-                                Log.WriteLine($"Error terminating process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                                _log.WriteLine($"Error terminating process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                             }
                         }
                     }
@@ -120,7 +126,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                _log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 
                 return false;
             }
@@ -144,7 +150,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0 && targetCount>0)
             {
-                Log.AddVerboseMessage($"{processType} for {item.DatabaseName}.{item.CollectionName} Chunk[{chunkIndex}] : {percent}%");
+                _log.AddVerboseMessage($"{processType} for {item.DatabaseName}.{item.CollectionName} Chunk[{chunkIndex}] : {percent}%");
                 if (processType == "MongoRestore")
                 {
                     item.RestorePercent = Math.Min(100,basePercent + (percent * contribFactor));
@@ -177,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                 {
-                    Log.WriteLine($"{processType} Response: {Helper.RedactPii(data)}");
+                    _log.WriteLine($"{processType} Response: {Helper.RedactPii(data)}");
                 }
             }
         }

@@ -203,7 +203,7 @@
     {
         if (JobManager.MigrationWorker.Config == null)
         {
-            JobManager.MigrationWorker.Config = new OnlineMongoMigrationProcessor.MigrationSettings();
+            JobManager.MigrationWorker.Config = new OnlineMongoMigrationProcessor.MigrationSettings(JobManager.Log);
             JobManager.MigrationWorker.Config.Load();
         }
 

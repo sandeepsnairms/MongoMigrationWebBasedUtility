@@ -26,13 +26,14 @@ namespace OnlineMongoMigrationProcessor
         private CancellationTokenSource _cts;
         private MongoChangeStreamProcessor _changeStreamProcessor;
         private bool _postUploadCSProcessing = false;
+        private Log _log;
+
+		public bool ProcessRunning { get; set; }
 
 
-        public bool ProcessRunning { get; set; }
-
-
-        public CopyProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
+        public CopyProcessor(Log log,JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
         {
+            _log = log;
             _jobList = jobs;
             _job = job;
             _sourceClient = sourceClient;
@@ -76,10 +77,10 @@ namespace OnlineMongoMigrationProcessor
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                 if (_targetClient == null)
-                    _targetClient = MongoClientFactory.Create(targetConnectionString);
+                    _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                 if (_changeStreamProcessor == null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList, _job, _config);
 
                 var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                 return;
@@ -87,7 +88,7 @@ namespace OnlineMongoMigrationProcessor
 
             // starting the  regular document copy process
 
-            Log.WriteLine($"{dbName}.{colName} Document copy started");
+            _log.WriteLine($"{dbName}.{colName} Document copy started");
 
             if (!item.DumpComplete && !_executionCancelled)
             {
@@ -129,7 +130,7 @@ namespace OnlineMongoMigrationProcessor
                                     var gte = bounds.gte;
                                     var lt = bounds.lt;
 
-                                    Log.WriteLine($"{dbName}.{colName}-Chunk [{i}] generating query");
+                                    _log.WriteLine($"{dbName}.{colName}-Chunk [{i}] generating query");
                                     
 
                                     // Generate query and get document count
@@ -141,7 +142,7 @@ namespace OnlineMongoMigrationProcessor
 
                                     downloadCount += item.MigrationChunks[i].DumpQueryDocCount;
 
-                                    Log.WriteLine($"{dbName}.{colName}- Chunk [{i}] Count is  {docCount}");
+                                    _log.WriteLine($"{dbName}.{colName}- Chunk [{i}] Count is  {docCount}");
                                     
                                 }
                                 else
@@ -156,10 +157,10 @@ namespace OnlineMongoMigrationProcessor
                                 _cts = new CancellationTokenSource();
 
                                 if (_targetClient == null)
-                                    _targetClient = MongoClientFactory.Create(targetConnectionString);
+                                    _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                                 var documentCopier = new MongoDocumentCopier();
-                                documentCopier.Initialize(_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
+                                documentCopier.Initialize(_log,_targetClient, collection, dbName, colName, _config.MongoCopyPageSize);
                                 var result = documentCopier.CopyDocumentsAsync(_jobList, item, i, initialPercent, contributionFactor, docCount, filter, _cts.Token,_job.IsSimulatedRun).GetAwaiter().GetResult();
 
                                 if (result)
@@ -175,18 +176,18 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 else
                                 {
-                                    Log.WriteLine($"Attempt {dumpAttempts} {dbName}.{colName}-{i} of Document copy failed. Retrying in {backoff.TotalSeconds} seconds...");
+                                    _log.WriteLine($"Attempt {dumpAttempts} {dbName}.{colName}-{i} of Document copy failed. Retrying in {backoff.TotalSeconds} seconds...");
                                     Thread.Sleep(backoff);
                                     backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
                                 }
                             }
                             catch (MongoExecutionTimeoutException ex)
                             {
-                                Log.WriteLine($" Document copy attempt {dumpAttempts} failed due to timeout: {ex.ToString()}.Details:{ex.ToString()}", LogType.Error);
+                                _log.WriteLine($" Document copy attempt {dumpAttempts} failed due to timeout: {ex.ToString()}.Details:{ex.ToString()}", LogType.Error);
 
                                 if (dumpAttempts >= maxRetries)
                                 {
-                                    Log.WriteLine("Maximum Document copy attempts reached. Aborting operation.", LogType.Error);
+                                    _log.WriteLine("Maximum Document copy attempts reached. Aborting operation.", LogType.Error);
                                     
 
                                     _job.CurrentlyActive = false;
@@ -196,7 +197,7 @@ namespace OnlineMongoMigrationProcessor
                                 }
 
                                 // Wait for the backoff duration before retrying
-                                Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                                _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                                 Thread.Sleep(backoff);
                                 
 
@@ -205,7 +206,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (Exception ex)
                             {
-                                Log.WriteLine(ex.ToString(), LogType.Error);
+                                _log.WriteLine(ex.ToString(), LogType.Error);
                                 
 
                                 _job.CurrentlyActive = false;
@@ -241,10 +242,10 @@ namespace OnlineMongoMigrationProcessor
                     if (_job.IsOnline && !_executionCancelled && !_job.CSStartsAfterAllUploads)
                     {
                         if (_targetClient == null)
-                            _targetClient = MongoClientFactory.Create(targetConnectionString);
+                            _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                         if (_changeStreamProcessor == null)
-                            _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
+                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList, _job, _config);
 
                         _changeStreamProcessor.AddCollectionsToProcess(item, _cts);
                     }
@@ -254,7 +255,7 @@ namespace OnlineMongoMigrationProcessor
                         var migrationJob = _jobList.MigrationJobs.Find(m => m.Id == jobId);
                         if (!_job.IsOnline &&  Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                            Log.WriteLine($"{migrationJob.Id} Completed");
+                            _log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
                             migrationJob.CurrentlyActive = false;
@@ -268,10 +269,10 @@ namespace OnlineMongoMigrationProcessor
                             _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                             if (_targetClient == null)
-                                _targetClient = MongoClientFactory.Create(targetConnectionString);
+                                _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                             if (_changeStreamProcessor == null)
-                                _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobList, _job, _config);
+                                _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList, _job, _config);
 
                             var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                         }

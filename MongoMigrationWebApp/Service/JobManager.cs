@@ -12,19 +12,23 @@ namespace MongoMigrationWebApp.Service
     {
         private JobList? _jobList;
         public MigrationWorker? MigrationWorker { get; set; }
-        private List<LogObject>? _logBucket { get; set; }
+        //private List<LogObject>? _logBucket { get; set; }
+        public Log Log { get; set; }
 
         public JobManager()
         {
+            if(Log == null)
+                Log = new Log();
+
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                _jobList.Load();
+                _jobList.Load(Log);
             }
 
             if (MigrationWorker == null)
             {
-                MigrationWorker = new MigrationWorker(_jobList);
+                MigrationWorker = new MigrationWorker(_jobList, Log);
             }
 
             if (_jobList.MigrationJobs == null)
@@ -32,6 +36,8 @@ namespace MongoMigrationWebApp.Service
                 _jobList.MigrationJobs = new List<MigrationJob>();
                 Save();
             }
+
+            
         }
 
         public bool Save()
@@ -41,7 +47,7 @@ namespace MongoMigrationWebApp.Service
 
         public List<MigrationJob> GetMigrations() => _jobList.MigrationJobs;
 
-        public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.GetLogBucket(id, out logBackupFile);
+        public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.ReadLogFile(id, out logBackupFile);
 
         public void DisposeLogs()
         {

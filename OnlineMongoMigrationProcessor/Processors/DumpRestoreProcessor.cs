@@ -29,6 +29,7 @@ namespace OnlineMongoMigrationProcessor
         private ProcessExecutor _processExecutor;
         private MongoChangeStreamProcessor _changeStreamProcessor;
         private CancellationTokenSource _cts;
+        private Log _log;
 
         //private bool _uploaderProcessing = false;
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
@@ -40,16 +41,17 @@ namespace OnlineMongoMigrationProcessor
         public bool ProcessRunning { get; set; }
 
 
-        public DumpRestoreProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
+        public DumpRestoreProcessor(Log log,JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
 
         {
+            _log = log;
             _jobs = jobs;
             _job = job;
             _toolsLaunchFolder = toolsLaunchFolder;
             _sourceClient = sourceClient;
             _config = config;
 
-            _processExecutor = new ProcessExecutor();
+            _processExecutor = new ProcessExecutor(_log);
 
         }
 
@@ -99,21 +101,21 @@ namespace OnlineMongoMigrationProcessor
             if (_postUploadCSProcessing)
                 return; // S
 
-            if (_job.CSPostProcessingStarted && !Helper.IsOfflineJobCompleted(_job))
-            {
-                _job.CSPostProcessingStarted = false;
-                _jobs?.Save(); // Save the job state to indicate that CS post-processing has started
-            }
+            //if (_job.CSPostProcessingStarted && !Helper.IsOfflineJobCompleted(_job))
+            //{
+            //    _job.CSPostProcessingStarted = false;
+            //    _jobs?.Save(); // Save the job state to indicate that CS post-processing has started
+            //}
 
             if (_job.IsOnline && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                 if (_targetClient == null)
-                    _targetClient = MongoClientFactory.Create(targetConnectionString);
+                    _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                 if (_changeStreamProcessor == null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _job, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs, _job, _config);
 
                 var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                 return;
@@ -124,7 +126,7 @@ namespace OnlineMongoMigrationProcessor
             // MongoDump
             if (!item.DumpComplete && !_executionCancelled)
             {
-                Log.WriteLine($"{dbName}.{colName} Downloader started");
+                _log.WriteLine($"{dbName}.{colName} Downloader started");
 
                 item.EstimatedDocCount = collection.EstimatedDocumentCount();
 
@@ -168,12 +170,12 @@ namespace OnlineMongoMigrationProcessor
 
                                     if (!continueDownlods)
                                     {
-                                        Log.WriteLine($"{dbName}.{colName} added to uploader queue");
+                                        _log.WriteLine($"{dbName}.{colName} added to uploader queue");
                                         
                                         MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}",item);
                                         Task.Run(() => Upload(item, targetConnectionString));
 
-                                        Log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobs are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobs. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
+                                        _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobs are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobs. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
                                         
                                         Thread.Sleep(TimeSpan.FromMinutes(5));
                                     }
@@ -188,7 +190,7 @@ namespace OnlineMongoMigrationProcessor
                                     var gte = bounds.gte;
                                     var lt = bounds.lt;
 
-                                    Log.WriteLine($"{dbName}.{colName}-Chunk [{i}] generating query");
+                                    _log.WriteLine($"{dbName}.{colName}-Chunk [{i}] generating query");
                                     
 
                                     // Generate query and get document count
@@ -200,7 +202,7 @@ namespace OnlineMongoMigrationProcessor
 
                                     downloadCount += item.MigrationChunks[i].DumpQueryDocCount;
 
-                                    Log.WriteLine($"{dbName}.{colName}- Chunk [{i}] Count is  {docCount}");
+                                    _log.WriteLine($"{dbName}.{colName}- Chunk [{i}] Count is  {docCount}");
                                     
 
                                     args = $"{args} --query=\"{query}\"";
@@ -224,7 +226,7 @@ namespace OnlineMongoMigrationProcessor
                                     _jobs?.Save(); // Persist state
                                     dumpAttempts = 0;
          
-                                    Log.WriteLine($"{dbName}.{colName} added to uploader queue");
+                                    _log.WriteLine($"{dbName}.{colName} added to uploader queue");
                                     
                                     MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
                                     Task.Run(() => Upload(item, targetConnectionString));
@@ -234,7 +236,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     if (!_executionCancelled)
                                     {
-                                        Log.WriteLine($"Attempt {dumpAttempts} {dbName}.{colName}-{i} of Dump Executor failed. Retrying in {backoff.TotalSeconds} seconds...");
+                                        _log.WriteLine($"Attempt {dumpAttempts} {dbName}.{colName}-{i} of Dump Executor failed. Retrying in {backoff.TotalSeconds} seconds...");
                                         Thread.Sleep(backoff);
                                         backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
                                     }
@@ -242,11 +244,11 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (MongoExecutionTimeoutException ex)
                             {
-                                Log.WriteLine($" Dump attempt {dumpAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
+                                _log.WriteLine($" Dump attempt {dumpAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
 
                                 if (dumpAttempts >= maxRetries)
                                 {
-                                    Log.WriteLine("Maximum dump attempts reached. Aborting operation.", LogType.Error);
+                                    _log.WriteLine("Maximum dump attempts reached. Aborting operation.", LogType.Error);
                                     
 
                                     _job.CurrentlyActive = false;
@@ -258,7 +260,7 @@ namespace OnlineMongoMigrationProcessor
                                 if (!_executionCancelled)
                                 {
                                     // Wait for the backoff duration before retrying
-                                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                                    _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                                     Thread.Sleep(backoff);
                                     
 
@@ -268,7 +270,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (Exception ex)
                             {
-                                Log.WriteLine(ex.ToString(), LogType.Error);
+                                _log.WriteLine(ex.ToString(), LogType.Error);
                                 
 
                                 _job.CurrentlyActive = false;
@@ -296,7 +298,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (item.DumpComplete && !item.RestoreComplete && !_executionCancelled)
             {
-                Log.WriteLine($"{dbName}.{colName} added to uploader queue");
+                _log.WriteLine($"{dbName}.{colName} added to uploader queue");
                 
                 MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}", item);
                 Task.Run(() => Upload(item, targetConnectionString));
@@ -325,7 +327,7 @@ namespace OnlineMongoMigrationProcessor
 
             string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
 
-            Log.WriteLine($"{dbName}.{colName} starting uploader");
+            _log.WriteLine($"{dbName}.{colName} starting uploader");
 
             while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive && !_job.IsSimulatedRun)
             {
@@ -362,7 +364,7 @@ namespace OnlineMongoMigrationProcessor
                             double contributionFactor = (double)item.MigrationChunks[i].DumpQueryDocCount / Math.Max(item.ActualDocCount, item.EstimatedDocCount);
                             if (item.MigrationChunks.Count == 1) contributionFactor = 1;
 
-                            Log.WriteLine($"{dbName}.{colName}-{i} uploader processing");
+                            _log.WriteLine($"{dbName}.{colName}-{i} uploader processing");
 
                             int restoreAttempts = 0;
                             backoff = TimeSpan.FromSeconds(2);
@@ -383,14 +385,14 @@ namespace OnlineMongoMigrationProcessor
                                     var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
                                     task.Wait(); // Wait for the task to complete
                                     bool result = task.Result; // Capture the result after the task completes
-                                    Log.WriteLine($"{dbName}.{colName}-{i} uploader processing completed");
+                                    _log.WriteLine($"{dbName}.{colName}-{i} uploader processing completed");
                                     if (result)
                                     {                                       
 
                                         if (item.MigrationChunks[i].RestoredFailedDocCount > 0)
                                         {
                                             if (_targetClient == null)
-                                                _targetClient = MongoClientFactory.Create(targetConnectionString);
+                                                _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
                                             var targetDb = _targetClient.GetDatabase(item.DatabaseName);
                                             var targetCollection = targetDb.GetCollection<BsonDocument>(item.CollectionName);
@@ -406,21 +408,21 @@ namespace OnlineMongoMigrationProcessor
                                             }
                                             catch (Exception ex)
                                             {
-                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} encountered error while counting documents on target. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
+                                                _log.WriteLine($"Restore for {dbName}.{colName}-{i} encountered error while counting documents on target. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
                                                                                                 
                                             }
 
                                             // checking if source  and target doc counts are same
                                             if (item.MigrationChunks[i].DocCountInTarget == item.MigrationChunks[i].DumpQueryDocCount)
                                             {
-                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
+                                                _log.WriteLine($"Restore for {dbName}.{colName}-{i} No documents missing, count in Target: {item.MigrationChunks[i].DocCountInTarget}");
                                                 
                                             }
                                             else
                                             {
                                                 //since count is mismatched, we will reprocess the chunk
                                                 skipRestore = true;
-                                                Log.WriteLine($"Restore for {dbName}.{colName}-{i} Documents missing, Chunk will be reprocessed", LogType.Error);
+                                                _log.WriteLine($"Restore for {dbName}.{colName}-{i} Documents missing, Chunk will be reprocessed", LogType.Error);
                                                 
                                             }
 
@@ -457,9 +459,9 @@ namespace OnlineMongoMigrationProcessor
                                         }
                                         else if (!_executionCancelled)
                                         {
-                                            Log.WriteLine($"Restore attempt {restoreAttempts} {dbName}.{colName}-{i} failed", LogType.Error);
+                                            _log.WriteLine($"Restore attempt {restoreAttempts} {dbName}.{colName}-{i} failed", LogType.Error);
                                             // Wait for the backoff duration before retrying
-                                            Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                                            _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                                             Thread.Sleep(backoff);
                                             // Exponentially increase the backoff duration
                                             backoff = TimeSpan.FromTicks(backoff.Ticks * 2);
@@ -469,14 +471,14 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 catch (MongoExecutionTimeoutException ex)
                                 {
-                                    Log.WriteLine($" Restore attempt {restoreAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
+                                    _log.WriteLine($" Restore attempt {restoreAttempts} failed due to timeout: {ex.ToString()}", LogType.Error);
                                     i--;
 
                                     if (restoreAttempts >= maxRetries)
                                     {
                                         if (!_executionCancelled)
                                         {
-                                            Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
+                                            _log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
                                             
                                         }
 
@@ -489,7 +491,7 @@ namespace OnlineMongoMigrationProcessor
                                     if (!_executionCancelled)
                                     {
                                         // Wait for the backoff duration before retrying
-                                        Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                                        _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                                         Thread.Sleep(backoff);
                                         
                                     }
@@ -501,7 +503,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     if (!_executionCancelled)
                                     {
-                                        Log.WriteLine(ex.ToString(), LogType.Error);
+                                        _log.WriteLine(ex.ToString(), LogType.Error);
                                         
 
                                     }
@@ -513,7 +515,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             if (restoreAttempts == maxRetries)
                             {
-                                Log.WriteLine("Maximum restore attempts reached. Aborting operations.", LogType.Error);
+                                _log.WriteLine("Maximum restore attempts reached. Aborting operations.", LogType.Error);
                                 
 
                                 _job.CurrentlyActive = false;
@@ -552,10 +554,10 @@ namespace OnlineMongoMigrationProcessor
                     if (_job.IsOnline && !_executionCancelled && !_job.CSStartsAfterAllUploads)
                     {
                         if (_targetClient == null)
-                            _targetClient = MongoClientFactory.Create(targetConnectionString);
+                            _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                         if (_changeStreamProcessor == null)
-                            _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs,_job, _config);
+                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs,_job, _config);
 
                         _changeStreamProcessor.AddCollectionsToProcess(item, _cts);
                     }
@@ -567,7 +569,7 @@ namespace OnlineMongoMigrationProcessor
                     //check if migration units items to upload.
                     if (MigrationUnitsPendingUpload.TryGetFirst(out var nextItem))
                     {                        
-                        Log.WriteLine($"Processing {nextItem.Value.DatabaseName}.{nextItem.Value.CollectionName} from upload queue");
+                        _log.WriteLine($"Processing {nextItem.Value.DatabaseName}.{nextItem.Value.CollectionName} from upload queue");
                                                 
                         Upload(nextItem.Value, targetConnectionString,true);
                         return;
@@ -578,7 +580,7 @@ namespace OnlineMongoMigrationProcessor
                         var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
                         if (!_job.IsOnline && Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                            Log.WriteLine($"{migrationJob.Id} Completed");
+                            _log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
                             migrationJob.CurrentlyActive = false;
@@ -592,10 +594,10 @@ namespace OnlineMongoMigrationProcessor
                             _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                             if (_targetClient == null)
-                                _targetClient = MongoClientFactory.Create(targetConnectionString);
+                                _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                             if (_changeStreamProcessor == null)
-                                _changeStreamProcessor = new MongoChangeStreamProcessor(_sourceClient, _targetClient, _jobs, _job, _config);
+                                _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs, _job, _config);
 
 
                             var result=_changeStreamProcessor.RunCSPostProcessingAsync(_cts);

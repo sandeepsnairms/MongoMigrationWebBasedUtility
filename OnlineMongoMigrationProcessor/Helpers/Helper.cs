@@ -101,7 +101,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static async Task<string> EnsureMongoToolsAvailableAsync(string toolsDestinationFolder, MigrationSettings config)
+        public static async Task<string> EnsureMongoToolsAvailableAsync(Log log,string toolsDestinationFolder, MigrationSettings config)
         {
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
 
@@ -117,12 +117,12 @@ namespace OnlineMongoMigrationProcessor
                 // Check if tools exist
                 if (File.Exists(mongodumpPath) && File.Exists(mongorestorePath))
                 {
-                    Log.WriteLine("Environment ready to use.");
+                    log.WriteLine("Environment ready to use.");
                     
                     return toolsLaunchFolder;
                 }
 
-                Log.WriteLine("Downloading tools...");
+                log.WriteLine("Downloading tools...");
 
                 // Download ZIP file
                 string zipFilePath = Path.Combine(toolsDestinationFolder, "mongo-tools.zip");
@@ -146,17 +146,17 @@ namespace OnlineMongoMigrationProcessor
 
                 if (File.Exists(mongodumpPath) && File.Exists(mongorestorePath))
                 {
-                    Log.WriteLine("Environment ready to use.");
+                    log.WriteLine("Environment ready to use.");
                     
                     return toolsLaunchFolder;
                 }
-                Log.WriteLine("Environment failed.", LogType.Error);
+                log.WriteLine("Environment failed.", LogType.Error);
                 
                 return string.Empty;
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error: {ex}", LogType.Error);
+                log.WriteLine($"Error: {ex}", LogType.Error);
                 
                 return string.Empty;
             }

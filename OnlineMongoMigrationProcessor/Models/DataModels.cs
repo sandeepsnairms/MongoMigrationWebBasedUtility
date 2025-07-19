@@ -19,6 +19,7 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
         private static readonly object _fileLock = new object();
+        private Log log;
 
         public JobList()
         {
@@ -29,8 +30,9 @@ namespace OnlineMongoMigrationProcessor
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
         }
 
-        public void Load()
+        public void Load(Log log)
         {
+            this.log = log;
             try
             {
                 if (File.Exists(_filePath))
@@ -45,7 +47,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error loading data: {ex.ToString()}");
+                log.WriteLine($"Error loading data: {ex.ToString()}");
             }
         }
 
@@ -66,7 +68,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }
@@ -193,10 +195,12 @@ namespace OnlineMongoMigrationProcessor
 		public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
+        private Log log;
 
-        public MigrationSettings()
+        public MigrationSettings(Log log)
         {
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
+            this.log = log;
         }
 
         public void Load()
@@ -244,7 +248,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }

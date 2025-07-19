@@ -46,12 +46,12 @@
     private Task Cancel()
     {
         
-        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = false, DialogType = Type });
+        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = false, DiaLogType = Type });
     }
 
     private Task Ok()
     {
-        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = true, DialogType = Type });
+        return OnClose.InvokeAsync(new YesNoDialogResult { IsConfirmed = true, DiaLogType = Type });
     }
 
     public enum Category
@@ -67,6 +67,6 @@
     public class YesNoDialogResult
     {
         public bool IsConfirmed { get; set; }
-        public Category DialogType { get; set; }
+        public Category DiaLogType { get; set; }
     }
 }

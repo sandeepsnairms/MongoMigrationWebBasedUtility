@@ -19,11 +19,12 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         private MigrationSettings? _config;
         private CancellationTokenSource _cts;
+        private Log _log;
 
-
-        public SyncBackProcessor(JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
+        public SyncBackProcessor(Log log,   JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
         {
-            _jobs = jobs ?? throw new ArgumentNullException(nameof(jobs), "JobList cannot be null.");
+            _log = log;
+			_jobs = jobs ?? throw new ArgumentNullException(nameof(jobs), "JobList cannot be null.");
             _job = job ?? throw new ArgumentNullException(nameof(job), "MigrationJob cannot be null.");
             _config = config ?? throw new ArgumentNullException(nameof(config), "MigrationSettings cannot be null.");
         }
@@ -46,11 +47,11 @@ namespace OnlineMongoMigrationProcessor.Processors
             int attempts = 0;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
-            var sourceClient = MongoClientFactory.Create( sourceConnectionString,false, _config.CACertContentsForSourceServer);
-            var targetClient = MongoClientFactory.Create(targetConnectionString);
+            var sourceClient = MongoClientFactory.Create(_log, sourceConnectionString, false, _config.CACertContentsForSourceServer);
+            var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
             _syncBackToSource = null;
-            _syncBackToSource = new MongoChangeStreamProcessor(sourceClient, targetClient, _jobs, _job,_config,true);
+            _syncBackToSource = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobs, _job,_config,true);
 
             _cts=new CancellationTokenSource();
 
@@ -62,20 +63,27 @@ namespace OnlineMongoMigrationProcessor.Processors
                 attempts++;
                 try
                 {
-                    Log.WriteLine($"Sync back to source starting.");
-                    
-                    
-                    var result = _syncBackToSource.RunCSPostProcessingAsync(_cts);
+                    _log.WriteLine($"Sync back to source starting.");
 
-                    //Log.WriteLine($"Sync back to source completed successfully.");
+
+                    foreach(MigrationUnit unit in _job.MigrationUnits)
+                    {
+                        if (!unit.SyncBackChangeStreamStartedOn.HasValue)
+                        {
+                            unit.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
+						}
+					}
+
+					var result = _syncBackToSource.RunCSPostProcessingAsync(_cts);
+
                     //
                     continueProcessing = false;
                 }
                 catch (MongoExecutionTimeoutException ex)
                 {
-                    Log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
+                    _log.WriteLine($"Attempt {attempts} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
 
-                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                    _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
                     
 
@@ -84,9 +92,9 @@ namespace OnlineMongoMigrationProcessor.Processors
                 }
                 catch (Exception ex)
                 {
-                    Log.WriteLine($"Attempt {attempts} failed: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
+                    _log.WriteLine($"Attempt {attempts} failed: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
 
-                    Log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
+                    _log.WriteLine($"Retrying in {backoff.TotalSeconds} seconds...", LogType.Error);
                     Thread.Sleep(backoff);
                     
 
@@ -97,7 +105,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
             if (attempts == maxRetries)
             {
-                Log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
+                _log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
                 
 
                 _job.CurrentlyActive = false;
