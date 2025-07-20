@@ -243,11 +243,12 @@ namespace OnlineMongoMigrationProcessor
                     DateTime startedOn;
                     DateTime timeStamp;
                     string resumeToken = string.Empty;
-
+                    string? version = string.Empty;
                     if (!_syncBack)
                     {
                         timeStamp = item.CursorUtcTimestamp;
                         resumeToken= item.ResumeToken ?? string.Empty;
+                        version = _job.SourceServerVersion;
                         if (item.ChangeStreamStartedOn.HasValue)
                         {
                             startedOn = item.ChangeStreamStartedOn.Value;
@@ -261,6 +262,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         timeStamp= item.SyncBackCursorUtcTimestamp;
                         resumeToken = item.SyncBackResumeToken ?? string.Empty;
+                        version = "8"; //hard code for target
                         if (item.SyncBackChangeStreamStartedOn.HasValue)
                         {
                             startedOn = item.SyncBackChangeStreamStartedOn.Value;
@@ -272,7 +274,7 @@ namespace OnlineMongoMigrationProcessor
                     }
 
 
-                    if (timeStamp > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3") && !item.ResetChangeStream && resumeToken == null) //skip CursorUtcTimestamp if its reset 
+                    if (timeStamp > DateTime.MinValue && !version.StartsWith("3") && !item.ResetChangeStream && resumeToken == null) //skip CursorUtcTimestamp if its reset 
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
                         options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
@@ -282,11 +284,11 @@ namespace OnlineMongoMigrationProcessor
                         options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(resumeToken) };
 
                     }
-                    else if (string.IsNullOrEmpty(resumeToken) && _job.SourceServerVersion.StartsWith("3"))
+                    else if (string.IsNullOrEmpty(resumeToken) && version.StartsWith("3"))
                     {
                         options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
                     }
-                    else if (startedOn > DateTime.MinValue && !_job.SourceServerVersion.StartsWith("3"))
+                    else if (startedOn > DateTime.MinValue && !version.StartsWith("3"))
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
                         options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
@@ -296,6 +298,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if(seconds==0)
                         seconds = GetBatchDurationInSeconds(.5f); //get seconds from config or use default
+
                     var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                     CancellationToken cancellationToken = cancellationTokenSource.Token;
 
@@ -304,24 +307,25 @@ namespace OnlineMongoMigrationProcessor
                     WatchCollection(item, options, sourceCollection, targetCollection, cancellationToken);
 
                                            
-                }                    
+                }
+                catch (OperationCanceledException)
+                {
+                    // A new batch will be started. do nothing
+                }
                 catch (MongoCommandException ex) when (ex.ToString().Contains("Resume of change stream was not possible"))
                 {
                     // Handle other potential exceptions
                     _log.WriteLine($"{_syncBackPrefix}Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
-                    
-                    Thread.Sleep(1000 * 300);
+                    _log.AddVerboseMessage($"{_syncBackPrefix}Oplog is full. Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}");
+
+                    ExecutionCancelled= true; // stop processing
                 }
                 catch (MongoCommandException ex) when (ex.Message.Contains("Expired resume token") || ex.Message.Contains("cursor"))
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Resume token expired or cursor invalid for {targetCollection.CollectionNamespace}. Using last datetime to continue.");
-                    item.ResumeToken = null; // Reset the resume token
-                }
-                catch (Exception ex)
-                {
-                    // Handle other potential exceptions
-                    _log.WriteLine($"{_syncBackPrefix}Error processing change stream for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
-                    
+                    _log.WriteLine($"{_syncBackPrefix}Resume token expired or cursor invalid for {targetCollection.CollectionNamespace}.", LogType.Error);
+                    _log.AddVerboseMessage($"{_syncBackPrefix}Resume token expired or cursor invalid for {targetCollection.CollectionNamespace}.");
+                
+                    ExecutionCancelled = true; // stop processing                 
                 }
                 finally
                 {
@@ -356,8 +360,6 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                
-                //using var cursor = sourceCollection.Watch(options);
                 using var cursor = sourceCollection.Watch(options, cancellationToken);
 
                 string lastProcessedToken = string.Empty;
@@ -383,16 +385,12 @@ namespace OnlineMongoMigrationProcessor
                             return; // Skip processing if the event has already been processed
                         }
 
-                        //if (counter > 1 || !skipFirst)
-                        //{
-                            if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
-                                return;
-                        //}
+                        if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
+                            return;
                     }
                 }
                 else
                 {
-                    
                     while (cursor.MoveNext(cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -413,22 +411,19 @@ namespace OnlineMongoMigrationProcessor
                                 item.CSNormalizedUpdatesInLastBatch = 0;
                                 return; // Skip processing if the event has already been processed
                             }
-                           
 
-                            //if (counter > 1 || !skipFirst || isVCore)
-                            //{
-                                if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
-                                    return;
-                            //}
+                            if (!ProcessCursor(change, cursor, targetCollection, item, chnageStreamsDocuments, ref counter))
+                                return;
+
                         }
 
                         if (ExecutionCancelled)
                             return;
                     }
-                }               
+                }
             }
             catch (OperationCanceledException)
-            {               
+            {
                 // A new batch will be started. do nothing
             }
             catch (Exception ex)
@@ -446,13 +441,13 @@ namespace OnlineMongoMigrationProcessor
                         deleteEvents: chnageStreamsDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
 
                     item.CSUpdatesInLastBatch = counter;
-                    item.CSNormalizedUpdatesInLastBatch=(long)(counter/(item.CSLastBatchDurationSeconds > 0 ? item.CSLastBatchDurationSeconds : 1));
+                    item.CSNormalizedUpdatesInLastBatch = (long)(counter / (item.CSLastBatchDurationSeconds > 0 ? item.CSLastBatchDurationSeconds : 1));
                     _jobList?.Save();
                 }
                 catch (Exception ex)
                 {
                     _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {targetCollection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
-                    
+
                 }
             }
         }
