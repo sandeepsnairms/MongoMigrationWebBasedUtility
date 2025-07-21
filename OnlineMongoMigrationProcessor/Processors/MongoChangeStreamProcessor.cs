@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
+using static System.Reflection.Metadata.BlobBuilder;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
@@ -186,9 +187,11 @@ namespace OnlineMongoMigrationProcessor
                 }
 
 
-                _log.WriteLine($"{_syncBackPrefix}Change stream processing completed.");
-                
+                _log.WriteLine($"{_syncBackPrefix}Change stream processing completed.");                
                 _isCSProcessing = false;
+                _job.CurrentlyActive = false;
+                _jobList?.Save();
+
             }
             catch (OperationCanceledException)
             {
