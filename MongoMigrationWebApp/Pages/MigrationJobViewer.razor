@@ -15,7 +15,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())))
+        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())) || _logBackupFile != string.Empty)
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -79,7 +79,7 @@
 
 @if (_yesNoDialogOpen)
 {
-   <YesNoDialog Type=_yesNoDialogType Caption="Confirmation Required" Message="@_message" OnClose="@YesNoDialogSubmit" />
+   <YesNoDialog Type=_yesNoDiaLogType Caption="Confirmation Required" Message="@_message" OnClose="@YesNoDialogSubmit" />
 }
 
 @if (_manageCollectionDialogOpen && MigrationJob != null)
@@ -109,10 +109,12 @@
             @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
             {
                 <th>Time Since Last Change</th>
+                <th>Last Batch – Total Changes</th>
             }
             @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
             {
                 <th>Time Since Last Sync Back</th>
+                <th>Last Batch – Total Changes</th>
             }
         </tr>
     </thead>
@@ -135,18 +137,16 @@
                             @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
                         </td>
                     }
-                    @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
+                    @if (MigrationJob != null && MigrationJob.IsOnline)
                     {
                         <td>
-                            @GetChangeStreamLag(unit)
+                            @GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack)
                         </td>
-                    }
-                    @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
-                    {
                         <td>
-                            @GetChangeStreamLag(unit,true)
+                            @unit.CSUpdatesInLastBatch
                         </td>
                     }
+                   
                 </tr>
             }
         }
@@ -160,15 +160,15 @@
     }
 </div>
 
-<h5 class="pt-4">
-    Monitor
-</h5>
-<div>
-    <table class="table message-output">
-        <tbody>
-            @if (LogBucket !=null && LogBucket.GetVerboseMessages() != null && LogBucket.GetVerboseMessages().Count > 0)
-            {
-                @foreach (var logObject in LogBucket.GetVerboseMessages())
+@if (LogBucket != null && JobManager.Log.GetVerboseMessages() != null && JobManager.Log.GetVerboseMessages().Count > 0 && _logBackupFile == string.Empty)
+{
+    <h5 class="pt-4">
+        Monitor
+    </h5>
+    <div>
+        <table class="table message-output">
+            <tbody>           
+                @foreach (var logObject in JobManager.Log.GetVerboseMessages())
                 {
                     <tr class="@GetRowClass(logObject.Type.ToString(), logObject.Message)">
                         <td>
@@ -183,14 +183,12 @@
                         </td>
                     </tr>
                 }
+            </tbody>
+        </table>
+    </div>
+}
 
-            }
-        </tbody>
-    </table>
-</div>
-
-
-@if (LogBucket!=null && LogBucket.Logs != null)
+@if (LogBucket != null && LogBucket != null && _logBackupFile == string.Empty)
 {
     <h5 class=" pt-4">
         <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
@@ -223,7 +221,7 @@
                     <td> ..... </td>
                 </tr>
 
-                @foreach (var logObject in LogBucket.Logs.Take(30).Reverse()) // Reverse the top 10 items
+                @foreach (var logObject in LogBucket.Logs.Take(30).Reverse()) // Reverse the top 30 items
                 {
                     <tr class="@GetRowClass(logObject.Type.ToString(),logObject.Message)">
                         <td style="width: 120px;">@logObject.Datetime</td>
@@ -235,6 +233,21 @@
     </table>
 
 
+}
+else if (@_logBackupFile !=string.Empty )
+{
+    <div class="alert alert-danger">
+        <p>
+            Failed to load the log file. It appears to be corrupt and has been backed up.
+            Use the button below to download the previous log. A new log file will be created
+            when the job is resumed.
+        </p>
+        <button class="btn btn-primary mx-2"
+                @onclick="DownloadLogBackupFile"
+                title="Download Log File">
+            Download Backup File
+        </button>
+    </div>
 }
 @code {
 
@@ -257,9 +270,10 @@
     private Timer? _refreshTimer;
     private string _message = string.Empty;
     private bool _yesNoDialogOpen;
-    private YesNoDialog.Category _yesNoDialogType= YesNoDialog.Category.CutoverNot;
+    private YesNoDialog.Category _yesNoDiaLogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
     private bool _resetChangeStreamDialogOpen;
+    private string _logBackupFile = string.Empty;
 
     private string GetRowClass(string type, string message)
     {
@@ -289,9 +303,21 @@
         _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
     }
 
+
+    private async Task DownloadLogBackupFile()
+    {
+        await Downloader(_logBackupFile, $"Backup_{_logBackupFile}");
+    }
+
+
     private async Task DownloadFile()
     {
-        var url = $"/api/File/download/log/{JobId}"; // Adjust the API URL if needed
+        await Downloader(JobId, JobId);
+    }
+
+    private async Task Downloader(string fileName, string displayName)
+    {
+        var url = $"/api/File/download/log/{fileName}"; 
         var response = await HttpClient.GetAsync(url);
 
         if (response.IsSuccessStatusCode)
@@ -300,18 +326,27 @@
             var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
 
             // Use JavaScript to trigger the file download
-            await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{JobId}.json", contentType);
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{displayName}.json", contentType);
         }
         else
         {
-            Console.Error.WriteLine($"Failed to download log file: {JobId}.json");
+            Console.Error.WriteLine($"Failed to download log file: {displayName}.json");
         }
     }
 
     private void Refresh(object? state)
     {
         MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
-        LogBucket = JobManager.GetLogBucket(JobId);
+        LogBucket = JobManager.Log.ReadLogFile(JobId, out string logBackupFile);
+
+        if (logBackupFile != JobId)
+        {
+            _logBackupFile = logBackupFile;
+        }
+        else
+        {
+            _logBackupFile = string.Empty;
+        }
 
         InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
     }
@@ -373,9 +408,17 @@
             return;
         }
 
-        LogBucket = JobManager.GetLogBucket(JobId);
+        LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile);
+        if (logBackupFile != JobId)
+        {
+            _logBackupFile = logBackupFile;
+        }
+        else
+        {
+            _logBackupFile = string.Empty;
+        }
 
-        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning()))
+        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning() && _logBackupFile==string.Empty))
         {
             await ResumeJob();
         }
@@ -487,7 +530,7 @@
     private void InitSyncBackJob()
     {
         _message = "You are about to initiate cutover and begin syncing data back to the source. Proceed only if all changes from the source have already been replicated to the target. This action is irreversible. Are you sure you want to cutover?";
-        _yesNoDialogType = YesNoDialog.Category.SyncBackNot;
+        _yesNoDiaLogType = YesNoDialog.Category.SyncBackNot;
         _yesNoDialogOpen = true;      
     }
 
@@ -496,12 +539,12 @@
         if (MigrationJob.ProcessingSyncBack)
         {
             _message = "You can't resume a job after its completed. Are you sure you want to complete the job?";
-            _yesNoDialogType = YesNoDialog.Category.CompleteNot;
+            _yesNoDiaLogType = YesNoDialog.Category.CompleteNot;
         }
         else
         {
             _message = "You can't resume a job after its cutover. Are you sure you want to cutover?";
-            _yesNoDialogType = YesNoDialog.Category.CutoverNot;
+            _yesNoDiaLogType = YesNoDialog.Category.CutoverNot;
         }
         _yesNoDialogOpen = true;
     }
@@ -542,7 +585,7 @@
         _yesNoDialogOpen = false;
         if (result.IsConfirmed)
         {
-            if (result.DialogType == YesNoDialog.Category.CutoverNot || result.DialogType == YesNoDialog.Category.CompleteNot)
+            if (result.DiaLogType == YesNoDialog.Category.CutoverNot || result.DiaLogType == YesNoDialog.Category.CompleteNot)
             {
                 JobManager.MigrationWorker.StopMigration();
                 MigrationJob.IsCancelled = true;
@@ -551,7 +594,7 @@
                 JobManager.Save();
                 _refreshTimer = null;
             }
-            else if (result.DialogType == YesNoDialog.Category.SyncBackNot)
+            else if (result.DiaLogType == YesNoDialog.Category.SyncBackNot)
             {
 
                 JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);

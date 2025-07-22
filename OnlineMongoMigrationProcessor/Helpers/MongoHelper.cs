@@ -78,7 +78,7 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(string PEMFileContents,string connectionString, MigrationUnit unit, bool createCollection=false)
+        public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(Log log,string PEMFileContents,string connectionString, MigrationUnit unit, bool createCollection=false)
         {
             string version = string.Empty;
             string collectionName = string.Empty;
@@ -87,7 +87,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 //// Connect to the MongoDB server
-                client = MongoClientFactory.Create(connectionString,true, PEMFileContents);
+                client = MongoClientFactory.Create(log,connectionString,true, PEMFileContents);
 
                 
                 if (createCollection)
@@ -144,29 +144,29 @@ namespace OnlineMongoMigrationProcessor
                     // Check if the server is part of a replica set or a sharded cluster
                     if (isMasterResult.Contains("setName") || isMasterResult.GetValue("msg", "").AsString == "isdbgrid")
                     {
-                        Log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
-                        Log.Save();
+						log.WriteLine("Change streams are enabled on source (replica set or sharded cluster).");
+                        
                         return (IsCSEnabled: true, Version: version);
                     }
                     else
                     {
-                        Log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
-                        Log.Save();
+						log.WriteLine("Change streams are not enabled on source (standalone server).", LogType.Error);
+                        
                         return (IsCSEnabled: false, Version: version);
                     }
                 }
             }
             catch (MongoCommandException ex) when (ex.Message.Contains("$changeStream is not supported"))
             {
-                Log.WriteLine("Change streams are not enabled on vCore.", LogType.Error);
-                Log.Save();
+				log.WriteLine("Change streams are not enabled on vCore.", LogType.Error);
+                
                 return (IsCSEnabled: false, Version: "");
 
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error checking for change streams: {ex.ToString()}", LogType.Error);
-                Log.Save();
+				log.WriteLine($"Error checking for change streams: {ex.ToString()}", LogType.Error);
+                
                 //return (IsCSEnabled: false, Version: version);
                 throw ex;
             }
@@ -179,7 +179,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public async static Task SetChangeStreamResumeTokenAsync(MongoClient client, MigrationUnit unit)
+        public async static Task SetChangeStreamResumeTokenAsync(Log log,MongoClient client, MigrationUnit unit)
         {
             int retryCount = 0;
             bool isSucessful = false;
@@ -206,8 +206,8 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!string.IsNullOrEmpty(unit.ResumeToken))
                         {
-                            Log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
-                            Log.Save();
+                            log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                            
                             return;
                         }
 
@@ -238,19 +238,19 @@ namespace OnlineMongoMigrationProcessor
 
                     if (resumeToken == null || resumeToken.ElementCount == 0)
                     {
-                        Log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
+                        log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
                     }
                     else
                     {
                         if (resetCS)
                         {
-                            Log.WriteLine($"Change stream start time for {unit.DatabaseName}.{unit.CollectionName} reset to {unit.ChangeStreamStartedOn?.ToUniversalTime()} (UTC)");
-                            Log.Save();
+                            log.WriteLine($"Change stream start time for {unit.DatabaseName}.{unit.CollectionName} reset to {unit.ChangeStreamStartedOn?.ToUniversalTime()} (UTC)");
+                            
                         }
                         else
                         { 
-                            Log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
-                            Log.Save();
+                            log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+                            
                         }
 
                         unit.ResumeToken = resumeToken.ToJson();                        
@@ -271,8 +271,8 @@ namespace OnlineMongoMigrationProcessor
                 {
                     retryCount++;
 
-                    Log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
-                    Log.Save();
+                    log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
+                    
                     
                 }
             }
@@ -320,7 +320,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static async Task<bool> DeleteAndCopyIndexesAsync(string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
+        public static async Task<bool> DeleteAndCopyIndexesAsync(Log log,string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
         {
             try
             {
@@ -329,13 +329,13 @@ namespace OnlineMongoMigrationProcessor
                 var sourceCollectionName = sourceCollection.CollectionNamespace.CollectionName;
 
                 // Connect to the target database
-                var targetClient = MongoClientFactory.Create(targetConnectionString);
+                var targetClient = MongoClientFactory.Create(log,targetConnectionString);
                 var targetDatabaseName = sourceDatabase.DatabaseNamespace.DatabaseName;
                 var targetDatabase = targetClient.GetDatabase(targetDatabaseName);
                 var targetCollectionName = sourceCollectionName;
 
-                Log.WriteLine($"Creating collection: {targetDatabaseName}.{targetCollectionName}");
-                Log.Save();
+				log.WriteLine($"Creating collection: {targetDatabaseName}.{targetCollectionName}");
+                
 
                 // Check if the target collection exists
                 var collectionNamesCursor = await targetDatabase.ListCollectionNamesAsync();
@@ -346,15 +346,15 @@ namespace OnlineMongoMigrationProcessor
                 if (targetCollectionExists)
                 {
                     await targetDatabase.DropCollectionAsync(targetCollectionName);
-                    Log.WriteLine($"Deleted existing target collection: {targetDatabaseName}.{targetCollectionName}");
-                    Log.Save();
+					log.WriteLine($"Deleted existing target collection: {targetDatabaseName}.{targetCollectionName}");
+                    
                 }
 
                 if (skipIndexes)
                     return true;
 
-                Log.WriteLine($"Creating indexes for: {targetDatabaseName}.{targetCollectionName}");
-                Log.Save();
+				log.WriteLine($"Creating indexes for: {targetDatabaseName}.{targetCollectionName}");
+                
 
                 // Get the indexes from the source collection
                 var indexes = await sourceCollection.Indexes.ListAsync();
@@ -389,19 +389,19 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (Exception ex)
                     {
-                        Log.WriteLine($"Error copying index {options?.Name} for {targetDatabaseName}.{targetCollectionName}. Details: {ex.ToString()}", LogType.Error);
-                        Log.Save();
+						log.WriteLine($"Error copying index {options?.Name} for {targetDatabaseName}.{targetCollectionName}. Details: {ex.ToString()}", LogType.Error);
+                        
                     }
                 }
 
-                Log.WriteLine($"{indexDocuments.Count} Indexes copied successfully to {targetDatabaseName}.{targetCollectionName}");
-                Log.Save();
+				log.WriteLine($"{indexDocuments.Count} Indexes copied successfully to {targetDatabaseName}.{targetCollectionName}");
+                
                 return true;
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error copying indexes: {ex.ToString()}", LogType.Error);
-                Log.Save();
+				log.WriteLine($"Error copying indexes: {ex.ToString()}", LogType.Error);
+                
                 return false;
             }
         }
