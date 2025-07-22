@@ -14,8 +14,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
     {
         public static MongoClient Create(Log log,string connectionString, bool ReadConcernMajority=false, string PEMFileContents=null)
         {
-            var uri = new Uri(connectionString.Replace("mongodb://", "http://")); // For parsing
-
+            
             var cleanConnStr = RemovePemPathFromConnectionString(connectionString);
 
             var settings = MongoClientSettings.FromUrl(new MongoUrl(cleanConnStr));
@@ -39,14 +38,27 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         private static string RemovePemPathFromConnectionString(string connStr)
         {
-            var uri = new Uri(connStr.Replace("mongodb://", "http://")); // Parseable URI
-            var baseConnStr = connStr.Split('?')[0];
-            var query = HttpUtility.ParseQueryString(uri.Query);
+            
+            string baseConnStr=string.Empty;
+            string queryString = string.Empty;
+
+            var parts = connStr.Split('?');
+            if(parts.Length >= 1)
+                baseConnStr= parts[0];
+            if(parts.Length >=2)
+                queryString = parts[1];
+
+            if(string.IsNullOrWhiteSpace(queryString))
+                return baseConnStr;
+
+            var query = HttpUtility.ParseQueryString(queryString);
             query.Remove("pemPath");
 
             var newQuery = string.Join("&", query.AllKeys
-                .Where(k => !string.IsNullOrWhiteSpace(k))
-                .Select(k => $"{k}={query[k]}"));
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .Select(k =>
+                $"{HttpUtility.UrlEncode(k.Trim())}={HttpUtility.UrlEncode((query[k] ?? "").Trim())}"));
+
 
             return string.IsNullOrWhiteSpace(newQuery) ? baseConnStr : $"{baseConnStr}?{newQuery}";
         }
