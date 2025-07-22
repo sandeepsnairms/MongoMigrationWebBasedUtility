@@ -305,17 +305,19 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (await MongoHelper.CheckCollectionExists(_sourceClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                             {
-                                var targetClient = MongoClientFactory.Create(_log,targetConnectionString);
+                                MongoClient targetClient = null;
+                                if (!_job.IsSimulatedRun)
+                                { 
+                                    targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
-                                if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
-                                {
-                                    if (!_job.CSPostProcessingStarted)
+                                    if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                                     {
-                                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");                                        
+                                        if (!_job.CSPostProcessingStarted)
+                                        {
+                                            _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on target");
+                                        }
                                     }
-                                   
-									
-								}
+                                }
                                 if (_migrationProcessor != null)
                                 {
                                     _migrationProcessor.StartProcess(migrationUnit, sourceConnectionString, targetConnectionString);

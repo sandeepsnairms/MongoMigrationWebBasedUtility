@@ -7,6 +7,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
+using System.Xml.Linq;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -18,10 +19,15 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveRestoreProcessId { get; set; } = 0;
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
-        private string _backupFilePath = string.Empty;
-        private DateTime _lastBackupTime = DateTime.MinValue;
+         private string _backupFolderPath = string.Empty;
         private static readonly object _fileLock = new object();
         private Log log;
+        private string processedMin = string.Empty;
+
+        private const int TUMBLING_INTERVAL_MINUTES = 5;
+
+        private readonly string[] SlotNames =
+        { "backup_slot0.json", "backup_slot1.json", "backup_slot2.json", "backup_slot3.json" };
 
         public JobList()
         {
@@ -30,17 +36,21 @@ namespace OnlineMongoMigrationProcessor
                 Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationjobs");
             }
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
-            _backupFilePath= $"{Helper.GetWorkingFolder()}migrationjobs\\list.bak";
+            _backupFolderPath = $"{Helper.GetWorkingFolder()}migrationjobs\\";
 
-            _lastBackupTime = DateTime.UtcNow;
         }
 
         public bool Load(Log log, bool loadBackup=false)
         {
-            if(loadBackup && !File.Exists(_backupFilePath))
-               return false;
+            string path;
 
-            string path = loadBackup ? _backupFilePath : _filePath;
+            path = loadBackup ? GetBestRestoreSlotFilePath() : _filePath;
+
+            if (path == null ||!File.Exists(path))
+            {
+                log.WriteLine("No suitable backup file found for restoration.", LogType.Error);
+                return false;
+            }
 
             this.log = log;
             try
@@ -52,6 +62,16 @@ namespace OnlineMongoMigrationProcessor
                     if (loadedObject != null)
                     {
                         MigrationJobs = loadedObject.MigrationJobs;
+
+                        if(loadBackup)
+                        {
+                            //delete all files in SlotNames
+                            foreach( string name in SlotNames)
+                            {
+                                if(System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
+                                    System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                            }
+                        }
                     }
                 }
 
@@ -64,14 +84,55 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        private string? GetBestRestoreSlotFilePath()
+        {
+            DateTime now = DateTime.Now;
+            DateTime minAllowedTime = now.AddMinutes(-1 * TUMBLING_INTERVAL_MINUTES * (SlotNames.Length-1));
+
+            var backupFolder = _backupFolderPath; // Replace with your folder path
+            var slotFiles = SlotNames
+                .Select(name => Path.Combine(backupFolder, name))
+                .Where(File.Exists)
+                .Select(filePath => new
+                {
+                    Path = filePath,
+                    Timestamp = File.GetLastWriteTime(filePath)
+                })                
+                .OrderBy(f => f.Timestamp) // Sort ascending
+                .ToList();
+
+
+            string ? latestFile = string.Empty;
+            for (int i = slotFiles.Count - 1; i >= 0; i--)
+            {
+                if (slotFiles[i].Timestamp < minAllowedTime)
+                {
+                    latestFile = slotFiles[i].Path;
+                    break;
+                }
+            }
+
+            if(slotFiles.Count>0 && latestFile == string.Empty)
+                latestFile = slotFiles.First().Path;
+
+            if (latestFile != string.Empty)
+                return backupFolder.Any() ? latestFile : null;
+            else
+                return string.Empty;
+
+        }
+
+
+
         public DateTime GetBackupDate()
         {
-            if (File.Exists(_backupFilePath))
-            {
-                return File.GetLastWriteTimeUtc(_backupFilePath);
-            }
-            return DateTime.MinValue;
+            var path = GetBestRestoreSlotFilePath();
+
+            var backupDataUpdatedOn= File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+            return backupDataUpdatedOn;
         }
+          
 
         public bool Save()
         {
@@ -82,28 +143,36 @@ namespace OnlineMongoMigrationProcessor
                     string json = JsonConvert.SerializeObject(this);
                     string tempFile = _filePath + ".tmp";
 
-                    // Write JSON to a temp file
+                    // Step 1: Write JSON to temp
                     File.WriteAllText(tempFile, json);
+
+                    //atomic rewrite
+                    File.Move(tempFile, _filePath, overwrite: true);
+
+                    DateTime now = DateTime.UtcNow;
 
                     bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
 
-                    // Perform a backup only if it's been more than 60 minutes since the last one
-                    if (File.Exists(_filePath) && hasJobs)
+                    if (File.Exists(_filePath) && hasJobs && processedMin != now.ToString("MM/dd/yyyy HH:mm"))
                     {
-                        var now = DateTime.UtcNow;
 
-                        if((now - _lastBackupTime).TotalMinutes >= 60)
+                        // Rotate every 15 minutes
+                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0)
                         {
-                            File.Copy(_filePath, _backupFilePath, overwrite: true);
-                            _lastBackupTime = now;
+
+                            //set processed minute               
+                            processedMin = now.ToString("MM/dd/yyyy HH:mm");
+
+                            int slotIndex = (now.Minute / TUMBLING_INTERVAL_MINUTES) % SlotNames.Length; // 0, 1, 2, or 3
+
+                            // Step 3: Write new backup into slot
+                            string latestSlot = Path.Combine(_backupFolderPath, SlotNames[slotIndex]);
+                            File.Copy(_filePath, latestSlot, overwrite: true);
                         }
                     }
-
-                    // Atomically replace original with temp
-                    File.Move(tempFile, _filePath, overwrite: true);
+                    
+                    return true;
                 }
-
-                return true;
             }
             catch (Exception ex)
             {
@@ -111,6 +180,8 @@ namespace OnlineMongoMigrationProcessor
                 return false;
             }
         }
+
+
 
 
     }

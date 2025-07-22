@@ -76,7 +76,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
-                if (_targetClient == null)
+                if (_targetClient == null && !_job.IsSimulatedRun)
                     _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                 if (_changeStreamProcessor == null)
@@ -156,7 +156,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 _cts = new CancellationTokenSource();
 
-                                if (_targetClient == null)
+                                if (_targetClient == null && !_job.IsSimulatedRun)
                                     _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                                 var documentCopier = new MongoDocumentCopier();
@@ -241,7 +241,7 @@ namespace OnlineMongoMigrationProcessor
                     // Process change streams
                     if (_job.IsOnline && !_executionCancelled && !_job.CSStartsAfterAllUploads)
                     {
-                        if (_targetClient == null)
+                        if (_targetClient == null && !_job.IsSimulatedRun)
                             _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                         if (_changeStreamProcessor == null)
@@ -268,7 +268,7 @@ namespace OnlineMongoMigrationProcessor
                             // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
                             _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
-                            if (_targetClient == null)
+                            if (_targetClient == null && !_job.IsSimulatedRun)
                                 _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                             if (_changeStreamProcessor == null)
