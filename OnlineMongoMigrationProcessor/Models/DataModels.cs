@@ -58,20 +58,32 @@ namespace OnlineMongoMigrationProcessor
                 lock (_fileLock)
                 {
                     string json = JsonConvert.SerializeObject(this);
-                    //File.WriteAllText(_filePath, json);
                     string tempFile = _filePath + ".tmp";
-                    File.WriteAllText(tempFile, json);
-                    File.Move(tempFile, _filePath, true); // Atomic move on most OSes
+                    string backupFile = _filePath + ".bak";
 
+                    // Write to temp file
+                    File.WriteAllText(tempFile, json);
+
+                    // If current file exists and MigrationJobs is not empty, back it up
+                    bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
+                    if (File.Exists(_filePath) && hasJobs)
+                    {
+                        File.Copy(_filePath, backupFile, overwrite: true);
+                    }
+
+                    // Move temp file to actual file (atomic operation)
+                    File.Move(tempFile, _filePath, overwrite: true);
                 }
+
                 return true;
             }
             catch (Exception ex)
             {
-                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                log.WriteLine($"Error saving data: {ex}", LogType.Error);
                 return false;
             }
         }
+
     }
 
     public class MigrationJob

@@ -183,7 +183,7 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch (MongoExecutionTimeoutException ex)
                             {
-                                _log.WriteLine($" Document copy attempt {dumpAttempts} failed due to timeout: {ex.ToString()}.Details:{ex.ToString()}", LogType.Error);
+                                _log.WriteLine($" Document copy attempt {dumpAttempts} failed due to timeout.Details:{ex.ToString()}", LogType.Error);
 
                                 if (dumpAttempts >= maxRetries)
                                 {

@@ -97,7 +97,7 @@
 }
 
 @code {
-#pragma warning disable CS8603
+    #pragma warning disable CS8603
 #pragma warning disable CS8604
 #pragma warning disable CS8600
 
@@ -189,6 +189,8 @@
                            {
                                JobManager.ClearJobFiles(jobId);
                            });
+
+                        JobManager.Save();
                     }
                     catch { }
                 }
