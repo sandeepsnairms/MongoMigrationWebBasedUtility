@@ -30,6 +30,10 @@
                         <button type="button" class="btn btn-primary" @onclick=@Ok>Delete</button>
                         <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Delete</button>
                         break;
+                    case Category.RecoverNot:
+                        <button type="button" class="btn btn-primary" @onclick=@Ok>Recover</button>
+                        <button type="button" class="btn btn-secondary" @onclick="@Cancel">Don't Recover</button>
+                        break;
                 }
             </div>
         </div>
@@ -60,7 +64,8 @@
         CutoverNot,
         CompleteNot,
         SyncBackNot,
-        DeleteNot
+        DeleteNot,
+        RecoverNot
 
     }
 

@@ -40,6 +40,36 @@ namespace MongoMigrationWebApp.Service
             
         }
 
+        public DateTime GetBackupDate()
+        {
+            return _jobList.GetBackupDate();
+        }
+
+        public bool RestoreFromBack()
+        {
+            _jobList = null;
+            _jobList = new JobList();
+
+            var sucess= _jobList.Load(Log,true);
+
+            if (!sucess)
+            {
+                return false;
+            }
+
+            if (MigrationWorker != null)
+            {
+                MigrationWorker.StopMigration();
+                MigrationWorker = null;         
+            }
+            
+            Log = new Log();
+
+            MigrationWorker =new MigrationWorker(_jobList, Log);
+
+            return sucess;
+        }
+
         public bool Save()
         {
             return _jobList.Save();

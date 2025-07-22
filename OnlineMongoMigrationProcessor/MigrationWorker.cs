@@ -60,7 +60,8 @@ namespace OnlineMongoMigrationProcessor
         {
             _migrationCancelled = true;
             _migrationProcessor?.StopProcessing();
-            _migrationProcessor.ProcessRunning = false;
+            if(_migrationProcessor!=null)
+                _migrationProcessor.ProcessRunning = false;
             _migrationProcessor = null;
 
         }

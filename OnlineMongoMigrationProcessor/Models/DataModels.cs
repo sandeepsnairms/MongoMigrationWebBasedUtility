@@ -18,6 +18,8 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveRestoreProcessId { get; set; } = 0;
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
+        private string _backupFilePath = string.Empty;
+        private DateTime _lastBackupTime = DateTime.MinValue;
         private static readonly object _fileLock = new object();
         private Log log;
 
@@ -28,27 +30,47 @@ namespace OnlineMongoMigrationProcessor
                 Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationjobs");
             }
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
+            _backupFilePath= $"{Helper.GetWorkingFolder()}migrationjobs\\list.bak";
+
+            _lastBackupTime = DateTime.UtcNow;
         }
 
-        public void Load(Log log)
+        public bool Load(Log log, bool loadBackup=false)
         {
+            if(loadBackup && !File.Exists(_backupFilePath))
+               return false;
+
+            string path = loadBackup ? _backupFilePath : _filePath;
+
             this.log = log;
             try
             {
-                if (File.Exists(_filePath))
+                if (File.Exists(path))
                 {
-                    string json = File.ReadAllText(_filePath);
+                    string json = File.ReadAllText(path);
                     var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
                     if (loadedObject != null)
                     {
                         MigrationJobs = loadedObject.MigrationJobs;
                     }
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
                 log.WriteLine($"Error loading data: {ex.ToString()}");
+                return false;
             }
+        }
+
+        public DateTime GetBackupDate()
+        {
+            if (File.Exists(_backupFilePath))
+            {
+                return File.GetLastWriteTimeUtc(_backupFilePath);
+            }
+            return DateTime.MinValue;
         }
 
         public bool Save()
@@ -59,19 +81,25 @@ namespace OnlineMongoMigrationProcessor
                 {
                     string json = JsonConvert.SerializeObject(this);
                     string tempFile = _filePath + ".tmp";
-                    string backupFile = _filePath + ".bak";
 
-                    // Write to temp file
+                    // Write JSON to a temp file
                     File.WriteAllText(tempFile, json);
 
-                    // If current file exists and MigrationJobs is not empty, back it up
                     bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
+
+                    // Perform a backup only if it's been more than 60 minutes since the last one
                     if (File.Exists(_filePath) && hasJobs)
                     {
-                        File.Copy(_filePath, backupFile, overwrite: true);
+                        var now = DateTime.UtcNow;
+
+                        if((now - _lastBackupTime).TotalMinutes >= 60)
+                        {
+                            File.Copy(_filePath, _backupFilePath, overwrite: true);
+                            _lastBackupTime = now;
+                        }
                     }
 
-                    // Move temp file to actual file (atomic operation)
+                    // Atomically replace original with temp
                     File.Move(tempFile, _filePath, overwrite: true);
                 }
 
@@ -83,6 +111,7 @@ namespace OnlineMongoMigrationProcessor
                 return false;
             }
         }
+
 
     }
 
