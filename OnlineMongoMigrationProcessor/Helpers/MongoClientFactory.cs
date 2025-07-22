@@ -12,7 +12,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 {
     public static class MongoClientFactory
     {
-        public static MongoClient Create(string connectionString, bool ReadConcernMajority=false, string PEMFileContents=null)
+        public static MongoClient Create(Log log,string connectionString, bool ReadConcernMajority=false, string PEMFileContents=null)
         {
             var uri = new Uri(connectionString.Replace("mongodb://", "http://")); // For parsing
 
@@ -25,7 +25,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                 settings.SslSettings = new SslSettings
                 {
-                    ServerCertificateValidationCallback = ValidateAmazonDocDbCertificate(PEMFileContents)
+                    ServerCertificateValidationCallback = ValidateAmazonDocDbCertificate(log,PEMFileContents)
                 };
 
                 if(ReadConcernMajority)
@@ -51,7 +51,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             return string.IsNullOrWhiteSpace(newQuery) ? baseConnStr : $"{baseConnStr}?{newQuery}";
         }
 
-        private static RemoteCertificateValidationCallback ValidateAmazonDocDbCertificate(string pem)
+        private static RemoteCertificateValidationCallback ValidateAmazonDocDbCertificate(Log log,string pem)
         {
             return (sender, certificate, chain, sslPolicyErrors) =>
             {
@@ -86,8 +86,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 }
                 catch (Exception ex)
                 {
-                    Log.WriteLine($"Certificate validation failed: { ex.ToString()}");
-                    Log.Save();
+                    log.WriteLine($"Certificate validation failed: { ex.ToString()}");
+                    
                     return false;
                 }
             };

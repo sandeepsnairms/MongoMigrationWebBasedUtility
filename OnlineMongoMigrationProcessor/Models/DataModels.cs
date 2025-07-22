@@ -18,7 +18,10 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveRestoreProcessId { get; set; } = 0;
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
+        private string _backupFilePath = string.Empty;
+        private DateTime _lastBackupTime = DateTime.MinValue;
         private static readonly object _fileLock = new object();
+        private Log log;
 
         public JobList()
         {
@@ -27,26 +30,47 @@ namespace OnlineMongoMigrationProcessor
                 Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationjobs");
             }
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
+            _backupFilePath= $"{Helper.GetWorkingFolder()}migrationjobs\\list.bak";
+
+            _lastBackupTime = DateTime.UtcNow;
         }
 
-        public void Load()
+        public bool Load(Log log, bool loadBackup=false)
         {
+            if(loadBackup && !File.Exists(_backupFilePath))
+               return false;
+
+            string path = loadBackup ? _backupFilePath : _filePath;
+
+            this.log = log;
             try
             {
-                if (File.Exists(_filePath))
+                if (File.Exists(path))
                 {
-                    string json = File.ReadAllText(_filePath);
+                    string json = File.ReadAllText(path);
                     var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
                     if (loadedObject != null)
                     {
                         MigrationJobs = loadedObject.MigrationJobs;
                     }
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error loading data: {ex.ToString()}");
+                log.WriteLine($"Error loading data: {ex.ToString()}");
+                return false;
             }
+        }
+
+        public DateTime GetBackupDate()
+        {
+            if (File.Exists(_backupFilePath))
+            {
+                return File.GetLastWriteTimeUtc(_backupFilePath);
+            }
+            return DateTime.MinValue;
         }
 
         public bool Save()
@@ -56,20 +80,39 @@ namespace OnlineMongoMigrationProcessor
                 lock (_fileLock)
                 {
                     string json = JsonConvert.SerializeObject(this);
-                    //File.WriteAllText(_filePath, json);
                     string tempFile = _filePath + ".tmp";
-                    File.WriteAllText(tempFile, json);
-                    File.Move(tempFile, _filePath, true); // Atomic move on most OSes
 
+                    // Write JSON to a temp file
+                    File.WriteAllText(tempFile, json);
+
+                    bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
+
+                    // Perform a backup only if it's been more than 60 minutes since the last one
+                    if (File.Exists(_filePath) && hasJobs)
+                    {
+                        var now = DateTime.UtcNow;
+
+                        if((now - _lastBackupTime).TotalMinutes >= 60)
+                        {
+                            File.Copy(_filePath, _backupFilePath, overwrite: true);
+                            _lastBackupTime = now;
+                        }
+                    }
+
+                    // Atomically replace original with temp
+                    File.Move(tempFile, _filePath, overwrite: true);
                 }
+
                 return true;
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                log.WriteLine($"Error saving data: {ex}", LogType.Error);
                 return false;
             }
         }
+
+
     }
 
     public class MigrationJob
@@ -128,7 +171,10 @@ namespace OnlineMongoMigrationProcessor
 
         public DateTime? ChangeStreamStartedOn { get; set; }
         public DateTime CursorUtcTimestamp { get; set; }
-        
+        public long CSUpdatesInLastBatch { get; set; }
+        public long CSNormalizedUpdatesInLastBatch { get; set; }
+        public int CSLastBatchDurationSeconds { get; set; }
+
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
@@ -190,10 +236,12 @@ namespace OnlineMongoMigrationProcessor
 		public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
+        private Log log;
 
-        public MigrationSettings()
+        public MigrationSettings(Log log)
         {
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
+            this.log = log;
         }
 
         public void Load()
@@ -214,6 +262,8 @@ namespace OnlineMongoMigrationProcessor
 					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     initialized = true;
+                    if (ChangeStreamMaxDocsInBatch > 10000)
+                        ChangeStreamMaxDocsInBatch = 10000;
                 }
             }
             if (!initialized)
@@ -239,7 +289,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }
@@ -284,6 +334,13 @@ namespace OnlineMongoMigrationProcessor
             IsUploaded = uploaded;
             DataType = dataType;
         }
+    }
+
+    public class ChnageStreamsDocuments
+    {
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeInserted = new List<ChangeStreamDocument<BsonDocument>>();
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeUpdated = new List<ChangeStreamDocument<BsonDocument>>();
+        public List<ChangeStreamDocument<BsonDocument>> DocsToBeDeleted = new List<ChangeStreamDocument<BsonDocument>>();
     }
 
     public enum DataType

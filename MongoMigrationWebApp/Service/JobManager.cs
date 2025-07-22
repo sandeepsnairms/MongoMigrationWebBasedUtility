@@ -12,19 +12,23 @@ namespace MongoMigrationWebApp.Service
     {
         private JobList? _jobList;
         public MigrationWorker? MigrationWorker { get; set; }
-        private List<LogObject>? _logBucket { get; set; }
+        //private List<LogObject>? _logBucket { get; set; }
+        public Log Log { get; set; }
 
         public JobManager()
         {
+            if(Log == null)
+                Log = new Log();
+
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                _jobList.Load();
+                _jobList.Load(Log);
             }
 
             if (MigrationWorker == null)
             {
-                MigrationWorker = new MigrationWorker(_jobList);
+                MigrationWorker = new MigrationWorker(_jobList, Log);
             }
 
             if (_jobList.MigrationJobs == null)
@@ -32,6 +36,38 @@ namespace MongoMigrationWebApp.Service
                 _jobList.MigrationJobs = new List<MigrationJob>();
                 Save();
             }
+
+            
+        }
+
+        public DateTime GetBackupDate()
+        {
+            return _jobList.GetBackupDate();
+        }
+
+        public bool RestoreFromBack()
+        {
+            _jobList = null;
+            _jobList = new JobList();
+
+            var sucess= _jobList.Load(Log,true);
+
+            if (!sucess)
+            {
+                return false;
+            }
+
+            if (MigrationWorker != null)
+            {
+                MigrationWorker.StopMigration();
+                MigrationWorker = null;         
+            }
+            
+            Log = new Log();
+
+            MigrationWorker =new MigrationWorker(_jobList, Log);
+
+            return sucess;
         }
 
         public bool Save()
@@ -41,7 +77,7 @@ namespace MongoMigrationWebApp.Service
 
         public List<MigrationJob> GetMigrations() => _jobList.MigrationJobs;
 
-        public LogBucket GetLogBucket(string id) => Log.GetLogBucket(id);
+        public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.ReadLogFile(id, out logBackupFile);
 
         public void DisposeLogs()
         {

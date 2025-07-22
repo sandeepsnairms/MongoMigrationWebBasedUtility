@@ -28,7 +28,7 @@
 {
     @if (migrationJobs?.Count == 0)
     {
-        <div>No migrations could be found</div>
+        <div>No migrations could be found</div>        
     }
     else
     {
@@ -73,6 +73,9 @@
                 }
             </tbody>
         </table>
+        <div class="d-flex align-items-center mb-3">
+            <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Go Back One Hour and Recover Jobs</button>
+        </div>
     }
 }
 
@@ -86,6 +89,12 @@
     <YesNoDialog Type="YesNoDialog.Category.DeleteNot" Caption="Confirm Delete" Message="@_message" OnClose="@YesNoDialogSubmit" />
 }
 
+@if (_recoverDialogOpen)
+{
+    <YesNoDialog Type="YesNoDialog.Category.RecoverNot" Caption="Confirm Recovery from Backup" Message="@_message" OnClose="@RestoreBackupSubmit" />
+}
+
+
 @if (_messageDialogOpen)
 {
     <YesNoDialog Type="YesNoDialog.Category.Okay" Caption="Message" Message="@_message" OnClose="@YesNoDialogSubmit" />
@@ -97,13 +106,14 @@
 }
 
 @code {
-#pragma warning disable CS8603
+    #pragma warning disable CS8603
 #pragma warning disable CS8604
 #pragma warning disable CS8600
 
     private bool _migrationDetailsPopUpOpen;
     private bool _yesNoDialogOpen;
     private bool _messageDialogOpen;
+    private bool _recoverDialogOpen;
     private bool _editSettingsOpen;
 
     private string _message = string.Empty;
@@ -148,6 +158,63 @@
         }
     }
 
+    private async Task RestoreBackup()
+    {
+        var backupDate = JobManager.GetBackupDate();
+
+        if (backupDate == DateTime.MinValue)
+        {
+            _message = "No backup file found.";
+            _messageDialogOpen = true;
+            return;
+        }
+        _message = $"This action stop any running jobs and  will overwrite the current migration jobs with the backup from (UTC) {backupDate}. Are you sure you want to proceed?";
+        _recoverDialogOpen = true;
+    }
+
+    private void RestoreBackupSubmit(YesNoDialog.YesNoDialogResult result)
+    {
+        try
+        {
+            _recoverDialogOpen = false;
+            if (!result.IsConfirmed)
+            {
+                return;
+            }
+            
+            
+            foreach(var job in JobManager.GetMigrations())
+            {
+                job.IsCancelled = true;
+                job.CurrentlyActive = false;
+                JobManager.CancelMigration(job.Id);
+            }
+            JobManager.MigrationWorker.StopMigration();
+    
+
+            bool success = JobManager.RestoreFromBack();
+            if (success)
+            {
+                migrationJobs = JobManager.GetMigrations();
+                _loadingComplete = true;
+            }
+            else
+            {
+                _message = "Failed to restore backup.";
+                _messageDialogOpen = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            _message = "Failed to restore backup.";
+            _messageDialogOpen = true;
+        }
+        finally
+        {           
+            _selectedMigrationJob = null;
+        }
+    }
+
     private void RemoveMigration(string? id)
     {
         var migrationJob = JobManager.GetMigrations().Find(m => m.Id == id);
@@ -189,6 +256,8 @@
                            {
                                JobManager.ClearJobFiles(jobId);
                            });
+
+                        JobManager.Save();
                     }
                     catch { }
                 }
@@ -203,7 +272,7 @@
     {
         if (JobManager.MigrationWorker.Config == null)
         {
-            JobManager.MigrationWorker.Config = new OnlineMongoMigrationProcessor.MigrationSettings();
+            JobManager.MigrationWorker.Config = new OnlineMongoMigrationProcessor.MigrationSettings(JobManager.Log);
             JobManager.MigrationWorker.Config.Load();
         }
 
