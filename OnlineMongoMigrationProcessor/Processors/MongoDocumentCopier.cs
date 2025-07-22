@@ -33,7 +33,8 @@ namespace OnlineMongoMigrationProcessor
             _log = log;
 			_targetClient = targetClient;
             _sourceCollection = sourceCollection;
-            _targetCollection = _targetClient.GetDatabase(targetDatabase).GetCollection<BsonDocument>(targetCollectionName);
+            if(_targetClient!=null) 
+                _targetCollection = _targetClient.GetDatabase(targetDatabase).GetCollection<BsonDocument>(targetCollectionName);
 
             _pageSize =pageSize;
         }
