@@ -75,7 +75,10 @@ namespace MongoMigrationWebApp.Service
             return _jobList.Save();
         }
 
-        public List<MigrationJob> GetMigrations() => _jobList.MigrationJobs;
+        public List<MigrationJob> GetMigrations()
+        {
+            return _jobList.MigrationJobs ??= new List<MigrationJob>();
+        }
 
         public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.ReadLogFile(id, out logBackupFile);
 

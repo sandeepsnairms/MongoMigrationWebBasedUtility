@@ -74,7 +74,7 @@
             </tbody>
         </table>
         <div class="d-flex align-items-center mb-3">
-            <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Go Back One Hour and Recover Jobs</button>
+            <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Recover Jobs</button>
         </div>
     }
 }
@@ -168,7 +168,16 @@
             _messageDialogOpen = true;
             return;
         }
-        _message = $"This action stop any running jobs and  will overwrite the current migration jobs with the backup from (UTC) {backupDate}. Are you sure you want to proceed?";
+
+        var gap = DateTime.UtcNow - backupDate;
+        string lagString = string.Empty;
+
+        if (gap.TotalSeconds > 0)
+        {
+            lagString = $"from {(int)gap.TotalMinutes} minutes ago";
+        }
+
+        _message = $"Warning: This will stop ongoing jobs and overwrite current migration jobs with a backup {lagString}. Do you wish to proceed?";
         _recoverDialogOpen = true;
     }
 
@@ -177,6 +186,8 @@
         try
         {
             _recoverDialogOpen = false;
+            _loadingComplete = false;
+
             if (!result.IsConfirmed)
             {
                 return;
@@ -195,8 +206,7 @@
             bool success = JobManager.RestoreFromBack();
             if (success)
             {
-                migrationJobs = JobManager.GetMigrations();
-                _loadingComplete = true;
+                migrationJobs = JobManager.GetMigrations();               
             }
             else
             {
@@ -212,6 +222,7 @@
         finally
         {           
             _selectedMigrationJob = null;
+            _loadingComplete = true;
         }
     }
 
