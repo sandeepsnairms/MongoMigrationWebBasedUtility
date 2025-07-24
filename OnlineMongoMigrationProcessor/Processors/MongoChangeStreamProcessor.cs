@@ -37,7 +37,7 @@ namespace OnlineMongoMigrationProcessor
         private ConcurrentDictionary<string, string> _resumeTokenCache = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, MigrationUnit> _migrationUnitsToProcess = new ConcurrentDictionary<string, MigrationUnit>();
 
-               
+        private readonly object _processingLock = new object();
 
         public bool ExecutionCancelled { get; set; }        
 
@@ -82,21 +82,22 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
-            try
+            lock (_processingLock)
             {
                 if (_isCSProcessing)
                 {
                     return; //already processing    
                 }
-
                 _isCSProcessing = true;
+            }
 
+
+            try
+            {               
                 cts = new CancellationTokenSource();
                 var token = cts.Token;
 
-
                 int index = 0;
-
 
                 _migrationUnitsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
@@ -188,7 +189,6 @@ namespace OnlineMongoMigrationProcessor
 
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed.");                
-                _isCSProcessing = false;
                 //_job.CurrentlyActive = false;//causes failure do not undo
                 _jobList?.Save();
 
@@ -196,14 +196,20 @@ namespace OnlineMongoMigrationProcessor
             catch (OperationCanceledException)
             {
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing was cancelled.");
-                
-                _isCSProcessing = false;
+
             }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error during change stream processing: {ex.ToString()}", LogType.Error);
-                
-                _isCSProcessing = false;
+
+            }
+            finally
+            {
+                lock (_processingLock)
+                {
+                    _isCSProcessing = false;
+                }
+
             }
         }
 
