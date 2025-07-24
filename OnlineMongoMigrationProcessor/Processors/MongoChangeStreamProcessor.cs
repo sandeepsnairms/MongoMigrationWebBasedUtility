@@ -91,6 +91,8 @@ namespace OnlineMongoMigrationProcessor
                 _isCSProcessing = true;
             }
 
+            bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
+               .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
 
             try
             {               
@@ -128,6 +130,9 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {sortedKeys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, sortedKeys.Count)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.");
 
+
+                long loops=0;
+                bool oplogSucess=true;
 
                 while (!token.IsCancellationRequested && !ExecutionCancelled)
                 {
@@ -184,7 +189,24 @@ namespace OnlineMongoMigrationProcessor
                         .Select(kvp => kvp.Key)
                         .ToList();
 
-                   // _log.WriteLine($"sorted keys: {string.Join(", ", sortedKeys.ToArray())}");
+                    loops++;
+                    // every 4 loops, check for oplog count, doesn't work on vcore
+                    if (loops%4==0 && oplogSucess && !isVCore && !_syncBack)
+                    {
+                        foreach (var unit in _migrationUnitsToProcess)
+                        {
+                            // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
+                            long secondsSinceEpoch = new DateTimeOffset(unit.Value.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
+
+                            Task.Run(() =>
+                            {
+                                oplogSucess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
+                            });
+                            if (!oplogSucess)
+                                break;
+                        }
+                    }
+                    // _log.WriteLine($"sorted keys: {string.Join(", ", sortedKeys.ToArray())}");
                 }
 
 

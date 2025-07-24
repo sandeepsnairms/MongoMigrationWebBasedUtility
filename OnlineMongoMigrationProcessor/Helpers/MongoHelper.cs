@@ -75,7 +75,32 @@ namespace OnlineMongoMigrationProcessor
             return collection.CountDocuments(filter, countOptions);
         }
 
+        public static bool GetPendingOplogCountAsync(Log log, MongoClient client, long secondsSinceEpoch, string collectionNameNamespace)
+        {
+            try
+            {
+                var localDb = client.GetDatabase("local");
+                var oplog = localDb.GetCollection<BsonDocument>("oplog.rs");
 
+                var ts = new BsonTimestamp((int)secondsSinceEpoch, 0);
+
+                var regexPattern = Regex.Escape(collectionNameNamespace);
+                var filter = Builders<BsonDocument>.Filter.And(
+                    Builders<BsonDocument>.Filter.Gte("ts", ts),
+                    Builders<BsonDocument>.Filter.Regex("ns", new BsonRegularExpression(regexPattern, "i"))
+                );
+
+                var count = oplog.CountDocuments(filter);
+                log.WriteLine($"Approximate pending oplog entries for  {collectionNameNamespace} is {count}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Could not calculate pending oplog entries. Reason: {ex.Message}");
+                //do nothing
+                return false;
+            }
+        }
 
 
         public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(Log log,string PEMFileContents,string connectionString, MigrationUnit unit, bool createCollection=false)
