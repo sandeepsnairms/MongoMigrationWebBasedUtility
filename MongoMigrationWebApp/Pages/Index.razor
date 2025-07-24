@@ -198,6 +198,7 @@
             {
                 job.IsCancelled = true;
                 job.CurrentlyActive = false;
+                job.IsStarted = false;
                 JobManager.CancelMigration(job.Id);
             }
             JobManager.MigrationWorker.StopMigration();
@@ -303,7 +304,6 @@
         {
             JobManager.MigrationWorker.Config = updatedConfig;
             JobManager.MigrationWorker.Config.Save();
-            Console.WriteLine($"Configuration updated: {updatedConfig.MongoToolsDownloadUrl}");
         }
     }
 

@@ -296,15 +296,17 @@ namespace OnlineMongoMigrationProcessor
         public List<Boundary> Boundaries { get; set; }
     }
 
-    public class MigrationSettings
+    public class MigrationSettings : ICloneable
     {
+      
         public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
         public bool ReadBinary { get; set; }
         public long ChunkSizeInMb { get; set; }
         public int ChangeStreamMaxDocsInBatch { get; set; }
 		public int ChangeStreamBatchDuration { get; set; }
-		public int ChangeStreamMaxCollsInBatch { get; set; }
+        public int ChangeStreamBatchDurationMin { get; set; }
+        public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
         private Log log;
@@ -315,6 +317,13 @@ namespace OnlineMongoMigrationProcessor
             this.log = log;
         }
 
+        public object Clone()
+        {
+            // Deep clone using JSON serialization
+            var json = JsonConvert.SerializeObject(this);
+            return JsonConvert.DeserializeObject<MigrationSettings>(json);
+        }
+   
         public void Load()
         {
             bool initialized = false;
@@ -328,13 +337,16 @@ namespace OnlineMongoMigrationProcessor
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
 					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
-					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 1 : loadedObject.ChangeStreamBatchDuration;
-					ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
+					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 120 : loadedObject.ChangeStreamBatchDuration;
+                    ChangeStreamBatchDurationMin = loadedObject.ChangeStreamBatchDurationMin == 0 ? 30 : loadedObject.ChangeStreamBatchDurationMin;
+                    ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
 					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     initialized = true;
                     if (ChangeStreamMaxDocsInBatch > 10000)
                         ChangeStreamMaxDocsInBatch = 10000;
+                    if (ChangeStreamBatchDuration < 30)
+                        ChangeStreamBatchDuration = 120;
                 }
             }
             if (!initialized)
@@ -343,8 +355,9 @@ namespace OnlineMongoMigrationProcessor
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMb = 5120;
 				MongoCopyPageSize = 500;
-				ChangeStreamMaxDocsInBatch = 10000;                
-                ChangeStreamBatchDuration = 1;
+				ChangeStreamMaxDocsInBatch = 10000;
+                ChangeStreamBatchDuration = 120;
+                ChangeStreamBatchDurationMin = 30;
                 ChangeStreamMaxCollsInBatch = 5;
                 CACertContentsForSourceServer = string.Empty;
             }
@@ -364,6 +377,8 @@ namespace OnlineMongoMigrationProcessor
                 return false;
             }
         }
+
+        
     }
 
     public enum LogType

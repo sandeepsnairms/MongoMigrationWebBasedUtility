@@ -93,6 +93,7 @@ namespace MongoMigrationWebApp.Service
             if (migration != null)
             {
                 migration.IsCancelled = true;
+                migration.IsStarted = false;
             }
             return Task.CompletedTask;
         }

@@ -21,8 +21,8 @@ namespace OnlineMongoMigrationProcessor
     internal class MongoChangeStreamProcessor
     {
         private int _concurrentProcessors;
-        private int _processorRunDurationInMin; // Duration to watch the change stream in minutes
-
+        private int _processorRunMaxDurationInSec; // Max Duration to watch the change stream in seconds
+        private int _processorRunMinDurationInSec; // Max Duration to watch the change stream in seconds
 
         private MongoClient _sourceClient;
         private MongoClient _targetClient;
@@ -54,7 +54,8 @@ namespace OnlineMongoMigrationProcessor
                 _syncBackPrefix = "Sync Back: ";
 
             _concurrentProcessors = _config?.ChangeStreamMaxCollsInBatch ?? 5;
-            _processorRunDurationInMin = _config?.ChangeStreamBatchDuration ?? 1;
+            _processorRunMaxDurationInSec = _config?.ChangeStreamBatchDuration ?? 120;
+            _processorRunMinDurationInSec= _config?.ChangeStreamBatchDurationMin ?? 30;
         }
 
         public bool AddCollectionsToProcess(MigrationUnit item, CancellationTokenSource cts)
@@ -124,11 +125,12 @@ namespace OnlineMongoMigrationProcessor
                     .Select(kvp => kvp.Key)
                     .ToList();
 
-                _log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {sortedKeys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, sortedKeys.Count)} collections. Max duration per batch {_processorRunDurationInMin} minute(s).");
+                _log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {sortedKeys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, sortedKeys.Count)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.");
+
 
                 while (!token.IsCancellationRequested && !ExecutionCancelled)
                 {
-
+                    _job.CurrentlyActive = true;
                     var totalKeys = sortedKeys.Count;
 
                     while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
@@ -149,8 +151,8 @@ namespace OnlineMongoMigrationProcessor
 
                         //total of  _migrationUnitsToProcess
                         long totalUpdatesInAll = _migrationUnitsToProcess.Sum(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch);
-
-                        float timeFactor = totalUpdatesInAll > 0 ? (float)totalUpdatesInBatch / totalUpdatesInAll : 0;
+                                                
+                        float timeFactor = totalUpdatesInAll > 0 ? (float)totalUpdatesInBatch / totalUpdatesInAll : 1;
 
                         int seconds = GetBatchDurationInSeconds(timeFactor);
                         foreach (var key in batchKeys)
@@ -162,19 +164,17 @@ namespace OnlineMongoMigrationProcessor
                                 tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit, true, seconds), token));
                             }
                         }
-
-                        // Logging with "shorter batch" note if allZero
+                                                
 
                         _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds");
 
                         await Task.WhenAll(tasks);
 
                         index += _concurrentProcessors;
-
+                        
                         // Pause briefly before next batch
                         Thread.Sleep(100);
                     }
- 
 
                     index = 0;
                     // Sort the dictionary after all processing is complete
@@ -189,7 +189,7 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed.");                
                 _isCSProcessing = false;
-                _job.CurrentlyActive = false;
+                //_job.CurrentlyActive = false;//causes failure do not undo
                 _jobList?.Save();
 
             }
@@ -345,10 +345,10 @@ namespace OnlineMongoMigrationProcessor
 
         private int GetBatchDurationInSeconds(float timeFactor=1)
         {
-            // Create a CancellationTokenSource with a timeout (e.g., 5 minutes)
-            int seconds = (int)(_processorRunDurationInMin * 60 * timeFactor); // Convert minutes to seconds
-            if (seconds < 30)
-                seconds = 30; // Ensure at least 15 second
+            // Create a CancellationTokenSource with a timeout (e.g., 120 seconds)
+            int seconds = (int)(_processorRunMaxDurationInSec * timeFactor);
+            if (seconds < _processorRunMinDurationInSec)
+                seconds = _processorRunMinDurationInSec; // Ensure at least 15 second
             return seconds;
         }
 
@@ -646,7 +646,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if (chnageStreamsDocuments.DocsToBeInserted.Count+ chnageStreamsDocuments.DocsToBeUpdated.Count+ chnageStreamsDocuments.DocsToBeDeleted.Count > _config.ChangeStreamMaxDocsInBatch)
                 {
-                    _log.WriteLine($"{_syncBackPrefix} Change Stream MaxBatchSize exceeded. Flushing changes for {targetCollection.CollectionNamespace}");
+                    _log.AddVerboseMessage($"{_syncBackPrefix} Change Stream MaxBatchSize exceeded. Flushing changes for {targetCollection.CollectionNamespace}");
 
                     // Process the changes in bulk if the batch size exceeds the limit
                     BulkProcessChangesAsync(

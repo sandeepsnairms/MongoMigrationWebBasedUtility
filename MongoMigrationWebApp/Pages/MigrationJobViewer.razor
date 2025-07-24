@@ -261,9 +261,8 @@ else if (@_logBackupFile !=string.Empty )
 
     [Parameter]
     public MigrationJob? MigrationJob { get; set; }
-
-    [Parameter]
-    public LogBucket? LogBucket { get; set; }
+        
+    private LogBucket? LogBucket { get; set; }
 
     private string _errorMessage = string.Empty;
     private bool _migrationDetailsPopUpOpen;
@@ -295,12 +294,18 @@ else if (@_logBackupFile !=string.Empty )
 
     private void GoBack()
     {
+        _refreshTimer?.Dispose();
         NavigationManager.NavigateTo("/"); // Navigate back to the previous page
     }
 
     private void StartAutoRefresh()
     {
-        _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
+        MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
+        if (MigrationJob != null && MigrationJob.IsStarted)
+        {
+            _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
+        }
+       
     }
 
 
@@ -337,18 +342,24 @@ else if (@_logBackupFile !=string.Empty )
     private void Refresh(object? state)
     {
         MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
-        LogBucket = JobManager.Log.ReadLogFile(JobId, out string logBackupFile);
-
-        if (logBackupFile != JobId)
+        if (MigrationJob != null && MigrationJob.IsStarted)
         {
-            _logBackupFile = logBackupFile;
+            LogBucket = JobManager.Log.ReadLogFile(JobId, out string logBackupFile);
+
+            Console.WriteLine($"Refresh called");
+
+            if (logBackupFile != JobId)
+            {
+                _logBackupFile = logBackupFile;
+            }
+            else
+            {
+                _logBackupFile = string.Empty;
+            }
+            InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
         }
         else
-        {
-            _logBackupFile = string.Empty;
-        }
-
-        InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
+            _refreshTimer?.Dispose();
     }
 
     private Task<bool> CheckIfNameExistsAsync(string name)
