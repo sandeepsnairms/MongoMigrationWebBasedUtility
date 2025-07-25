@@ -19,8 +19,9 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveRestoreProcessId { get; set; } = 0;
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
-         private string _backupFolderPath = string.Empty;
-        private static readonly object _fileLock = new object();
+        private string _backupFolderPath = string.Empty;
+        private object _fileLock = new object();
+        private object _loadLock = new object();
         private Log log;
         private string processedMin = string.Empty;
 
@@ -42,45 +43,49 @@ namespace OnlineMongoMigrationProcessor
 
         public bool Load(Log log, bool loadBackup=false)
         {
-            string path;
-
-            path = loadBackup ? GetBestRestoreSlotFilePath() : _filePath;
-
-            if (path == null ||!File.Exists(path))
+            lock (_loadLock)
             {
-                log.WriteLine("No suitable backup file found for restoration.", LogType.Error);
-                return false;
-            }
+                string path;
 
-            this.log = log;
-            try
-            {
-                if (File.Exists(path))
+                path = loadBackup ? GetBestRestoreSlotFilePath() : _filePath;
+
+                if (path == null || !File.Exists(path))
                 {
-                    string json = File.ReadAllText(path);
-                    var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                    if (loadedObject != null)
-                    {
-                        MigrationJobs = loadedObject.MigrationJobs;
+                    log.WriteLine("No suitable backup file found for restoration.", LogType.Error);
+                    return false;
+                }
 
-                        if(loadBackup)
+                this.log = log;
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        string json = File.ReadAllText(path);
+                        var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                        if (loadedObject != null)
                         {
-                            //delete all files in SlotNames
-                            foreach( string name in SlotNames)
+                            MigrationJobs = loadedObject.MigrationJobs;
+
+                            if (loadBackup)
                             {
-                                if(System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
-                                    System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                //delete all files in SlotNames
+                                foreach (string name in SlotNames)
+                                {
+                                    if (System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
+                                        System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                }
+                                Save(true);
                             }
                         }
                     }
-                }
 
-                return true;
-            }
-            catch (Exception ex)
-            {
-                log.WriteLine($"Error loading data: {ex.ToString()}");
-                return false;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    log.WriteLine($"Error loading data: {ex.ToString()}");
+                    return false;
+                }
             }
         }
 
@@ -134,7 +139,7 @@ namespace OnlineMongoMigrationProcessor
         }
           
 
-        public bool Save()
+        public bool Save(bool forceBackup=false)
         {
             try
             {
@@ -153,11 +158,11 @@ namespace OnlineMongoMigrationProcessor
 
                     bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
 
-                    if (File.Exists(_filePath) && hasJobs && processedMin != now.ToString("MM/dd/yyyy HH:mm"))
+                    if (File.Exists(_filePath) && hasJobs && (processedMin != now.ToString("MM/dd/yyyy HH:mm")|| forceBackup))
                     {
 
                         // Rotate every 15 minutes
-                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0)
+                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0 || forceBackup)
                         {
 
                             //set processed minute               

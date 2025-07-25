@@ -22,12 +22,15 @@ namespace OnlineMongoMigrationProcessor
         private List<LogObject>? _verboseMessages = new List<LogObject>();
         private string _currentId = string.Empty;
         private readonly object _syncLock = new();
-        private readonly object _lock = new object();
 
+        private readonly object _verboseLock = new object();
+        private readonly object _readLock = new object();
+        private readonly object _writeLock = new object();
+        private readonly object _initLock = new object();
 
         public void AddVerboseMessage(string message, LogType LogType = LogType.Message)
         {
-            lock (_lock)
+            lock (_verboseLock)
             {
                 if (_verboseMessages == null)
                 {
@@ -42,8 +45,11 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        
         public List<LogObject> GetVerboseMessages()
         {
+
             try
             {
                 if (_verboseMessages == null || _verboseMessages.Count == 0)
@@ -82,15 +88,18 @@ namespace OnlineMongoMigrationProcessor
 
         public string Init(string id)
         {
-            string logBackupFile = string.Empty;
-            _currentId = id;
+            lock (_initLock)
+            {
+                string logBackupFile = string.Empty;
+                _currentId = id;
 
-            Directory.CreateDirectory(Path.Combine(Helper.GetWorkingFolder(), "migrationlogs"));
+                Directory.CreateDirectory(Path.Combine(Helper.GetWorkingFolder(), "migrationlogs"));
 
-            _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
-            _verboseMessages.Clear();
+                _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
+                _verboseMessages.Clear();
 
-            return logBackupFile;
+                return logBackupFile;
+            }
         }
 
 
@@ -98,22 +107,32 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                _logBucket ??= new LogBucket();
-                _logBucket.Logs ??= new List<LogObject>();
-
-                var logObj = new LogObject(LogType, message);
-
-                // Add new log
-                _logBucket.Logs.Add(logObj);
-
-                // If more than 300 logs, remove the 21st item (index 20), keep it small
-                if (_logBucket.Logs.Count > 300 && _logBucket.Logs.Count > 20)
+                lock (_writeLock)
                 {
-                    _logBucket.Logs.RemoveAt(20);
-                }
 
-                //persits to file
-                AppendBinaryLog(logObj);
+                   // _logBucket ??= new LogBucket();
+                    //_logBucket.Logs ??= new List<LogObject>();
+
+                    if( _logBucket == null)
+                    {
+                        string logBackupFile = string.Empty;
+                        _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
+                    }
+
+                    var logObj = new LogObject(LogType, message);
+
+                    // Add new log
+                    _logBucket.Logs.Add(logObj);
+
+                    // If more than 300 logs, remove the 21st item (index 20), keep it small
+                    if (_logBucket.Logs.Count > 300 && _logBucket.Logs.Count > 20)
+                    {
+                        _logBucket.Logs.RemoveAt(20);
+                    }
+
+                    //persits to file
+                    AppendBinaryLog(logObj);
+                }
             }
             catch
             {
@@ -131,7 +150,7 @@ namespace OnlineMongoMigrationProcessor
         private void WriteBinaryLog(string id, List<LogObject> logs)
         {
             try
-            {
+            {                
                 var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
                 var binPath = Path.Combine(folder, $"{id}.bin");
 
@@ -147,9 +166,11 @@ namespace OnlineMongoMigrationProcessor
                     bw.Write(messageBytes);
                     bw.Write((byte)log.Type);
                     bw.Write(log.Datetime.ToBinary());
-                }              
+                }
+                            
             }
-            catch {
+            catch
+            {
                 throw;
             }
         }
@@ -203,64 +224,70 @@ namespace OnlineMongoMigrationProcessor
         {
             fileName = id;
 
-            if(_currentId == id && _logBucket != null)
+            if (_currentId == id && _logBucket != null)
             {
+
                 return _logBucket;
             }
 
             try
             {
-                Console.WriteLine($"Reading log file for ID: {id}");
-                var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
-                var txtPath = Path.Combine(folder, $"{id}.txt");
-                var binPath = Path.Combine(folder, $"{id}.bin");
-
-                // 1. Try Binary first
-                if (File.Exists(binPath))
+                lock (_readLock)
                 {
-                    return ParseLogBinFile(binPath);
-                }
 
-                // 2. Fallback to JSON if .bin is missing (backward compatibility)
-                if (File.Exists(txtPath))
-                {
-                    string json = File.ReadAllText(txtPath);                    
-                    try
+
+                    Console.WriteLine($"Reading log file for ID: {id}");
+                    var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
+                    var txtPath = Path.Combine(folder, $"{id}.txt");
+                    var binPath = Path.Combine(folder, $"{id}.bin");
+
+                    // 1. Try Binary first
+                    if (File.Exists(binPath))
                     {
-                        //old format with LogBucket
-                        LogBucket logBucket = JsonSerializer.Deserialize<LogBucket>(json, _jsonOptions);
-                        WriteBinaryLog(id, logBucket.Logs);
                         return ParseLogBinFile(binPath);
                     }
-                    catch
+
+                    // 2. Fallback to JSON if .bin is missing (backward compatibility)
+                    if (File.Exists(txtPath))
                     {
+                        string json = File.ReadAllText(txtPath);
                         try
-                        {   //new format with List<LogObject>
-                            List<LogObject>? logs = JsonSerializer.Deserialize<List<LogObject>>(json, _jsonOptions);
-                            WriteBinaryLog(id, logs);
+                        {
+                            //old format with LogBucket
+                            LogBucket logBucket = JsonSerializer.Deserialize<LogBucket>(json, _jsonOptions);
+                            WriteBinaryLog(id, logBucket.Logs);
                             return ParseLogBinFile(binPath);
                         }
                         catch
                         {
-                            fileName = CreateFileCopyWithTimestamp(txtPath);
-
-                            if (force)
-                            {
-                                File.Delete(txtPath);
-
-                                var logBucket = new LogBucket();
-                                logBucket.Logs ??= new List<LogObject>();
-                                logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file as JSON; original file backed up as {fileName}"));
-                                WriteBinaryLog(id, logBucket.Logs);
+                            try
+                            {   //new format with List<LogObject>
+                                List<LogObject>? logs = JsonSerializer.Deserialize<List<LogObject>>(json, _jsonOptions);
+                                WriteBinaryLog(id, logs);
                                 return ParseLogBinFile(binPath);
                             }
+                            catch
+                            {
+                                fileName = CreateFileCopyWithTimestamp(txtPath);
 
-                            return new LogBucket(); // fallback empty
+                                if (force)
+                                {
+                                    File.Delete(txtPath);
+
+                                    var logBucket = new LogBucket();
+                                    logBucket.Logs ??= new List<LogObject>();
+                                    logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file as JSON; original file backed up as {fileName}"));
+                                    WriteBinaryLog(id, logBucket.Logs);
+                                    return ParseLogBinFile(binPath);
+                                }
+
+                                return new LogBucket(); // fallback empty
+                            }
                         }
                     }
-                }
 
-                return new LogBucket();
+                    return new LogBucket();
+                }
             }
             catch
             {

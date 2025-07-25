@@ -284,18 +284,32 @@ namespace OnlineMongoMigrationProcessor
         {
             if (migrationJob == null) return true;
 
-            foreach (var mu in migrationJob.MigrationUnits)
+            if (migrationJob.IsSimulatedRun)
             {
-                if (mu.SourceStatus == CollectionStatus.OK)
+                foreach (var mu in migrationJob.MigrationUnits)
                 {
-                    if(mu.DumpComplete && migrationJob.IsSimulatedRun)
-                        return true;
-                    
-                    if (!mu.RestoreComplete || !mu.DumpComplete)
-                        return false;
+                    if (mu.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (!mu.DumpComplete)
+                            return false;
+
+                    }
                 }
+                return true;
             }
-            return true;
+            else
+            {
+
+                foreach (var mu in migrationJob.MigrationUnits)
+                {
+                    if (mu.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (!mu.RestoreComplete || !mu.DumpComplete)
+                            return false;
+                    }
+                }
+                return true;
+            }
         }
 
         public static string ExtractHost(string connectionString)

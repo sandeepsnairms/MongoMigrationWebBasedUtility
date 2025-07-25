@@ -188,7 +188,7 @@
     </div>
 }
 
-@if (LogBucket != null && LogBucket != null && _logBackupFile == string.Empty)
+@if (LogBucket != null && LogBucket.Logs != null && _logBackupFile == string.Empty)
 {
     <h5 class=" pt-4">
         <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
