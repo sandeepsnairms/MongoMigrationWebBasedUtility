@@ -218,6 +218,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     _migrationProcessor.ProcessRunning = true;
 
+
                     bool checkedCS = false;
                     foreach (var unit in _job.MigrationUnits)
                     {
@@ -227,17 +228,30 @@ namespace OnlineMongoMigrationProcessor
                         {
                             unit.SourceStatus = CollectionStatus.OK;
 
+                            // set  start pointer for change stream
+                            if (unit.ChangeStreamStartedOn==null || unit.ChangeStreamStartedOn==DateTime.MinValue)
+                                 unit.ChangeStreamStartedOn = DateTime.UtcNow;
+
                             if (_job.IsOnline)
                             {
-
-                                Task.Run(async () =>
+                                //if  reset CS needto get the latest CS resume token synchronously
+                                if (unit.ResetChangeStream)
                                 {
-                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log,_sourceClient, unit);
-                                });
+                                    _log.WriteLine($"Resetting Change Stream for {unit.DatabaseName}.{unit.CollectionName}. This can take upto 5 minutes");
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobs, _job, unit);
+                                }
+                                else
+                                {
+                                    //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
+                                    Task.Run(async () =>
+                                    {
+                                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobs, _job, unit);
+                                    });
+                                }
 
                             }
                             if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
-                            {
+                            {                                
 
                                 var chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName);
 
@@ -252,8 +266,7 @@ namespace OnlineMongoMigrationProcessor
                                 _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks.Count} chunk(s)");
                                 
 
-                                unit.MigrationChunks= chunks;
-                                unit.ChangeStreamStartedOn = DateTime.UtcNow;  
+                                unit.MigrationChunks= chunks;                                  
 
                                 
                                 if (!job.IsSimulatedRun && !job.AppendMode)

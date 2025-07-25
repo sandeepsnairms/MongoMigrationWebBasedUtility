@@ -1,11 +1,14 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MongoDB.Driver.GeoJsonObjectModel.Serializers;
 using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection.Metadata;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 
@@ -204,7 +207,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public async static Task SetChangeStreamResumeTokenAsync(Log log,MongoClient client, MigrationUnit unit)
+        public async static Task SetChangeStreamResumeTokenAsync(Log log,MongoClient client, JobList jobList, MigrationJob job, MigrationUnit unit)
         {
             int retryCount = 0;
             bool isSucessful = false;
@@ -214,25 +217,39 @@ namespace OnlineMongoMigrationProcessor
                 ChangeStreamOperationType? changeType = null;
                 BsonValue? documentId = null;
                 try
-                {                   
+                {
 
                     BsonDocument resumeToken = new BsonDocument();
-                    bool resetCS= unit.ResetChangeStream;
+                    bool resetCS = unit.ResetChangeStream;
                     var database = client.GetDatabase(unit.DatabaseName);
                     var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
 
                     ChangeStreamOptions options = null;
-                    if(resetCS)
+  
+
+                    if (resetCS)
                     {
-                        var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)unit.ChangeStreamStartedOn);
-                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        if (!string.IsNullOrEmpty(unit.OriginalResumeToken))
+                        {
+                            log.WriteLine($"Resetting change stream resume token for {unit.DatabaseName}.{unit.CollectionName} to {unit.ChangeStreamStartedOn?.ToUniversalTime()} (UTC)");
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(unit.OriginalResumeToken) };
+
+                        }
+                        else
+                        {
+                            //try to go 15 min back in time, temporary fix for backward compatibility
+                            log.WriteLine($"Resetting change stream start time token for {unit.DatabaseName}.{unit.CollectionName} to {unit.ChangeStreamStartedOn?.AddMinutes(-15).ToUniversalTime()} (UTC)");
+                            var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)unit.ChangeStreamStartedOn);
+                            options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        }
+
                     }
                     else
                     {
                         if (!string.IsNullOrEmpty(unit.ResumeToken))
                         {
                             log.WriteLine($"Change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
-                            
+
                             return;
                         }
 
@@ -242,66 +259,163 @@ namespace OnlineMongoMigrationProcessor
                         };
                     }
 
-                    using (var cursor = await collection.WatchAsync(options))
-                    {
-                        // Try to get a resume token, even if no changes exist
-                        resumeToken = cursor.GetResumeToken();
 
-                        //3.6 mongo  doesn't return resume token if no changes exist
-                        if (resumeToken == null || resumeToken.ElementCount == 0)
-                        {
-                            foreach (var change in cursor.ToEnumerable())
-                            {
-                                resumeToken = change.ResumeToken;
-                                changeType = change.OperationType;
-                                documentId = change.DocumentKey["_id"];
-                                break;
-                            }
-                        }
+                    //new way to get resume token
+                    //On MongoDB 4.0+, the WatchChangeStreamAsync method opens a change stream and waits for changes.
+                    //On MongoDB 3.6, TailOplogAsync opens a tailable cursor on the oplog, filtering on namespace and timestamp to detect new operations.
+                    if(job.SourceServerVersion.StartsWith("3") )
+                        TailOplogAsync(client, unit.DatabaseName, unit.CollectionName, unit, CancellationToken.None).Wait();
+                    else                       
+                        WatchChangeStreamUntilChangeAsync(log, client, jobList, job, unit, collection, options, resetCS).Wait();
+                    //end of new way to get resume token
 
-                    }
-
-                    if (resumeToken == null || resumeToken.ElementCount == 0)
-                    {
-                        log.WriteLine($"Blank resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Error);
-                    }
-                    else
-                    {
-                        if (resetCS)
-                        {
-                            log.WriteLine($"Change stream start time for {unit.DatabaseName}.{unit.CollectionName} reset to {unit.ChangeStreamStartedOn?.ToUniversalTime()} (UTC)");
-                            
-                        }
-                        else
-                        { 
-                            log.WriteLine($"Saved change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
-                            
-                        }
-
-                        unit.ResumeToken = resumeToken.ToJson();                        
-                        if (changeType != null)
-                        {
-                            unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
-
-                            string json = documentId.ToJson(); // save as string
-                            // Deserialize the BsonValue to ensure it is stored correctly
-                            unit.ResumeDocumentId = BsonSerializer.Deserialize<BsonValue>(json); ;
-                        }
-
-                    }
                     isSucessful = true;
 
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation requested - exit quietly
                 }
                 catch (Exception ex)
                 {
                     retryCount++;
 
                     log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
-                    
-                    
+                }
+                finally
+                {
+                    jobList.Save();
+
                 }
             }
         }
+
+        private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, JobList jobList, MigrationJob job ,MigrationUnit unit, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool resetCS)
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            using (var cursor = await collection.WatchAsync(options, cts.Token))
+            {
+                try
+                {
+                    // Iterate until cancellation or first change detected
+                    while (!cts.Token.IsCancellationRequested)
+                    {
+                        var hasNext = await cursor.MoveNextAsync(cts.Token);
+                        if (!hasNext)
+                        {
+                            break; // Stream closed or no more data
+                        }
+
+                        foreach (var change in cursor.Current)
+                        {
+                            
+
+                            //if  bulk load is complete, no point in continuing to watch
+                            if ((unit.RestoreComplete || job.IsSimulatedRun) && unit.DumpComplete && !unit.ResetChangeStream )
+                                return;
+
+
+                            // Persist values
+                            unit.ResumeToken = change.ResumeToken.ToJson();
+
+                            if(!resetCS && string.IsNullOrEmpty(unit.OriginalResumeToken))
+                                unit.OriginalResumeToken = change.ResumeToken.ToJson();
+
+                            if (change.ClusterTime != null)
+                            {
+                                unit.CursorUtcTimestamp = BsonTimestampToUtcDateTime(change.ClusterTime);
+                            }
+                            else if (change.WallTime.HasValue)
+                            {
+                                unit.CursorUtcTimestamp = change.WallTime.Value.ToUniversalTime();
+                            }
+
+                            var changeType = change.OperationType;
+                            var documentId = change.DocumentKey["_id"];
+
+                            unit.ResumeTokenOperation = (ChangeStreamOperationType)changeType;
+
+                            string json = documentId.ToJson(); // save as string
+                            // Deserialize the BsonValue to ensure it is stored correctly
+                            unit.ResumeDocumentId = BsonSerializer.Deserialize<BsonValue>(json); ;
+                            
+                            // Exit immediately after first change detected
+                            return; ;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                   Console.WriteLine($"Change stream watching was cancelled for {unit.DatabaseName}.{unit.CollectionName}.");
+                    // Cancellation requested - exit quietly
+                }
+            }
+        }
+
+        /// Manually tails the oplog.rs capped collection for MongoDB 3.6 support.
+        /// </summary>
+        private static async Task TailOplogAsync(MongoClient client, string dbName, string collectionName,MigrationUnit unit, CancellationToken cancellationToken)
+        {
+            var localDb = client.GetDatabase("local");
+            var oplog = localDb.GetCollection<BsonDocument>("oplog.rs");
+
+            // The namespace string for filtering is "db.collection"
+            string ns = $"{dbName}.{collectionName}";
+
+            // Construct filter: ts > last timestamp or null to start from now
+            BsonTimestamp tsFilter = null;
+            if (unit.ChangeStreamStartedOn.HasValue)
+            {
+                tsFilter = ConvertToBsonTimestamp((DateTime)unit.ChangeStreamStartedOn);
+            }
+            else
+            {
+                // Use current time minus 1 second to start tailing new ops only
+                tsFilter = ConvertToBsonTimestamp(DateTime.UtcNow.AddSeconds(-1));
+            }
+
+            var filterBuilder = Builders<BsonDocument>.Filter;
+            var filter = filterBuilder.Gt("ts", tsFilter) & filterBuilder.Eq("ns", ns);
+
+            // Options for tailable cursor
+            var options = new FindOptions<BsonDocument>
+            {
+                CursorType = CursorType.TailableAwait,
+                NoCursorTimeout = true,
+                BatchSize = 100
+            };
+
+            using (var cursor = await oplog.FindAsync(filter, options, cancellationToken))
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    while (await cursor.MoveNextAsync(cancellationToken))
+                    {
+                        foreach (var doc in cursor.Current)
+                        {
+                            // Parse oplog document for resume info
+                            var ts = doc["ts"].AsBsonTimestamp;
+                            var nsValue = doc["ns"].AsString;
+
+                            if (!string.Equals(ns, nsValue, StringComparison.Ordinal))
+                                continue; // Filter different ns, just in case
+
+                            // Update unit fields
+                            unit.ChangeStreamStartedOn = BsonTimestampToUtcDateTime(ts);
+                            // Oplog does not have a resume token; use ts as marker.
+
+                            // If you have document key or op, you can extract here
+
+                            return; // Exit on first oplog item detected
+                        }
+                    }
+
+                    // If no data yet, wait a bit before retrying
+                    await Task.Delay(1000, cancellationToken);
+                }
+            }
+        }
+
 
         public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
         {

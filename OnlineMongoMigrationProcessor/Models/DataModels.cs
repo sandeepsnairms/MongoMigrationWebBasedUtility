@@ -228,6 +228,9 @@ namespace OnlineMongoMigrationProcessor
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? ResumeToken { get; set; }
+        public string? OriginalResumeToken { get; set; }
+
+        public bool InitialDocumenReplayed { get; set; } = false;
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         [JsonProperty("ResumeDocumentId")]

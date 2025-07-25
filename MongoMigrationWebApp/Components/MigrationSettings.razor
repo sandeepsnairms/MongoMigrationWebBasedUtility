@@ -111,9 +111,9 @@
     private void HandleSubmit()
     {
 
-        if (_configurationBackup.ChangeStreamBatchDurationMin < 10 || _configurationBackup.ChangeStreamBatchDurationMin > 300)
-        {           
-            errorMessage = "Min Batch Duration should be between 10 and 300 seconds.";
+        if (_configurationBackup.ChangeStreamBatchDurationMin < 10 || _configurationBackup.ChangeStreamBatchDurationMin > 600)
+        {
+            errorMessage = "Min Batch Duration should be between 10 and 600 seconds.";
             return;
         }
 
