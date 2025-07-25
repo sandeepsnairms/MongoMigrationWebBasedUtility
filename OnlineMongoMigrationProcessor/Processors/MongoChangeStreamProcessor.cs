@@ -701,6 +701,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        
 
         private async Task BulkProcessChangesAsync(
             IMongoCollection<BsonDocument> collection,
@@ -709,6 +710,7 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
             int batchSize = 50)
         {
+
             try
             {
                 // Insert operations
@@ -719,8 +721,22 @@ namespace OnlineMongoMigrationProcessor
                         .Select(e => new InsertOneModel<BsonDocument>(e.FullDocument))
                         .ToList();
 
-                    if (insertModels.Any())
-                        await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                    try
+                    {
+                        if (insertModels.Any())
+                            await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        // Filter out only duplicate key errors
+                        var isAllDuplicateKeyErrors = ex.WriteErrors.All(err => err.Code == 11000);
+
+                        if (!isAllDuplicateKeyErrors)
+                        {
+                            throw; // rethrow if it's not just duplicates
+                        }
+                    }
+
                 }
 
                 // Update operations
