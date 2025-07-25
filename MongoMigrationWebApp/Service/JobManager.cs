@@ -19,7 +19,7 @@ namespace MongoMigrationWebApp.Service
         {
             if(Log == null)
                 Log = new Log();
-
+                
             if (_jobList == null)
             {
                 _jobList = new JobList();
@@ -80,7 +80,13 @@ namespace MongoMigrationWebApp.Service
             return _jobList.MigrationJobs ??= new List<MigrationJob>();
         }
 
-        public LogBucket GetLogBucket(string id, out  string logBackupFile) => Log.ReadLogFile(id, out logBackupFile);
+        public LogBucket GetLogBucket(string id, out  string logBackupFile)
+        {
+            if (!Log.IsInitialized)
+                Log.Init(id);
+
+            return  Log.ReadLogFile(id, out logBackupFile);
+        }
 
         public void DisposeLogs()
         {

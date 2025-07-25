@@ -28,6 +28,8 @@ namespace OnlineMongoMigrationProcessor
         private readonly object _writeLock = new object();
         private readonly object _initLock = new object();
 
+        public  bool IsInitialized { get; set; } = false;
+
         public void AddVerboseMessage(string message, LogType LogType = LogType.Message)
         {
             lock (_verboseLock)
@@ -86,6 +88,7 @@ namespace OnlineMongoMigrationProcessor
             Converters = { new JsonStringEnumConverter() }
         };
 
+
         public string Init(string id)
         {
             lock (_initLock)
@@ -98,6 +101,7 @@ namespace OnlineMongoMigrationProcessor
                 _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
                 _verboseMessages.Clear();
 
+                IsInitialized=true;
                 return logBackupFile;
             }
         }
@@ -117,6 +121,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         string logBackupFile = string.Empty;
                         _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
+                        Console.WriteLine($"LogBucket was null, re-initialized from file during WriteLine .");
                     }
 
                     var logObj = new LogObject(LogType, message);
@@ -149,11 +154,15 @@ namespace OnlineMongoMigrationProcessor
 
         private void WriteBinaryLog(string id, List<LogObject> logs)
         {
-            try
-            {                
-                var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
-                var binPath = Path.Combine(folder, $"{id}.bin");
+            if (logs == null || logs.Count == 0)
+                return;
 
+
+            var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
+            var binPath = Path.Combine(folder, $"{id}.bin");
+
+            try
+            {
                 Directory.CreateDirectory(folder);
 
                 using var fs = new FileStream(binPath, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
@@ -161,13 +170,19 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var log in logs)
                 {
-                    var messageBytes = Encoding.UTF8.GetBytes(log.Message);
+                    var message = log.Message ?? string.Empty;
+                    var messageBytes = Encoding.UTF8.GetBytes(message);
+
+                    // Write record with length prefix so it can be parsed safely later
                     bw.Write(messageBytes.Length);
                     bw.Write(messageBytes);
                     bw.Write((byte)log.Type);
                     bw.Write(log.Datetime.ToBinary());
                 }
-                            
+
+                bw.Flush();         // Flush binary writer
+                fs.Flush(true);     // Force flush to disk hardware
+
             }
             catch
             {
@@ -230,12 +245,14 @@ namespace OnlineMongoMigrationProcessor
                 return _logBucket;
             }
 
+            //since read gets called from UI  refresh very often, not forcing to reading from file 
+            if(!force)
+                return new LogBucket(); // Return empty if not forcing read
+
             try
             {
                 lock (_readLock)
                 {
-
-
                     Console.WriteLine($"Reading log file for ID: {id}");
                     var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
                     var txtPath = Path.Combine(folder, $"{id}.txt");
@@ -270,8 +287,8 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 fileName = CreateFileCopyWithTimestamp(txtPath);
 
-                                if (force)
-                                {
+                                //if (force)
+                                //{
                                     File.Delete(txtPath);
 
                                     var logBucket = new LogBucket();
@@ -279,7 +296,7 @@ namespace OnlineMongoMigrationProcessor
                                     logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file as JSON; original file backed up as {fileName}"));
                                     WriteBinaryLog(id, logBucket.Logs);
                                     return ParseLogBinFile(binPath);
-                                }
+                                //}
 
                                 return new LogBucket(); // fallback empty
                             }
