@@ -195,15 +195,18 @@ namespace OnlineMongoMigrationProcessor
                     {
                         foreach (var unit in _migrationUnitsToProcess)
                         {
-                            // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
-                            long secondsSinceEpoch = new DateTimeOffset(unit.Value.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
-
-                            Task.Run(() =>
+                            if (unit.Value.CursorUtcTimestamp > DateTime.MinValue)
                             {
-                                oplogSucess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
-                            });
-                            if (!oplogSucess)
-                                break;
+                                // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
+                                long secondsSinceEpoch = new DateTimeOffset(unit.Value.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
+
+                                Task.Run(() =>
+                                {
+                                    oplogSucess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
+                                });
+                                if (!oplogSucess)
+                                    break;
+                            }
                         }
                     }
                     // _log.WriteLine($"sorted keys: {string.Join(", ", sortedKeys.ToArray())}");
