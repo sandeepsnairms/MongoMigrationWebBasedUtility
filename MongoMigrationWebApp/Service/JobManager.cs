@@ -11,48 +11,52 @@ namespace MongoMigrationWebApp.Service
     public class JobManager
     {
         private JobList? _jobList;
-        public MigrationWorker? MigrationWorker { get; set; }
-        //private List<LogObject>? _logBucket { get; set; }
-        public Log Log { get; set; }
+        private MigrationWorker? MigrationWorker { get; set; }
 
         public JobManager()
         {
-            if(Log == null)
-                Log = new Log();
-                
-            if (_jobList == null)
-            {
-                _jobList = new JobList();
-                _jobList.Load(Log);
-            }
-
-            if (MigrationWorker == null)
-            {
-                MigrationWorker = new MigrationWorker(_jobList, Log);
-            }
-
-            if (_jobList.MigrationJobs == null)
-            {
-                _jobList.MigrationJobs = new List<MigrationJob>();
-                Save();
-            }
-
             
         }
 
-        public DateTime GetBackupDate()
+        
+
+        #region Configuration Management
+
+        public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig,out string errorMessage)
+        {           
+            if (updatedConfig == null)
+            {
+                errorMessage = "Migration settings cannot be null.";
+                return false;
+            }
+            // Save the updated config
+            return updatedConfig.Save(out errorMessage);
+        }
+
+        public OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
+        {
+            MigrationSettings config = new MigrationSettings();
+            config.Load();
+            return config;
+        }
+
+        #endregion 
+        #region Job Management
+
+
+        public DateTime GetJobBackupDate()
         {
             return _jobList.GetBackupDate();
         }
 
-        public bool RestoreFromBack()
+
+        public bool RestoreJobsFromBackup(out string errorMessage)
         {
             _jobList = null;
             _jobList = new JobList();
 
-            var sucess= _jobList.Load(Log,true);
-
-            if (!sucess)
+            var success = _jobList.LoadJobs(out errorMessage,true);
+            if (!success)
             {
                 return false;
             }
@@ -62,35 +66,87 @@ namespace MongoMigrationWebApp.Service
                 MigrationWorker.StopMigration();
                 MigrationWorker = null;         
             }
-            
-            Log = new Log();
 
-            MigrationWorker =new MigrationWorker(_jobList, Log);
+            MigrationWorker =new MigrationWorker(_jobList);
 
-            return sucess;
+            errorMessage = string.Empty;
+            return success;
         }
 
-        public bool Save()
+        public bool SaveJobs(out string errorMessage)
         {
-            return _jobList.Save();
+            return _jobList.Save(out errorMessage);
         }
 
-        public List<MigrationJob> GetMigrations()
+        public List<MigrationJob> GetMigrations(out string errorMessage)
         {
+            errorMessage=string.Empty;
+            if (_jobList == null)
+            {
+                _jobList = new JobList();
+                _jobList.LoadJobs(out errorMessage, true);
+            }
+
+            if (_jobList.MigrationJobs == null)
+            {
+                _jobList.MigrationJobs = new List<MigrationJob>();
+                SaveJobs(out errorMessage);
+            }
+
             return _jobList.MigrationJobs ??= new List<MigrationJob>();
         }
 
-        public LogBucket GetLogBucket(string id, out  string logBackupFile)
+        public void ClearJobFiles(string jobId)
         {
-            if (!Log.IsInitialized)
-                Log.Init(id);
-
-            return  Log.ReadLogFile(id, out logBackupFile);
+            try
+            {
+                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+            }
+            catch
+            {
+            }
         }
 
-        public void DisposeLogs()
+        #endregion 
+        #region Log Management
+
+        public List<LogObject> GetVerboseMessages(string id)
         {
-            Log.Dispose();
+            //verbose messages  are only  there for active jobs so fetech from migration worker.
+            if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+               return MigrationWorker.GetVerboseMessages(id);
+            else
+               return new List<LogObject>();
+        }
+
+        public LogBucket GetLogBucket(string id,out string fileName, out bool isLiveLog)
+        {
+            //Check if migration workewr is initialized and active. Return migration workers log bucket if it is.
+            LogBucket? bucket = null;
+            if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+            {
+                bucket = MigrationWorker.GetLogBucket(id); //only if workers current job Id matches param
+                if (bucket != null)
+                    isLiveLog = true;
+                else
+                    isLiveLog = false;
+                fileName = string.Empty;
+                return bucket;
+            }
+
+            //If migration worker is not running, get the log bucket from the file.Its static  
+            isLiveLog=false;
+            Log log = new Log();
+            return log.ReadLogFile(id,out fileName);
+        }
+
+        #endregion
+
+        #region Migration Worker Management
+
+        public void StopMigration()
+        {
+            MigrationWorker?.StopMigration();
         }
 
         public Task CancelMigration(string id)
@@ -104,38 +160,33 @@ namespace MongoMigrationWebApp.Service
             return Task.CompletedTask;
         }
 
-        public Task ResumeMigration(string id)
+        public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, bool doBulkCopy, bool trackChangeStreams)
         {
-            var migration = _jobList.MigrationJobs.Find(m => m.Id == id);
-            if (migration != null)
-            {
-                migration.IsCancelled = true;
-            }
-            return Task.CompletedTask;
+
+            MigrationWorker = new MigrationWorker(_jobList);
+
+            MigrationWorker?.StartMigrationAsync(job, sourceConnectionString, targetConnectionString, namespacesToMigrate, doBulkCopy, trackChangeStreams);
         }
 
-        public Task ViewMigration(string id)
+
+        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
-            var migration = _jobList.MigrationJobs.Find(m => m.Id == id);
-            if (migration != null)
-            {
-                migration.IsCancelled = true;
-            }
-            return Task.CompletedTask;
+
+            MigrationWorker = new MigrationWorker(_jobList);
+            MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
         }
 
-        public void ClearJobFiles(string jobId)
+        public bool IsProcessRunning(string id)
         {
-            try
+            if (MigrationWorker == null)
             {
-                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}",true);
+                return false;
             }
-            catch
-            {
-            }
+            return MigrationWorker.IsProcessRunning(id);
         }
 
-        
+        #endregion
+
     }
 }
 

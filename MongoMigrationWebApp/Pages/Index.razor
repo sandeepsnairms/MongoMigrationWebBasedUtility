@@ -46,11 +46,11 @@
                 </tr>
             </thead>
             <tbody>
-                @foreach (var migration in JobManager.GetMigrations())
+                @foreach (var migration in GetMigrations())
                 {
                     <tr>
                         <td>
-                            @if (migration.CurrentlyActive && JobManager.MigrationWorker != null && JobManager.MigrationWorker.IsProcessRunning())
+                            @if (migration.CurrentlyActive &&  JobManager.IsProcessRunning(migration.Id))
                             {
                                 <i class="bi bi-star-fill text-warning"></i>
                             }
@@ -133,7 +133,7 @@
             return;
 
         _loadingComplete = false;
-        migrationJobs = JobManager.GetMigrations();
+        migrationJobs = GetMigrations();
         _loadingComplete = true;
     }
 #pragma warning restore CS1998
@@ -160,7 +160,7 @@
 
     private async Task RestoreBackup()
     {
-        var backupDate = JobManager.GetBackupDate();
+        var backupDate = JobManager.GetJobBackupDate();
 
         if (backupDate == DateTime.MinValue)
         {
@@ -194,24 +194,24 @@
             }
             
             
-            foreach(var job in JobManager.GetMigrations())
+            foreach(var job in GetMigrations())
             {
                 job.IsCancelled = true;
                 job.CurrentlyActive = false;
                 job.IsStarted = false;
                 JobManager.CancelMigration(job.Id);
             }
-            JobManager.MigrationWorker.StopMigration();
+            JobManager.StopMigration();
     
 
-            bool success = JobManager.RestoreFromBack();
+            bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
             if (success)
             {
-                migrationJobs = JobManager.GetMigrations();               
+                migrationJobs = GetMigrations();               
             }
             else
             {
-                _message = "Failed to restore backup.";
+                _message = errorMessage;
                 _messageDialogOpen = true;
             }
         }
@@ -227,11 +227,22 @@
         }
     }
 
+    private List<MigrationJob> GetMigrations()
+    {
+        return JobManager.GetMigrations(out string errorMessage);
+        if(!string.IsNullOrEmpty(errorMessage))
+        {
+            _message = errorMessage;
+            _messageDialogOpen = true;
+        }
+    }
+
+
     private void RemoveMigration(string? id)
     {
-        var migrationJob = JobManager.GetMigrations().Find(m => m.Id == id);
+        var migrationJob = GetMigrations().Find(m => m.Id == id);
         _selectedMigrationJob = migrationJob;
-        if (!_selectedMigrationJob.CurrentlyActive || !JobManager.MigrationWorker.IsProcessRunning())
+        if (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(id))
         {
             _message = "Are you sure you want to delete " + _selectedMigrationJob.Name + " ?";
             _yesNoDialogOpen = true;
@@ -254,13 +265,13 @@
         {
             _yesNoDialogOpen = false;
 
-            if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.MigrationWorker.IsProcessRunning()))
+            if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
             {
 
                 if (_selectedMigrationJob != null)
                 {
                     string jobId = _selectedMigrationJob.Id;
-                    JobManager.GetMigrations().Remove(_selectedMigrationJob);
+                    GetMigrations().Remove(_selectedMigrationJob);
 
                     try
                     {
@@ -269,26 +280,25 @@
                                JobManager.ClearJobFiles(jobId);
                            });
 
-                        JobManager.Save();
+                        JobManager.SaveJobs(out string errorMessage);
+                        if (!string.IsNullOrEmpty(errorMessage))
+                        {
+                            _message = errorMessage;
+                            _messageDialogOpen = true;
+                        }
                     }
                     catch { }
                 }
 
             }
-
+            
             _selectedMigrationJob = null;
         }
     }
 
     private OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
     {
-        if (JobManager.MigrationWorker.Config == null)
-        {
-            JobManager.MigrationWorker.Config = new OnlineMongoMigrationProcessor.MigrationSettings(JobManager.Log);
-            JobManager.MigrationWorker.Config.Load();
-        }
-
-        return JobManager.MigrationWorker.Config;
+        return JobManager.GetConfig();
     }
 
     private void OpenConfig()
@@ -301,9 +311,12 @@
         _editSettingsOpen = false;
 
         if (updatedConfig != null)
-        {
-            JobManager.MigrationWorker.Config = updatedConfig;
-            JobManager.MigrationWorker.Config.Save();
+        {            
+            if (!JobManager.UpdateConfig(updatedConfig, out string errorMessage))
+            {
+                _message = errorMessage;
+                _messageDialogOpen = true;
+            }
         }
     }
 
@@ -322,7 +335,7 @@
 
     private Task<bool> CheckIfNameExistsAsync(string name)
     {
-        var migrationJob = JobManager.GetMigrations().Find(m => m.Name == name);
+        var migrationJob = GetMigrations().Find(m => m.Name == name);
         return Task.FromResult(migrationJob != null);
     }
 
@@ -333,8 +346,14 @@
         {
             if (_selectedMigrationJob == null)
             {
-                JobManager.GetMigrations().Add(job);
-                JobManager.Save();
+                GetMigrations().Add(job);
+                JobManager.SaveJobs(out string errorMessage);
+                if (!string.IsNullOrEmpty(errorMessage))
+                {
+                    _message = errorMessage;
+                    _messageDialogOpen = true;
+                }
+                return;
                 ViewMigration(job.Id);
             }
         }

@@ -20,8 +20,8 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
         private string _backupFolderPath = string.Empty;
-        private object _fileLock = new object();
-        private object _loadLock = new object();
+        private static readonly object _fileLock = new object();
+        private static readonly object _loadLock = new object();
         private Log log;
         private string processedMin = string.Empty;
 
@@ -41,8 +41,14 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        public bool Load(Log log, bool loadBackup=false)
+        public void SetLog(Log log)
         {
+            this.log = log;
+        }
+
+        public bool LoadJobs(out string errorMessage,bool loadBackup= false)
+        {
+            errorMessage = string.Empty;
             lock (_loadLock)
             {
                 string path;
@@ -51,11 +57,11 @@ namespace OnlineMongoMigrationProcessor
 
                 if (path == null || !File.Exists(path))
                 {
-                    log.WriteLine("No suitable backup file found for restoration.", LogType.Error);
+                    errorMessage = "No suitable backup file found for restoration.";
                     return false;
                 }
 
-                this.log = log;
+                //this.log = log;
                 try
                 {
                     if (File.Exists(path))
@@ -74,16 +80,16 @@ namespace OnlineMongoMigrationProcessor
                                     if (System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
                                         System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
                                 }
-                                Save(true);
+                                Save(out errorMessage,true);
                             }
                         }
                     }
-
+                    errorMessage= string.Empty;
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    log.WriteLine($"Error loading data: {ex.ToString()}");
+                    errorMessage = $"Error loading data: {ex.ToString()}";
                     return false;
                 }
             }
@@ -128,8 +134,6 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-
-
         public DateTime GetBackupDate()
         {
             var path = GetBestRestoreSlotFilePath();
@@ -137,9 +141,13 @@ namespace OnlineMongoMigrationProcessor
             var backupDataUpdatedOn= File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
             return backupDataUpdatedOn;
         }
-          
 
-        public bool Save(bool forceBackup=false)
+        public bool Save()
+        {
+           return Save(out string errorMessage);
+        }
+
+        public bool Save(out string errorMessage, bool forceBackup=false)
         {
             try
             {
@@ -175,13 +183,14 @@ namespace OnlineMongoMigrationProcessor
                             File.Copy(_filePath, latestSlot, overwrite: true);
                         }
                     }
-                    
+                    errorMessage = string.Empty;
                     return true;
                 }
             }
             catch (Exception ex)
             {
-                log.WriteLine($"Error saving data: {ex}", LogType.Error);
+                errorMessage = $"Error saving data: {ex}";
+                log?.WriteLine(errorMessage, LogType.Error);
                 return false;
             }
         }
@@ -317,12 +326,10 @@ namespace OnlineMongoMigrationProcessor
         public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
-        private Log log;
 
-        public MigrationSettings(Log log)
+        public MigrationSettings()
         {
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
-            this.log = log;
         }
 
         public object Clone()
@@ -371,17 +378,18 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public bool Save()
+        public bool Save(out string errorMessage)
         {
             try
             {
                 string json = JsonConvert.SerializeObject(this);
                 File.WriteAllText(_filePath, json);
+                errorMessage=string.Empty;
                 return true;
             }
             catch (Exception ex)
             {
-                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                errorMessage= $"Error saving data: {ex.ToString()}";    
                 return false;
             }
         }

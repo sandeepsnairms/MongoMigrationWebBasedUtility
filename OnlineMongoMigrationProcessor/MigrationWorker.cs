@@ -39,21 +39,40 @@ namespace OnlineMongoMigrationProcessor
         public MigrationSettings? Config { get; set; }
         public string? CurrentJobId { get; set; }
 
-        public MigrationWorker(JobList jobs,Log log)
-        {
+        public MigrationWorker(JobList jobs)
+        {            
+            _log = new Log();
             _jobs = jobs;
-            _log = log;
+            jobs.SetLog(_log);
         }
 
-        public bool IsProcessRunning()
+        public LogBucket GetLogBucket(string jobId)
         {
-            if (Config == null)
+            // only for active job in migration worker
+            if (CurrentJobId == jobId)
+                return _log.GetCurentLogBucket(jobId);
+            else
+                return null;
+        }
+
+        public List<LogObject> GetVerboseMessages(string jobId)
+        {
+            // only for active job in migration worker
+            if (CurrentJobId == jobId)
+                return _log.GetVerboseMessages();
+            else
+                return null;
+        }
+
+        public bool IsProcessRunning(string id)
+        {
+            if(id!=null && id==CurrentJobId)
             {
-                Config = new MigrationSettings(_log);
-                Config.Load();
+                return _migrationProcessor?.ProcessRunning ?? false;
             }
 
-            return _migrationProcessor?.ProcessRunning ?? false;
+            return false;
+            
         }
 
         public void StopMigration()
@@ -68,6 +87,7 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, bool doBulkCopy, bool trackChangeStreams)
         {
+
             _migrationProcessor?.StopProcessing();
 
             int maxRetries = 10;
@@ -81,12 +101,7 @@ namespace OnlineMongoMigrationProcessor
 
             targetConnectionString = Helper.UpdateAppName(targetConnectionString, "MSFTMongoWebMigration-" + job.Id);
 
-            if (Config == null)
-            {
-                Config = new MigrationSettings(_log);
-                Config.Load();
-            }
-
+            LoadConfig();
 
             try
             {
@@ -393,15 +408,17 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        
+        public void LoadConfig()
+        {
+            if (Config == null)
+                Config = new MigrationSettings();
+             Config.Load();
+        }
+
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
-            if (Config == null)
-            {
-                Config = new MigrationSettings(_log);
-                Config.Load();
-            }
+            LoadConfig();
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
             bool continueProcessing = true;
@@ -411,10 +428,7 @@ namespace OnlineMongoMigrationProcessor
             CurrentJobId = _job.Id;
 
             string logfile = _log.Init(_job.Id);
-            //if (logfile != _job.Id)
-            //{
-            //    _log.WriteLine($"Error in reading _log. Orginal log backed up as {logfile}");
-            //}
+
             _log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
             
 

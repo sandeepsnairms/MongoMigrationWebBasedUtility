@@ -37,7 +37,7 @@ namespace OnlineMongoMigrationProcessor
         private ConcurrentDictionary<string, string> _resumeTokenCache = new ConcurrentDictionary<string, string>();
         private ConcurrentDictionary<string, MigrationUnit> _migrationUnitsToProcess = new ConcurrentDictionary<string, MigrationUnit>();
 
-        private readonly object _processingLock = new object();
+        private static readonly object _processingLock = new object();
 
         public bool ExecutionCancelled { get; set; }        
 

@@ -21,12 +21,12 @@ namespace OnlineMongoMigrationProcessor
         private LogBucket _logBucket;
         private List<LogObject>? _verboseMessages = new List<LogObject>();
         private string _currentId = string.Empty;
-        private readonly object _syncLock = new();
 
-        private readonly object _verboseLock = new object();
-        private readonly object _readLock = new object();
-        private readonly object _writeLock = new object();
-        private readonly object _initLock = new object();
+        //private static readonly object _syncLock = new();
+        private static readonly object _verboseLock = new object();
+        private static readonly object _readLock = new object();
+        private static readonly object _writeLock = new object();
+        private static readonly object _initLock = new object();
 
         public  bool IsInitialized { get; set; } = false;
 
@@ -98,7 +98,7 @@ namespace OnlineMongoMigrationProcessor
 
                 Directory.CreateDirectory(Path.Combine(Helper.GetWorkingFolder(), "migrationlogs"));
 
-                _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
+                _logBucket = ReadLogFile(_currentId, out logBackupFile);
                 _verboseMessages.Clear();
 
                 IsInitialized=true;
@@ -120,7 +120,7 @@ namespace OnlineMongoMigrationProcessor
                     if( _logBucket == null)
                     {
                         string logBackupFile = string.Empty;
-                        _logBucket = ReadLogFile(_currentId, out logBackupFile, true);
+                        _logBucket = ReadLogFile(_currentId, out logBackupFile);
                         Console.WriteLine($"LogBucket was null, re-initialized from file during WriteLine .");
                     }
 
@@ -235,19 +235,19 @@ namespace OnlineMongoMigrationProcessor
             return newFileName;
         }
 
-        public LogBucket ReadLogFile(string id, out string fileName, bool force = false)
+        public LogBucket GetCurentLogBucket(string id)
         {
-            fileName = id;
-
             if (_currentId == id && _logBucket != null)
             {
-
                 return _logBucket;
             }
 
-            //since read gets called from UI  refresh very often, not forcing to reading from file 
-            if(!force)
-                return new LogBucket(); // Return empty if not forcing read
+            return null;
+        }
+
+        public LogBucket ReadLogFile(string id, out string fileName)
+        {
+            fileName = id;
 
             try
             {
@@ -441,20 +441,59 @@ namespace OnlineMongoMigrationProcessor
 
         private LogObject? TryReadLogEntry(BinaryReader br)
         {
+            const int MaxReasonableLength = 1_000_000; // 1 MB max per message
+
             try
             {
+                // Check if there are at least 4 bytes to read the length
+                if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                    return null;
+
                 int len = br.ReadInt32();
-                var bytes = br.ReadBytes(len);
+
+                // Validate length
+                if (len <= 0 || len > MaxReasonableLength)
+                {
+                    Console.WriteLine($"Invalid length: {len}. Aborting read.");
+                    return null;
+                }
+
+                // Check if there are enough bytes to read: message, log type, and datetime
+                long requiredBytes = len + 1 + 8;
+                if (br.BaseStream.Position + requiredBytes > br.BaseStream.Length)
+                {
+                    Console.WriteLine($"Incomplete log entry: length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}");
+                    return null;
+                }
+
+                // Read the message
+                byte[] bytes = br.ReadBytes(len);
+                if (bytes.Length != len)
+                {
+                    Console.WriteLine($"ReadBytes returned less than expected: got {bytes.Length}, expected {len}");
+                    return null;
+                }
+
                 string msg = Encoding.UTF8.GetString(bytes);
-                var type = (LogType)br.ReadByte();
-                var datetime = DateTime.FromBinary(br.ReadInt64());
+
+                // Read log type (1 byte)
+                byte typeByte = br.ReadByte();
+                var type = (LogType)typeByte;
+
+                // Read timestamp (8 bytes)
+                long dateBinary = br.ReadInt64();
+                DateTime datetime = DateTime.FromBinary(dateBinary);
+
                 return new LogObject(type, msg) { Datetime = datetime };
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"Exception during TryReadLogEntry: {ex.Message}");
                 return null;
             }
         }
+
     }
+
 }
 
