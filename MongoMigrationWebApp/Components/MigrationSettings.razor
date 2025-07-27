@@ -5,7 +5,7 @@
     <div class="modal-dialog bg-dark">
         <div class="modal-content">
             <div class="modal-header">
-                <h4 class="modal-title">Edit Configuration Settings</h4>
+                <h4 class="modal-title">Edit _configuration Settings</h4>
                 <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
             </div>
             <div class="modal-body">
@@ -77,10 +77,10 @@
 @code
 {
     [Parameter]
-    public OnlineMongoMigrationProcessor.MigrationSettings? Configuration { get; set; }
+    public OnlineMongoMigrationProcessor.MigrationSettings? _configuration { get; set; }
 
     [Parameter]
-    public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings> OnConfigurationSaved { get; set; }
+    public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings> On_configurationSaved { get; set; }
 
     private string errorMessage = string.Empty;
 
@@ -101,9 +101,9 @@
 
     protected override void OnInitialized()
     {
-        if (Configuration != null)
+        if (_configuration != null)
         {
-            _configurationBackup = (OnlineMongoMigrationProcessor.MigrationSettings)Configuration.Clone();
+            _configurationBackup = (OnlineMongoMigrationProcessor.MigrationSettings)_configuration.Clone();
         }
     }
 
@@ -159,19 +159,19 @@
         }
 
 
-        Configuration = (OnlineMongoMigrationProcessor.MigrationSettings)_configurationBackup.Clone();
+        _configuration = (OnlineMongoMigrationProcessor.MigrationSettings)_configurationBackup.Clone();
 
-        if (OnConfigurationSaved.HasDelegate)
+        if (On_configurationSaved.HasDelegate)
         {
-            OnConfigurationSaved.InvokeAsync(Configuration);
+            On_configurationSaved.InvokeAsync(_configuration);
         }
     }
 
     private void Cancel()
     {
-        if (OnConfigurationSaved.HasDelegate)
+        if (On_configurationSaved.HasDelegate)
         {
-            OnConfigurationSaved.InvokeAsync(null);
+            On_configurationSaved.InvokeAsync(null);
         }
     }
 }

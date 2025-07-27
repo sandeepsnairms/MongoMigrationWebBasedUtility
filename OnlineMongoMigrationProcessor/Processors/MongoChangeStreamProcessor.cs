@@ -41,12 +41,12 @@ namespace OnlineMongoMigrationProcessor
 
         public bool ExecutionCancelled { get; set; }        
 
-        public MongoChangeStreamProcessor(Log log,MongoClient sourceClient, MongoClient targetClient, JobList jobs,MigrationJob job, MigrationSettings config, bool syncBack = false)
+        public MongoChangeStreamProcessor(Log log,MongoClient sourceClient, MongoClient targetClient, JobList jobList,MigrationJob job, MigrationSettings config, bool syncBack = false)
         {
             _log = log;
             _sourceClient = sourceClient;
             _targetClient = targetClient;
-            _jobList = jobs;
+            _jobList = jobList;
             _job = job;
             _config = config;
             _syncBack = syncBack;

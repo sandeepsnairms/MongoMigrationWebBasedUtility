@@ -20,20 +20,20 @@ namespace MongoMigrationWebApp.Service
 
         
 
-        #region Configuration Management
+        #region _configuration Management
 
-        public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig,out string errorMessage)
+        public bool Update_config(OnlineMongoMigrationProcessor.MigrationSettings updated_config,out string errorMessage)
         {           
-            if (updatedConfig == null)
+            if (updated_config == null)
             {
                 errorMessage = "Migration settings cannot be null.";
                 return false;
             }
             // Save the updated config
-            return updatedConfig.Save(out errorMessage);
+            return updated_config.Save(out errorMessage);
         }
 
-        public OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
+        public OnlineMongoMigrationProcessor.MigrationSettings Get_config()
         {
             MigrationSettings config = new MigrationSettings();
             config.Load();
@@ -112,7 +112,7 @@ namespace MongoMigrationWebApp.Service
 
         public List<LogObject> GetVerboseMessages(string id)
         {
-            //verbose messages  are only  there for active jobs so fetech from migration worker.
+            //verbose messages  are only  there for active jobList so fetech from migration worker.
             if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
                return MigrationWorker.GetVerboseMessages(id);
             else
@@ -123,14 +123,12 @@ namespace MongoMigrationWebApp.Service
         {
             //Check if migration workewr is initialized and active. Return migration workers log bucket if it is.
             LogBucket? bucket = null;
-            if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+            if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id)) //only if worker's current job Id matches param
             {
-                bucket = MigrationWorker.GetLogBucket(id); //only if workers current job Id matches param
-                if (bucket != null)
-                    isLiveLog = true;
-                else
-                    isLiveLog = false;
-                fileName = string.Empty;
+                //Console.WriteLine($"Migration worker is running for job ID: {id}");
+                bucket = MigrationWorker.GetLogBucket(id); 
+                isLiveLog = true;
+                fileName=string.Empty;
                 return bucket;
             }
 
@@ -176,13 +174,15 @@ namespace MongoMigrationWebApp.Service
             MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
         }
 
+
+        public string GetRunningJobId()
+        {
+            return MigrationWorker?.GetRunningJobId() ?? string.Empty;
+        }
+
         public bool IsProcessRunning(string id)
         {
-            if (MigrationWorker == null)
-            {
-                return false;
-            }
-            return MigrationWorker.IsProcessRunning(id);
+            return MigrationWorker?.IsProcessRunning(id) ?? false;
         }
 
         #endregion

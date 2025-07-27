@@ -15,7 +15,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || ( !IsJobRunning())) || !showLogBackupFile)
+        @if(IsResumeEnabled())
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -31,7 +31,7 @@
             </div>
         }
 
-        @if (MigrationJob != null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && IsJobRunning())
+        @if (IsPauseEnabled())
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
 
@@ -160,7 +160,7 @@
     }
 </div>
 
-@if (LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !showLogBackupFile)
+@if (LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !_showLogBackupFile)
 {
     <h5 class="pt-4">
         Monitor
@@ -188,7 +188,7 @@
     </div>
 }
 
-@if (LogBucket != null && LogBucket.Logs != null && !showLogBackupFile)
+@if (LogBucket != null && LogBucket.Logs != null && !_showLogBackupFile)
 {
     <h5 class=" pt-4">
         <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
@@ -234,7 +234,7 @@
 
 
 }
-else if (@showLogBackupFile)
+else if (@_showLogBackupFile)
 {
     <div class="alert alert-danger">
         <p>
@@ -256,11 +256,11 @@ else if (@showLogBackupFile)
 #pragma warning disable CS8604
 #pragma warning disable CS4014
 
-    [Parameter]
-    public string? JobId { get; set; }
+        [Parameter]
+        public string? JobId { get; set; }
 
-    [Parameter]
-    public MigrationJob? MigrationJob { get; set; }
+        [Parameter]
+        public MigrationJob? MigrationJob { get; set; }
 
     private LogBucket? LogBucket { get; set; }
     private List<LogObject> VerboseMessages { get; set; }
@@ -273,8 +273,8 @@ else if (@showLogBackupFile)
     private YesNoDialog.Category _yesNoDiaLogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
     private bool _resetChangeStreamDialogOpen;
-    private bool showLogBackupFile = false;
-
+    private bool _showLogBackupFile = false;
+    private string _logBackupFile = string.Empty;
 
     private string GetRowClass(string type, string message)
     {
@@ -302,6 +302,8 @@ else if (@showLogBackupFile)
 
     private void StartAutoRefresh()
     {
+        _showLogBackupFile = false;
+        _logBackupFile = string.Empty;  
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
@@ -322,8 +324,7 @@ else if (@showLogBackupFile)
 
     private async Task DownloadLogBackupFile()
     {
-        string logBackupFileName = GetLogBackupFileName();
-        await Downloader(logBackupFileName, $"Backup_{logBackupFileName}");
+        await Downloader(_logBackupFile, $"Backup_{_logBackupFile}");
     }
 
 
@@ -351,30 +352,34 @@ else if (@showLogBackupFile)
         }
     }
 
-    private string GetLogBackupFileName()
-    {
-        //MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-        JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
-        return logBackupFile;
-    }
+    // private string GetLogBackupFileName()
+    // {
+    //     //MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+    //     JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
+    //     return logBackupFile;
+    // }
 
     private void Refresh(object? state)
     {
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-        if (MigrationJob != null && MigrationJob.IsStarted)
+        if (MigrationJob != null && MigrationJob.IsStarted && !_showLogBackupFile)
         {
-            LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
-            VerboseMessages = JobManager.GetVerboseMessages(JobId);
-            Console.WriteLine($"Refresh called for {JobId}");                        
 
-            if (LogBucket == null)
+            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                _logBackupFile = logBackup;
+
+            VerboseMessages = JobManager.GetVerboseMessages(JobId);
+            //Console.WriteLine($"Refresh called for {JobId}");                        
+
+            if (! string.IsNullOrEmpty(_logBackupFile))
             {
                 _refreshTimer?.Dispose(); 
                 _refreshTimer = null;
-                showLogBackupFile = true;
+                _showLogBackupFile = true;
             }
             else
-                showLogBackupFile = false;
+                _showLogBackupFile = false;
 
             InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
         }
@@ -384,9 +389,9 @@ else if (@showLogBackupFile)
 
     private async Task UpdateTimerStatus(string id)
     {
-        await Task.Delay(TimeSpan.FromSeconds(60)); // Wait for 60 seconds before processing
+        await Task.Delay(TimeSpan.FromSeconds(30)); // Wait for 30 seconds before processing
 
-        Console.WriteLine($"UpdateTimerStatus invoked");
+        Console.WriteLine($"UpdateTimerStatus Invoked");
 
         if (id!= JobId)
         {
@@ -396,15 +401,18 @@ else if (@showLogBackupFile)
         MigrationJob = GetMigrations().Find(m => m.Id == id);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
-            LogBucket = JobManager.GetLogBucket(id, out string logBackupFile, out bool isLive);
+            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                _logBackupFile = logBackup;
+
             if (!isLive)               
             {
                 _refreshTimer?.Dispose(); // Stop the timer if not live
                 _refreshTimer = null;
-                showLogBackupFile = true;
+                //_showLogBackupFile = false;
             }
         }
-        
+
     }
 
     private Task<bool> CheckIfNameExistsAsync(string name)
@@ -464,24 +472,27 @@ else if (@showLogBackupFile)
             return;
         }
 
-        LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
-        if (LogBucket == null)
+
+        LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+        if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+            _logBackupFile = logBackup;
+
+        if (!string.IsNullOrEmpty(_logBackupFile))
         {
-            showLogBackupFile = true;
+            _showLogBackupFile = true;
         }
         else
         {
-            showLogBackupFile = false;
-        }
-
-        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning() && !showLogBackupFile))
-        {
-            await ResumeJob();
-        }
-        if (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && IsJobRunning())
-        {
-            StartAutoRefresh();
-        }
+            _showLogBackupFile = false;
+            if (IsResumeEnabled())
+            {
+                await ResumeJob();
+            }
+            if (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && IsJobRunning())
+            {
+                StartAutoRefresh();
+            }
+        }        
     }
 
     private async Task OnMigrationDetailsPopUpSubmit(MigrationJob job)
@@ -533,7 +544,7 @@ else if (@showLogBackupFile)
     private void ResetChangeStream()
     {
         _errorMessage = string.Empty;
-        if (!IsJobRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
+        if (IsResumeEnabled() && !MigrationJob.ProcessingSyncBack)
         {
             _resetChangeStreamDialogOpen = true;
         }
@@ -548,7 +559,7 @@ else if (@showLogBackupFile)
     private void ManageCollections()
     {
         _errorMessage = string.Empty;
-        if (!IsJobRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
+        if (IsResumeEnabled() && !MigrationJob.ProcessingSyncBack)
         {
             _manageCollectionDialogOpen = true;
         }
@@ -570,12 +581,13 @@ else if (@showLogBackupFile)
     private async Task ResumeJob()
     {
         _errorMessage = string.Empty;
-        if (!IsJobRunning() && NoOtherActiveJobs() )
+        if (IsResumeEnabled() && NoOtherActiveJobs())
         {
             if (string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
                 _migrationDetailsPopUpOpen = true;
             else
                 await OnMigrationDetailsPopUpSubmit(MigrationJob);
+            
         }
         else
         {
@@ -682,20 +694,30 @@ else if (@showLogBackupFile)
         _errorMessage = string.Empty;
 
         JobManager.StopMigration();
-        MigrationJob.IsCancelled = true;
         MigrationJob.CurrentlyActive = false;
         if (!SaveJobs()) return;
         _refreshTimer = null;
     }
 
     private bool NoOtherActiveJobs()
+    {        
+
+        string activeJob = JobManager?.GetRunningJobId() ?? string.Empty;
+        if (activeJob != string.Empty && activeJob != JobId)
+            return false;
+        else
+            return true;
+    }
+
+    private  bool  IsPauseEnabled()
     {
-        foreach (var job in GetMigrations())
-        {
-            if (job.CurrentlyActive && job.Id != JobId)
-                return false;
-        }
-        return true;
+        return MigrationJob != null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && IsJobRunning() && NoOtherActiveJobs();
+    }
+
+
+    private bool IsResumeEnabled()
+    {
+        return MigrationJob != null && !MigrationJob.IsCompleted && !IsJobRunning() ;
     }
 }
 

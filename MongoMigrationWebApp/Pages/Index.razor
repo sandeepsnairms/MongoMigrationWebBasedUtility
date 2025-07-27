@@ -18,7 +18,7 @@
     </h3>
     <div class="d-flex align-items-center mb-3">
         <button class="btn btn-primary" title="New Job" @onclick="StartMigrationAsync">New Job</button>
-        <button class="btn btn-light" title="Edit Migration Settings" @onclick="OpenConfig" style="border: none; background: transparent;">
+        <button class="btn btn-light" title="Edit Migration Settings" @onclick="Open_config" style="border: none; background: transparent;">
             <i class="bi bi-gear"></i>
         </button>
     </div>
@@ -50,7 +50,7 @@
                 {
                     <tr>
                         <td>
-                            @if (migration.CurrentlyActive &&  JobManager.IsProcessRunning(migration.Id))
+                            @if (JobManager.IsProcessRunning(migration.Id))
                             {
                                 <i class="bi bi-star-fill text-warning"></i>
                             }
@@ -102,7 +102,7 @@
 
 @if (_editSettingsOpen)
 {
-    <MigrationSettings Configuration="@GetConfig()" OnConfigurationSaved="HandleConfigurationSaved" />
+    <MigrationSettings _configuration="@Get_config()" On_configurationSaved="Handle_configurationSaved" />
 }
 
 @code {
@@ -177,7 +177,7 @@
             lagString = $"from {(int)gap.TotalMinutes} minutes ago";
         }
 
-        _message = $"Warning: This will stop ongoing jobs and overwrite current migration jobs with a backup {lagString}. Do you wish to proceed?";
+        _message = $"Warning: This will stop ongoing jobList and overwrite current migration jobList with a backup {lagString}. Do you wish to proceed?";
         _recoverDialogOpen = true;
     }
 
@@ -296,23 +296,26 @@
         }
     }
 
-    private OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
+    private OnlineMongoMigrationProcessor.MigrationSettings Get_config()
     {
-        return JobManager.GetConfig();
+        return JobManager.Get_config();
     }
 
-    private void OpenConfig()
+
+
+
+    private void Open_config()
     {
         _editSettingsOpen = true;
     }
 
-    private void HandleConfigurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
+    private void Handle_configurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updated_config)
     {
         _editSettingsOpen = false;
 
-        if (updatedConfig != null)
+        if (updated_config != null)
         {            
-            if (!JobManager.UpdateConfig(updatedConfig, out string errorMessage))
+            if (!JobManager.Update_config(updated_config, out string errorMessage))
             {
                 _message = errorMessage;
                 _messageDialogOpen = true;

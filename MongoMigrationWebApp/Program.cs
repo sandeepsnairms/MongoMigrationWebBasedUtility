@@ -32,7 +32,7 @@ builder.Services.AddScoped<FileService>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// _configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");

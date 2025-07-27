@@ -1,6 +1,7 @@
 ﻿//using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -111,13 +112,14 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
+
                 lock (_writeLock)
                 {
 
-                   // _logBucket ??= new LogBucket();
+                    // _logBucket ??= new LogBucket();
                     //_logBucket.Logs ??= new List<LogObject>();
 
-                    if( _logBucket == null)
+                    if (_logBucket == null)
                     {
                         string logBackupFile = string.Empty;
                         _logBucket = ReadLogFile(_currentId, out logBackupFile);
@@ -137,7 +139,8 @@ namespace OnlineMongoMigrationProcessor
 
                     //persits to file
                     AppendBinaryLog(logObj);
-                }
+                 }
+                
             }
             catch
             {
@@ -272,6 +275,10 @@ namespace OnlineMongoMigrationProcessor
                         {
                             //old format with LogBucket
                             LogBucket logBucket = JsonSerializer.Deserialize<LogBucket>(json, _jsonOptions);
+                            if (logBucket == null || logBucket.Logs.Count == 0)
+                            {
+                                return new LogBucket(); // empty log
+                            }
                             WriteBinaryLog(id, logBucket.Logs);
                             return ParseLogBinFile(binPath);
                         }
@@ -280,6 +287,11 @@ namespace OnlineMongoMigrationProcessor
                             try
                             {   //new format with List<LogObject>
                                 List<LogObject>? logs = JsonSerializer.Deserialize<List<LogObject>>(json, _jsonOptions);
+                                if (logs == null || logs.Count == 0)
+                                {
+                                    return new LogBucket(); // empty log
+                                }
+
                                 WriteBinaryLog(id, logs);
                                 return ParseLogBinFile(binPath);
                             }

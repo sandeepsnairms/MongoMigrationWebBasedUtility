@@ -240,7 +240,7 @@ namespace OnlineMongoMigrationProcessor
                 string trimmedItem = item.Trim(); // Remove any extra whitespace
                 if (Regex.IsMatch(trimmedItem, pattern))
                 {
-                    Console.WriteLine($"'{trimmedItem}' matches the pattern.");
+                    //Console.WriteLine($"'{trimmedItem}' matches the pattern.");
                     validItems.Add(trimmedItem); // HashSet ensures uniqueness
                 }
                 else
