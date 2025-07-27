@@ -138,7 +138,7 @@ namespace OnlineMongoMigrationProcessor
 
                 while (!token.IsCancellationRequested && !ExecutionCancelled)
                 {
-                    _job.CurrentlyActive = true;
+                    //_job.CurrentlyActive = true;
                     var totalKeys = sortedKeys.Count;
 
                     while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)

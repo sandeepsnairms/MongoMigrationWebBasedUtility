@@ -197,7 +197,7 @@
             foreach(var job in GetMigrations())
             {
                 job.IsCancelled = true;
-                job.CurrentlyActive = false;
+                // job.CurrentlyActive = false;
                 job.IsStarted = false;
                 JobManager.CancelMigration(job.Id);
             }
@@ -242,7 +242,8 @@
     {
         var migrationJob = GetMigrations().Find(m => m.Id == id);
         _selectedMigrationJob = migrationJob;
-        if (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(id))
+        //if (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(id
+        if (!JobManager.IsProcessRunning(id))
         {
             _message = "Are you sure you want to delete " + _selectedMigrationJob.Name + " ?";
             _yesNoDialogOpen = true;
@@ -265,7 +266,8 @@
         {
             _yesNoDialogOpen = false;
 
-            if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
+            //if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
+            if (result.IsConfirmed && (!JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
             {
 
                 if (_selectedMigrationJob != null)

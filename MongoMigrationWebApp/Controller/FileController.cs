@@ -47,7 +47,7 @@ public class FileController : ControllerBase
         }
     }
 
-    [HttpGet("download/jobList")]
+    [HttpGet("download/Jobs")]
     public IActionResult DownloadFile()
     {
         string fileSharePath = $"{Helper.GetWorkingFolder()}migrationjobs"; // UNC path to your file share

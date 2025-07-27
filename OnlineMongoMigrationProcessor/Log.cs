@@ -160,7 +160,6 @@ namespace OnlineMongoMigrationProcessor
             if (logs == null || logs.Count == 0)
                 return;
 
-
             var folder = Path.Combine(Helper.GetWorkingFolder(), "migrationlogs");
             var binPath = Path.Combine(folder, $"{id}.bin");
 
@@ -173,25 +172,33 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var log in logs)
                 {
-                    var message = log.Message ?? string.Empty;
-                    var messageBytes = Encoding.UTF8.GetBytes(message);
+                    try
+                    {
+                        var message = log.Message ?? string.Empty;
+                        var messageBytes = Encoding.UTF8.GetBytes(message);
 
-                    // Write record with length prefix so it can be parsed safely later
-                    bw.Write(messageBytes.Length);
-                    bw.Write(messageBytes);
-                    bw.Write((byte)log.Type);
-                    bw.Write(log.Datetime.ToBinary());
+                        bw.Write(messageBytes.Length);
+                        bw.Write(messageBytes);
+                        bw.Write((byte)log.Type);
+                        bw.Write(log.Datetime.ToBinary());
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to write log entry: {ex.Message}");
+                        // Continue writing other logs
+                    }
                 }
 
-                bw.Flush();         // Flush binary writer
-                fs.Flush(true);     // Force flush to disk hardware
-
+                bw.Flush();
+                fs.Flush(true);
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"Error writing binary log: {ex.Message}");
                 throw;
             }
         }
+
 
         private void AppendBinaryLog(LogObject log)
         {
@@ -384,7 +391,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private LogBucket ParseLogBinFile(string binPath,int topCount = 20, int bottomCount = 280)
+        private LogBucket ParseLogBinFile(string binPath, int topCount = 20, int bottomCount = 280)
         {
             var logBucket = new LogBucket { Logs = new List<LogObject>() };
             var offsets = new List<long>();
@@ -394,105 +401,106 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                using (var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                using (var br = new BinaryReader(fs))
+                using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+
+                // First pass: collect offsets of valid log entries
+                while (fs.Position < fs.Length)
                 {
-                    // First pass: collect offsets of all entries
-                    while (fs.Position < fs.Length)
-                    {
-                        long offset = fs.Position;
+                    long offset = fs.Position;
 
-                        try
-                        {
-                            int msgLen = br.ReadInt32();
-                            fs.Position += msgLen + 1 + 8; // Skip over message, LogType, DateTime
-                            offsets.Add(offset);
-                        }
-                        catch
-                        {
-                            continue;
-                        }
-                    }
+                    try
+                    {
+                        if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                            break;
 
-                    // Select required offsets
-                    List<long> selectedOffsets;
-                    if (offsets.Count > 300)
-                    {
-                        // Select top N and bottom M
-                        selectedOffsets = offsets
-                            .Take(topCount)
-                            .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomCount)))
-                            .Distinct()
-                            .OrderBy(o => o)
-                            .ToList();
-                    }
-                    else
-                    {
-                        // Use all offsets (full log)
-                        selectedOffsets = offsets;
-                    }
+                        int msgLen = br.ReadInt32();
 
-                    // Second pass: read selected entries
-                    foreach (var offset in selectedOffsets)
+                        if (msgLen <= 0 || msgLen > 1_000_000)
+                            break;
+
+                        long bytesToSkip = msgLen + 1 + 8;
+                        if (br.BaseStream.Position + bytesToSkip > br.BaseStream.Length)
+                            break;
+
+                        br.BaseStream.Seek(bytesToSkip, SeekOrigin.Current);
+                        offsets.Add(offset);
+                    }
+                    catch
                     {
-                        fs.Position = offset;
-                        var log = TryReadLogEntry(br);
-                        if (log != null)
-                            logBucket.Logs!.Add(log);
+                        break;
                     }
                 }
+
+                // Select top N and bottom M
+                List<long> selectedOffsets;
+                if (offsets.Count > topCount + bottomCount)
+                {
+                    selectedOffsets = offsets
+                        .Take(topCount)
+                        .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomCount)))
+                        .Distinct()
+                        .OrderBy(o => o)
+                        .ToList();
+                }
+                else
+                {
+                    selectedOffsets = offsets;
+                }
+
+                // Second pass: read selected entries
+                foreach (var offset in selectedOffsets)
+                {
+                    fs.Position = offset;
+                    var log = TryReadLogEntry(br);
+                    if (log != null)
+                        logBucket.Logs!.Add(log);
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // Optional: handle/log if needed
+                Console.WriteLine($"Error parsing binary log file: {ex.Message}");
             }
 
             return logBucket;
         }
 
 
+
         private LogObject? TryReadLogEntry(BinaryReader br)
         {
-            const int MaxReasonableLength = 1_000_000; // 1 MB max per message
+            const int MaxReasonableLength = 1_000_000;
 
             try
             {
-                // Check if there are at least 4 bytes to read the length
                 if (br.BaseStream.Position + 4 > br.BaseStream.Length)
                     return null;
 
                 int len = br.ReadInt32();
 
-                // Validate length
                 if (len <= 0 || len > MaxReasonableLength)
                 {
-                    Console.WriteLine($"Invalid length: {len}. Aborting read.");
+                    Console.WriteLine($"Invalid message length: {len}");
                     return null;
                 }
 
-                // Check if there are enough bytes to read: message, log type, and datetime
                 long requiredBytes = len + 1 + 8;
                 if (br.BaseStream.Position + requiredBytes > br.BaseStream.Length)
                 {
-                    Console.WriteLine($"Incomplete log entry: length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}");
+                    Console.WriteLine($"Incomplete log entry. Message length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}");
                     return null;
                 }
 
-                // Read the message
                 byte[] bytes = br.ReadBytes(len);
                 if (bytes.Length != len)
                 {
-                    Console.WriteLine($"ReadBytes returned less than expected: got {bytes.Length}, expected {len}");
+                    Console.WriteLine($"ReadBytes returned {bytes.Length}, expected {len}");
                     return null;
                 }
 
                 string msg = Encoding.UTF8.GetString(bytes);
-
-                // Read log type (1 byte)
                 byte typeByte = br.ReadByte();
                 var type = (LogType)typeByte;
-
-                // Read timestamp (8 bytes)
                 long dateBinary = br.ReadInt64();
                 DateTime datetime = DateTime.FromBinary(dateBinary);
 
@@ -500,10 +508,13 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Exception during TryReadLogEntry: {ex.Message}");
+                Console.WriteLine($"Exception while reading log entry: {ex.Message}");
                 return null;
             }
         }
+
+
+
 
     }
 

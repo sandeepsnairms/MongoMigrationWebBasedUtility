@@ -99,8 +99,8 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                if(_job!=null)
-                    _job.CurrentlyActive = false;
+                //if(_job!=null)
+                //    _job.CurrentlyActive = false;
 
                 _jobList?.Save();
                 _migrationCancelled = true;
@@ -154,7 +154,7 @@ namespace OnlineMongoMigrationProcessor
                 _toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(_log,_toolsDestinationFolder, _config);
                 if (string.IsNullOrEmpty(_toolsLaunchFolder))
                 {
-                    _job.CurrentlyActive = false;
+                    //_job.CurrentlyActive = false;
                     _job.IsCompleted = false;
                     _jobList?.Save();
 

@@ -57,8 +57,9 @@ namespace OnlineMongoMigrationProcessor
 
         public void StopProcessing()
         {
-            if(_job !=null)
-                _job.CurrentlyActive = false;
+            if (_job != null)
+                _job.IsStarted = false;
+
             _jobList?.Save();
 
             ProcessRunning = false;
@@ -77,6 +78,7 @@ namespace OnlineMongoMigrationProcessor
 
             int maxRetries = 10;
             string jobId = _job.Id;
+            //_job.CurrentlyActive = true;
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
@@ -146,7 +148,7 @@ namespace OnlineMongoMigrationProcessor
 
                 for (int i = 0; i < item.MigrationChunks.Count; i++)
                 {
-                    if (_executionCancelled || _job == null || !_job.CurrentlyActive) return;
+                    if (_executionCancelled || _job == null) return;//|| !_job.CurrentlyActive) return;
 
                     double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                     double contributionFactor = 1.0 / item.MigrationChunks.Count;
@@ -159,7 +161,7 @@ namespace OnlineMongoMigrationProcessor
                         backoff = TimeSpan.FromSeconds(2);
                         bool continueProcessing = true;
 
-                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing && _job.CurrentlyActive)
+                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing )//&& _job.CurrentlyActive)
                         {
                             dumpAttempts++;
                             string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection={colName}  --out {folder}\\{i}.bson";
@@ -325,7 +327,7 @@ namespace OnlineMongoMigrationProcessor
 
             _log.WriteLine($"{dbName}.{colName} starting uploader");
 
-            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive && !_job.IsSimulatedRun)
+            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && !_job.IsSimulatedRun)// && _job.CurrentlyActive 
             {
                 int restoredChunks = 0;
                 long restoredDocs = 0;
@@ -366,7 +368,7 @@ namespace OnlineMongoMigrationProcessor
                             backoff = TimeSpan.FromSeconds(2);
                             bool continueProcessing = true;
                             bool skipRestore = false;
-                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete && _job.CurrentlyActive )
+                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete)// && _job.CurrentlyActive )
                             {
                                 restoreAttempts++;
                                 skipRestore=false;
@@ -571,7 +573,7 @@ namespace OnlineMongoMigrationProcessor
                             _log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
-                            migrationJob.CurrentlyActive = false;
+                            //migrationJob.CurrentlyActive = false;
                             StopProcessing();
                         }
                         else if(_job.IsOnline && _job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)

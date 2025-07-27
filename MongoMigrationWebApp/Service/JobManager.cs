@@ -84,7 +84,7 @@ namespace MongoMigrationWebApp.Service
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                _jobList.LoadJobs(out errorMessage, true);
+                _jobList.LoadJobs(out errorMessage, false);
             }
 
             if (_jobList.MigrationJobs == null)
