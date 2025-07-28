@@ -271,7 +271,12 @@ namespace OnlineMongoMigrationProcessor
                     // 1. Try Binary first
                     if (File.Exists(binPath))
                     {
-                        return ParseLogBinFile(binPath);
+                        var logBucket=ParseLogBinFile(binPath);
+                        if(logBucket.Logs == null || logBucket.Logs.Count == 0)
+                        {
+                            return HandleError(id, binPath, binPath, out fileName);
+                        }
+                        return logBucket;
                     }
 
                     // 2. Fallback to JSON if .bin is missing (backward compatibility)
@@ -304,20 +309,8 @@ namespace OnlineMongoMigrationProcessor
                             }
                             catch
                             {
-                                fileName = CreateFileCopyWithTimestamp(txtPath);
+                                return HandleError(id, binPath, txtPath, out fileName);
 
-                                //if (force)
-                                //{
-                                    File.Delete(txtPath);
-
-                                    var logBucket = new LogBucket();
-                                    logBucket.Logs ??= new List<LogObject>();
-                                    logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file as JSON; original file backed up as {fileName}"));
-                                    WriteBinaryLog(id, logBucket.Logs);
-                                    return ParseLogBinFile(binPath);
-                                //}
-
-                                return new LogBucket(); // fallback empty
                             }
                         }
                     }
@@ -329,6 +322,19 @@ namespace OnlineMongoMigrationProcessor
             {
                 throw new Exception("Log Init failed");
             }
+        }
+
+        private LogBucket HandleError(string jobId,string binPath,string currentLogFilePath, out string backupFileName)
+        {
+            backupFileName = CreateFileCopyWithTimestamp(currentLogFilePath);
+
+            File.Delete(currentLogFilePath);
+
+            var logBucket = new LogBucket();
+            logBucket.Logs ??= new List<LogObject>();
+            logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file; original file backed up as {backupFileName}"));
+            WriteBinaryLog(jobId, logBucket.Logs);
+            return ParseLogBinFile(binPath);
         }
 
         public byte[] DownloadLogsAsJsonBytes(string binPath, int topEntries = 20, int bottomEntries = 230)

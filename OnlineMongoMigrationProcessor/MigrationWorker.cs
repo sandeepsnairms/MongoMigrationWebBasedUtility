@@ -238,7 +238,8 @@ namespace OnlineMongoMigrationProcessor
 
                     }
 
-                    _migrationProcessor?.StopProcessing();
+                    _migrationProcessor?.StopProcessing(false);
+
                     _migrationProcessor = null;
                     if (!_job.UseMongoDump)
                     {
@@ -248,7 +249,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         _migrationProcessor = new DumpRestoreProcessor(_log,_jobList, _job, _sourceClient, _config, _toolsLaunchFolder);
                     }
-                    
+                    _migrationProcessor.ProcessRunning = true;
 
 
                     bool checkedCS = false;

@@ -40,14 +40,15 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
         }
 
-        public void StopProcessing()
+        public void StopProcessing(bool updateStatus = true)
         {
             if (_job != null)
                 _job.IsStarted = false;
 
             _jobList?.Save();
 
-            ProcessRunning = false; 
+            if(updateStatus)
+                ProcessRunning = false; 
 
             _executionCancelled = true;
 
@@ -215,8 +216,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                         if (dumpAttempts == maxRetries)
                         {
-                            StopProcessing();
-                            ProcessRunning = false;                            
+                            StopProcessing();                          
                         }
                     }
                     else

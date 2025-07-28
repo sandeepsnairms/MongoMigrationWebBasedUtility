@@ -25,7 +25,7 @@
                     <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
                     @if (!string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
                     {
-                        <li><a class="dropdown-item" @onclick="ResumeJob">With Existing Connection Strings</a></li>
+                        <li><a class="dropdown-item" @onclick="ResumeJobWithExistingConnectionString">With Existing Connection Strings</a></li>
                     }
                 </ul>
             </div>
@@ -256,11 +256,11 @@ else if (@_showLogBackupFile)
 #pragma warning disable CS8604
 #pragma warning disable CS4014
 
-        [Parameter]
-        public string? JobId { get; set; }
+    [Parameter]
+    public string? JobId { get; set; }
 
-        [Parameter]
-        public MigrationJob? MigrationJob { get; set; }
+    [Parameter]
+    public MigrationJob? MigrationJob { get; set; }
 
     private LogBucket? LogBucket { get; set; }
     private List<LogObject> VerboseMessages { get; set; }
@@ -484,7 +484,7 @@ else if (@_showLogBackupFile)
         else
         {
             _showLogBackupFile = false;
-            if (IsResumeEnabled() && MigrationJob.IsStarted)
+            if (IsResumeEnabled())
             {
                 await ResumeJob();
             }
@@ -573,21 +573,35 @@ else if (@_showLogBackupFile)
     }
     private async Task ResumeJobWithNewConnectionString()
     {
-        MigrationJob.SourceConnectionString = string.Empty;
-        MigrationJob.TargetConnectionString = string.Empty;
-        await ResumeJob();
+        await DecideAndResumeJob(true);
+    }
+
+    private async Task ResumeJobWithExistingConnectionString()
+    {
+        if (IsResumeEnabled() && NoOtherActiveJobs())
+            await OnMigrationDetailsPopUpSubmit(MigrationJob);
+        else
+            _migrationDetailsPopUpOpen = true;
     }
 
     private async Task ResumeJob()
     {
+        await DecideAndResumeJob(false);
+    }
+
+    private async Task DecideAndResumeJob(bool showDialog=false)
+    {
         _errorMessage = string.Empty;
         if (IsResumeEnabled() && NoOtherActiveJobs())
         {
-            if (string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
+            if(showDialog)
                 _migrationDetailsPopUpOpen = true;
             else
-                await OnMigrationDetailsPopUpSubmit(MigrationJob);
-            
+            {
+                if (CanAutoStart())
+                    await OnMigrationDetailsPopUpSubmit(MigrationJob);                
+                
+            }
         }
         else
         {
@@ -692,7 +706,6 @@ else if (@_showLogBackupFile)
     private void PauseJob()
     {
         _errorMessage = string.Empty;
-
         JobManager.StopMigration();
         // MigrationJob.CurrentlyActive = false;
         if (!SaveJobs()) return;
@@ -718,6 +731,16 @@ else if (@_showLogBackupFile)
     private bool IsResumeEnabled()
     {
         return MigrationJob != null && !MigrationJob.IsCompleted && !IsJobRunning() ;
+    }
+
+    private bool CanAutoStart()
+    {
+
+        if (IsResumeEnabled() && NoOtherActiveJobs() && MigrationJob.IsStarted && (!string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || !string.IsNullOrEmpty(MigrationJob.TargetConnectionString)))
+        {
+            return true;
+        }        
+        return false;
     }
 }
 

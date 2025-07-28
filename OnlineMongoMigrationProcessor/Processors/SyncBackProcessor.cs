@@ -29,13 +29,14 @@ namespace OnlineMongoMigrationProcessor.Processors
             _config = config ?? throw new ArgumentNullException(nameof(config), "MigrationSettings cannot be null.");
         }
 
-        public void StopProcessing()
+        public void StopProcessing(bool updateStatus = true)
         {
             //if (_job != null)
             //    _job.CurrentlyActive = false;
             _jobList?.Save();
 
-            ProcessRunning = false;
+            if(updateStatus) 
+                ProcessRunning = false;
 
             _executionCancelled = true;
             _cts?.Cancel();
