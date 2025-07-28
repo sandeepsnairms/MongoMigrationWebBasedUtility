@@ -31,8 +31,8 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         public void StopProcessing(bool updateStatus = true)
         {
-            //if (_job != null)
-            //    _job.CurrentlyActive = false;
+            if (_job != null)
+                _job.IsStarted = false;
             _jobList?.Save();
 
             if(updateStatus) 
@@ -48,8 +48,10 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            ProcessRunning = true;
+
             if (_job != null)
-                _job.IsStarted = false;
+                _job.IsStarted = true;
 
             int maxRetries = 10;
             int attempts = 0;
@@ -65,7 +67,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             bool continueProcessing = true;
 
-            ProcessRunning=true;
+            
             while (attempts < maxRetries && !_executionCancelled && continueProcessing)
             {
                 attempts++;

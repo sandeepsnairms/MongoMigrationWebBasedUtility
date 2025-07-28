@@ -327,6 +327,7 @@
 
     private void ViewMigration(string? id)
     {
+
         NavigationManager.NavigateTo($"/migrationjobviewer/{id}");
     }
 
@@ -352,6 +353,7 @@
             if (_selectedMigrationJob == null)
             {
                 GetMigrations().Add(job);
+                job.IsStarted = true;
                 JobManager.SaveJobs(out string errorMessage);
                 if (!string.IsNullOrEmpty(errorMessage))
                 {

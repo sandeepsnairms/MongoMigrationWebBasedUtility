@@ -430,7 +430,7 @@ namespace OnlineMongoMigrationProcessor
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
             _job = job;
-            StopMigration(); //stop any existing
+            //StopMigration(); //stop any existing
             ProcessRunning = true;
 
             LoadConfig();
@@ -440,7 +440,8 @@ namespace OnlineMongoMigrationProcessor
 
             _migrationCancelled = false;
 
-
+            if(_log==null)
+                _log = new Log();
             string logfile = _log.Init(_job.Id);
 
             _log.WriteLine($"Sync Back: {_job.Id} started on {_job.StartedOn} (UTC)");
@@ -454,9 +455,9 @@ namespace OnlineMongoMigrationProcessor
 
             _migrationProcessor = null;
             _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job, null, _config, string.Empty);
-
+            _migrationProcessor.ProcessRunning = true;
             _migrationProcessor.StartProcess(null, sourceConnectionString, targetConnectionString);
-
+            
         }
 
         private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, string idField = "_id")

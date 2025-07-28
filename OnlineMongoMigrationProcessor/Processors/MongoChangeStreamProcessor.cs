@@ -389,7 +389,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}Error processing change stream. Details : {ex.ToString()}", LogType.Error);
+                _log.WriteLine($"{_syncBackPrefix} Error processing change stream for {item.DatabaseName}.{item.CollectionName}. Details : {ex.ToString()}", LogType.Error);
                 
             }
         }
