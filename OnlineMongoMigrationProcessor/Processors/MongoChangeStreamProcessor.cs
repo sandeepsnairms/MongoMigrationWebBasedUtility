@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -314,7 +315,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (!item.InitialDocumenReplayed && !_job.IsSimulatedRun)
                     {
-                        if (AutoReplayFirstChangeInResumeToken(item.ResumeDocumentId, item.ResumeTokenOperation, sourceCollection, targetCollection))
+                        if (AutoReplayFirstChangeInResumeToken(item.ResumeDocumentId, item.ResumeTokenOperation, sourceCollection, targetCollection,item))
                         {
                             // If the first change was replayed, we can proceed
                             item.InitialDocumenReplayed = true;
@@ -346,7 +347,26 @@ namespace OnlineMongoMigrationProcessor
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
                         options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        if(item.ResetChangeStream)
+                        {
+                            if (!_syncBack)
+                            {
+                                item.CSDocsUpdated = 0;
+                                item.CSDocsInserted = 0;
+                                item.CSDocsDeleted = 0;
+                                item.CSDuplicateDocsSkipped = 0;
+                            }
+                            else
+                            {
+                                item.SyncBackDocsUpdated = 0;
+                                item.SyncBackDocsInserted = 0;
+                                item.SyncBackDocsDeleted = 0;
+                                item.SyncBackDuplicateDocsSkipped = 0;
+                            }
+                        }
+
                         item.ResetChangeStream = false; //reset the start time after setting resume token
+
                     }
                    
 
@@ -410,7 +430,7 @@ namespace OnlineMongoMigrationProcessor
 
             long counter = 0;
 
-            ChnageStreamsDocuments chnageStreamsDocuments = new ChnageStreamsDocuments();
+            ChangeStreamDocuments changeStreamDocuments = new ChangeStreamDocuments();
 
             try
             {
@@ -434,7 +454,7 @@ namespace OnlineMongoMigrationProcessor
                             return; // Skip processing if the event has already been processed
                         }
 
-                        if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(),item, chnageStreamsDocuments, ref counter))
+                        if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(),item, changeStreamDocuments, ref counter))
                             return;
                     }
                 }
@@ -461,7 +481,7 @@ namespace OnlineMongoMigrationProcessor
                                 return; // Skip processing if the event has already been processed
                             }
 
-                            if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), item, chnageStreamsDocuments, ref counter))
+                            if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), item, changeStreamDocuments, ref counter))
                                 return;
 
                         }
@@ -484,10 +504,11 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     BulkProcessChangesAsync(
+                        item,
                         targetCollection,
-                        insertEvents: chnageStreamsDocuments.DocsToBeInserted,
-                        updateEvents: chnageStreamsDocuments.DocsToBeUpdated,
-                        deleteEvents: chnageStreamsDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
+                        insertEvents: changeStreamDocuments.DocsToBeInserted,
+                        updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                        deleteEvents: changeStreamDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
 
                     item.CSUpdatesInLastBatch = counter;
                     item.CSNormalizedUpdatesInLastBatch = (long)(counter / (item.CSLastBatchDurationSeconds > 0 ? item.CSLastBatchDurationSeconds : 1));
@@ -503,7 +524,7 @@ namespace OnlineMongoMigrationProcessor
         
 
         // This method retrieves the event associated with the ResumeToken
-        private bool AutoReplayFirstChangeInResumeToken(BsonValue? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection)
+        private bool AutoReplayFirstChangeInResumeToken(BsonValue? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, MigrationUnit item)
         {
 
 
@@ -531,6 +552,14 @@ namespace OnlineMongoMigrationProcessor
                             return true; // Skip if no document found
                         }
                         targetCollection.InsertOne(result);
+                        if (!_syncBack)
+                        {
+                            item.CSDocsUpdated++;
+                        }
+                        else
+                        {
+                            item.SyncBackDocsInserted++;
+                        }
                         return true;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
@@ -541,6 +570,14 @@ namespace OnlineMongoMigrationProcessor
                             try
                             {
                                 targetCollection.DeleteOne(deleteTTLFilter);
+                                if (!_syncBack)
+                                {
+                                    item.CSDocsDeleted++;
+                                }
+                                else
+                                {
+                                    item.SyncBackDocsDeleted++;
+                                }
                             }
                             catch
                             { }
@@ -549,11 +586,27 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             targetCollection.ReplaceOne(filter, result, new ReplaceOptions { IsUpsert = true });
+                            if (!_syncBack)
+                            {
+                                item.CSDocsUpdated++;
+                            }
+                            else
+                            {
+                                item.SyncBackDocsUpdated++;
+                            }
                             return true;
                         }
                     case ChangeStreamOperationType.Delete:
                         var deleteFilter = Builders<BsonDocument>.Filter.Eq("_id", documentId);
                         targetCollection.DeleteOne(deleteFilter);
+                        if (!_syncBack)
+                        {
+                            item.CSDocsDeleted++;
+                        }
+                        else
+                        {
+                            item.SyncBackDocsDeleted++;
+                        }
                         return true;
                     default:
                         _log.WriteLine($"Unhandled operation type: {opType}");
@@ -578,7 +631,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, string collNameSpace ,MigrationUnit item, ChnageStreamsDocuments chnageStreamsDocuments, ref long counter)
+        private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, string collNameSpace ,MigrationUnit item, ChangeStreamDocuments changeStreamDocuments, ref long counter)
         {
 
             try
@@ -598,7 +651,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Output change details to the console
                 _log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} having TS (UTC): {timeStamp}.  Sequence in Batch # {counter}");
-                ProcessChange(change, targetCollection, collNameSpace, chnageStreamsDocuments, _job.IsSimulatedRun);
+                ProcessChange(change, targetCollection, collNameSpace, changeStreamDocuments, _job.IsSimulatedRun, item);
 
                 if (!_syncBack)
                     item.CursorUtcTimestamp = timeStamp;
@@ -631,7 +684,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection,string collNameSpace, ChnageStreamsDocuments chnageStreamsDocuments, bool isWriteSimulated)
+        private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection,string collNameSpace, ChangeStreamDocuments changeStreamDocuments, bool isWriteSimulated, MigrationUnit item)
         {
             if (isWriteSimulated)
                 return;
@@ -651,11 +704,20 @@ namespace OnlineMongoMigrationProcessor
                 switch (change.OperationType)
                 {
                     case ChangeStreamOperationType.Insert:
+                        if (_syncBack)
+                           item.SyncBackInsertEvents++;
+                        else
+                            item.CSDInsertEvents++;
+;
                         if (change.FullDocument != null &&  !change.FullDocument.IsBsonNull)
-                            chnageStreamsDocuments.DocsToBeInserted.Add(change);
+                            changeStreamDocuments.AddInsert(change);
                         break;
                     case ChangeStreamOperationType.Update:
                     case ChangeStreamOperationType.Replace:
+                        if (_syncBack)
+                            item.SyncBackUpdateEvents++;
+                        else
+                            item.CSUpdatedEvents++;
                         var filter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         if (change.FullDocument == null || change.FullDocument.IsBsonNull)
                         {
@@ -664,37 +726,49 @@ namespace OnlineMongoMigrationProcessor
                             try
                             {
                                 targetCollection.DeleteOne(deleteTTLFilter);
+                                if (!_syncBack)
+                                    item.CSDocsDeleted = item.CSDocsDeleted ++;
+                                else
+                                    item.SyncBackDocsDeleted++;
+
                             }
                             catch
                             { }
                         }
                         else
                         {
-                            chnageStreamsDocuments.DocsToBeUpdated.Add(change);
+                            changeStreamDocuments.AddUpdate(change);
                         }
                         break;
                     case ChangeStreamOperationType.Delete:
-                        chnageStreamsDocuments.DocsToBeDeleted.Add(change);
+                        if (_syncBack)
+                            item.SyncBackDeleteEvents++;
+                        else
+                            item.CSDeleteEvents++;
+                        changeStreamDocuments.AddDelete(change);
                         break;
                     default:
                         _log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {change.OperationType}");
                         break;
                 }
 
-                if (chnageStreamsDocuments.DocsToBeInserted.Count+ chnageStreamsDocuments.DocsToBeUpdated.Count+ chnageStreamsDocuments.DocsToBeDeleted.Count > _config.ChangeStreamMaxDocsInBatch)
+                if (changeStreamDocuments.DocsToBeInserted.Count+ changeStreamDocuments.DocsToBeUpdated.Count+ changeStreamDocuments.DocsToBeDeleted.Count > _config.ChangeStreamMaxDocsInBatch)
                 {
                     _log.AddVerboseMessage($"{_syncBackPrefix} Change Stream MaxBatchSize exceeded. Flushing changes for {collNameSpace}");
 
-                    // Process the changes in bulk if the batch size exceeds the limit
-                    BulkProcessChangesAsync(
-                        targetCollection,
-                        insertEvents: chnageStreamsDocuments.DocsToBeInserted,
-                        updateEvents: chnageStreamsDocuments.DocsToBeUpdated,
-                        deleteEvents: chnageStreamsDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
+
+
+                        // Process the changes in bulk if the batch size exceeds the limit
+                        BulkProcessChangesAsync(
+                            item,
+                            targetCollection,
+                            insertEvents: changeStreamDocuments.DocsToBeInserted,
+                            updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                            deleteEvents: changeStreamDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
                     // Clear the lists after processing
-                    chnageStreamsDocuments.DocsToBeInserted.Clear();
-                    chnageStreamsDocuments.DocsToBeUpdated.Clear();
-                    chnageStreamsDocuments.DocsToBeDeleted.Clear();
+                    changeStreamDocuments.DocsToBeInserted.Clear();
+                    changeStreamDocuments.DocsToBeUpdated.Clear();
+                    changeStreamDocuments.DocsToBeDeleted.Clear();
                 }
             }
             catch (Exception ex)
@@ -704,9 +778,10 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        
 
+        /*
         private async Task BulkProcessChangesAsync(
+            MigrationUnit item,
             IMongoCollection<BsonDocument> collection,
             List<ChangeStreamDocument<BsonDocument>> insertEvents,
             List<ChangeStreamDocument<BsonDocument>> updateEvents,
@@ -714,7 +789,9 @@ namespace OnlineMongoMigrationProcessor
             int batchSize = 50)
         {
 
-            if(_job.IsSimulatedRun)
+            int duplicateCount = 0;
+
+            if (_job.IsSimulatedRun)
             {
                 _log.WriteLine($"{_syncBackPrefix}Skipping bulk processing in simulated run.");
                 return;
@@ -722,6 +799,7 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
+
                 // Insert operations
                 foreach (var batch in insertEvents.Chunk(batchSize))
                 {
@@ -737,8 +815,14 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
-                        // Filter out only duplicate key errors
-                        var isAllDuplicateKeyErrors = ex.WriteErrors.All(err => err.Code == 11000);
+                        // Count duplicate key errors
+                        var duplicateKeyErrors = ex.WriteErrors
+                            .Where(err => err.Code == 11000)
+                            .ToList();
+
+                        duplicateCount = duplicateKeyErrors.Count;
+
+                        var isAllDuplicateKeyErrors = duplicateKeyErrors.Count == ex.WriteErrors.Count;
 
                         if (!isAllDuplicateKeyErrors)
                         {
@@ -787,8 +871,14 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (MongoBulkWriteException<BsonDocument> ex)
             {
-                // Filter out only duplicate key errors
-                var isAllDuplicateKeyErrors = ex.WriteErrors.All(err => err.Code == 11000);
+                // Count duplicate key errors
+                var duplicateKeyErrors = ex.WriteErrors
+                    .Where(err => err.Code == 11000)
+                    .ToList();
+
+                duplicateCount = duplicateKeyErrors.Count;
+
+                var isAllDuplicateKeyErrors = duplicateKeyErrors.Count == ex.WriteErrors.Count;
 
                 if (!isAllDuplicateKeyErrors)
                 {
@@ -798,9 +888,215 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing operation  {collection.CollectionNamespace}. Details : {ex.ToString()}", LogType.Error);
-                
+
             }
+            finally
+            {
+                if (!_syncBack)
+                {
+                    item.CSDocsUpdated = item.CSDocsUpdated + updateEvents.Count;
+                    item.CSDocsInserted = item.CSDocsInserted + insertEvents.Count;
+                    item.CSDocsDeleted = item.CSDocsDeleted + deleteEvents.Count;
+                    item.CSDuplicateDocsSkipped = item.CSDuplicateDocsSkipped + duplicateCount;
+                }
+                else
+                {
+                    item.SyncBackDocsUpdated = item.SyncBackDocsUpdated + updateEvents.Count;
+                    item.SyncBackDocsInserted = item.SyncBackDocsInserted + insertEvents.Count;
+                    item.SyncBackDocsDeleted = item.SyncBackDocsDeleted + deleteEvents.Count;
+                    item.SyncBackDuplicateDocsSkipped = item.SyncBackDuplicateDocsSkipped + duplicateCount;
+                }
+            }
+        }*/
+
+        private async Task BulkProcessChangesAsync(
+                MigrationUnit item,
+                IMongoCollection<BsonDocument> collection,
+                List<ChangeStreamDocument<BsonDocument>> insertEvents,
+                List<ChangeStreamDocument<BsonDocument>> updateEvents,
+                List<ChangeStreamDocument<BsonDocument>> deleteEvents,
+                int batchSize = 50)
+        {
+
+
+            if (_job.IsSimulatedRun)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Skipping bulk processing for {collection.CollectionNamespace.FullName} in simulated run.");
+                return;
+            }
+
+            try
+            {
+                // Insert operations
+                foreach (var batch in insertEvents.Chunk(batchSize))
+                {
+                    var insertModels = batch
+                        .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
+                        .Select(e =>
+                        {
+                            var doc = e.FullDocument;
+                            var id = doc["_id"];
+
+                            if (id.IsObjectId)
+                                doc["_id"] = id.AsObjectId;
+
+                            return new InsertOneModel<BsonDocument>(doc);
+                        })
+                        .ToList();
+
+                    long insertCount=0;
+                    try
+                    {
+                        if (insertModels.Any())
+                        {
+                            var result = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                            insertCount += result.InsertedCount;
+                        }
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        insertCount += ex.Result?.InsertedCount ?? 0;
+
+                        var duplicateKeyErrors = ex.WriteErrors
+                            .Where(err => err.Code == 11000)
+                            .ToList();
+               
+                        if (!_syncBack)
+                        {
+                            item.CSDuplicateDocsSkipped += item.CSDuplicateDocsSkipped + duplicateKeyErrors.Count;
+                        }
+                        else
+                        {
+                            item.CSDuplicateDocsSkipped += item.CSDuplicateDocsSkipped + duplicateKeyErrors.Count;
+                        }
+
+                        if (duplicateKeyErrors.Count != ex.WriteErrors.Count)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix} Insert BulkWriteException in {collection.CollectionNamespace.FullName}: {ex.Message}");                            
+                        }
+                    }
+                    finally
+                    {
+                        if (!_syncBack)
+                        {
+                            item.CSDocsInserted += item.CSDocsInserted + insertCount;
+                        }
+                        else
+                        {
+                            item.SyncBackDocsInserted += item.SyncBackDocsInserted + insertCount;
+                        }
+                    }
+                }
+
+                // Update operations
+                foreach (var batch in updateEvents.Chunk(batchSize))
+                {
+                    var updateModels = batch
+                        .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
+                        .Select(e =>
+                        {
+                            var doc = e.FullDocument;
+                            var id = doc["_id"];
+
+                            if (id.IsObjectId)
+                                id = id.AsObjectId;
+
+                            var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+
+                            var updateDoc = new BsonDocument(doc);
+                            updateDoc.Remove("_id");
+
+                            var updateDef = new BsonDocument("$set", updateDoc);
+
+                            return new UpdateOneModel<BsonDocument>(filter, updateDef) { IsUpsert = true };
+                        })
+                        .ToList();
+
+                    try
+                    {
+                        if (updateModels.Any())
+                        {
+                            var result = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });                            
+                            if (!_syncBack)
+                            {
+                                item.CSDocsUpdated += item.CSDocsUpdated + result.ModifiedCount;
+                            }
+                            else
+                            {
+                                item.SyncBackDocsUpdated += item.SyncBackDocsUpdated + result.ModifiedCount;
+                            }
+                        }
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix} Update BulkWriteException in {collection.CollectionNamespace.FullName}: {ex.Message}");
+                    }
+                }
+
+                // Delete operations
+                foreach (var batch in deleteEvents.Chunk(batchSize))
+                {
+                    var deleteModels = batch
+                        .Select(e =>
+                        {
+                            try
+                            {
+                                if (!e.DocumentKey.Contains("_id"))
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix} Delete event missing _id in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
+                                    return null;
+                                }
+
+                                var id = e.DocumentKey.GetValue("_id", null);
+                                if (id == null)
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix} _id is null in DocumentKey in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
+                                    return null;
+                                }
+
+                                if (id.IsObjectId)
+                                    id = id.AsObjectId;
+
+ 
+                                return new DeleteOneModel<BsonDocument>(Builders<BsonDocument>.Filter.Eq("_id", id));
+                            }
+                            catch (Exception dex)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix} Error building delete model in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}, Error: {dex.Message}");
+                                return null;
+                            }
+                        })
+                        .Where(model => model != null)
+                        .ToList();
+
+                    if (deleteModels.Any())
+                    {
+                        try
+                        {
+                            var result = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });                            
+                            if (!_syncBack)
+                            {
+                                item.CSDocsDeleted += item.CSDocsDeleted + result.DeletedCount;
+                            }
+                            else
+                            {
+                                item.SyncBackDocsDeleted += item.SyncBackDocsDeleted + result.DeletedCount;
+                            }
+                        }
+                        catch (MongoBulkWriteException<BsonDocument> ex)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix} Bulk delete error in {collection.CollectionNamespace.FullName}: {ex.Message}");
+                        }
+                    }
+                }
+            }            
+            catch (Exception ex)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Error processing operations for {collection.CollectionNamespace.FullName}. Details: {ex}", LogType.Error);
+            }
+
         }
+
     }
 }
 
