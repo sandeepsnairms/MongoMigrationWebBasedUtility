@@ -18,7 +18,7 @@
     </h3>
     <div class="d-flex align-items-center mb-3">
         <button class="btn btn-primary" title="New Job" @onclick="StartMigrationAsync">New Job</button>
-        <button class="btn btn-light" title="Edit Migration Settings" @onclick="Open_config" style="border: none; background: transparent;">
+        <button class="btn btn-light" title="Edit Migration Settings" @onclick="OpenConfig" style="border: none; background: transparent;">
             <i class="bi bi-gear"></i>
         </button>
     </div>
@@ -102,7 +102,7 @@
 
 @if (_editSettingsOpen)
 {
-    <MigrationSettings _configuration="@Get_config()" On_configurationSaved="Handle_configurationSaved" />
+    <MigrationSettings _configuration="@GetConfig()" On_configurationSaved="Handle_configurationSaved" />
 }
 
 @code {
@@ -177,7 +177,7 @@
             lagString = $"from {(int)gap.TotalMinutes} minutes ago";
         }
 
-        _message = $"Warning: This will stop ongoing jobList and overwrite current migration jobList with a backup {lagString}. Do you wish to proceed?";
+        _message = $"Warning: This will stop ongoing jobs and overwrite current migration jobs with a backup {lagString}. Do you wish to proceed?";
         _recoverDialogOpen = true;
     }
 
@@ -298,26 +298,26 @@
         }
     }
 
-    private OnlineMongoMigrationProcessor.MigrationSettings Get_config()
+    private OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
     {
-        return JobManager.Get_config();
+        return JobManager.GetConfig();
     }
 
 
 
 
-    private void Open_config()
+    private void OpenConfig()
     {
         _editSettingsOpen = true;
     }
 
-    private void Handle_configurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updated_config)
+    private void Handle_configurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
     {
         _editSettingsOpen = false;
 
-        if (updated_config != null)
+        if (updatedConfig != null)
         {            
-            if (!JobManager.Update_config(updated_config, out string errorMessage))
+            if (!JobManager.UpdateConfig(updatedConfig, out string errorMessage))
             {
                 _message = errorMessage;
                 _messageDialogOpen = true;

@@ -22,7 +22,7 @@ namespace MongoMigrationWebApp.Service
 
         #region _configuration Management
 
-        public bool Update_config(OnlineMongoMigrationProcessor.MigrationSettings updated_config,out string errorMessage)
+        public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updated_config,out string errorMessage)
         {           
             if (updated_config == null)
             {
@@ -33,7 +33,7 @@ namespace MongoMigrationWebApp.Service
             return updated_config.Save(out errorMessage);
         }
 
-        public OnlineMongoMigrationProcessor.MigrationSettings Get_config()
+        public OnlineMongoMigrationProcessor.MigrationSettings GetConfig()
         {
             MigrationSettings config = new MigrationSettings();
             config.Load();
