@@ -19,8 +19,9 @@ namespace OnlineMongoMigrationProcessor
         public int ActiveRestoreProcessId { get; set; } = 0;
         public int ActiveDumpProcessId { get; set; } = 0;
         private string _filePath = string.Empty;
-         private string _backupFolderPath = string.Empty;
+        private string _backupFolderPath = string.Empty;
         private static readonly object _fileLock = new object();
+        private static readonly object _loadLock = new object();
         private Log log;
         private string processedMin = string.Empty;
 
@@ -40,47 +41,57 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        public bool Load(Log log, bool loadBackup=false)
+        public void SetLog(Log log)
         {
-            string path;
-
-            path = loadBackup ? GetBestRestoreSlotFilePath() : _filePath;
-
-            if (path == null ||!File.Exists(path))
-            {
-                log.WriteLine("No suitable backup file found for restoration.", LogType.Error);
-                return false;
-            }
-
             this.log = log;
-            try
-            {
-                if (File.Exists(path))
-                {
-                    string json = File.ReadAllText(path);
-                    var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                    if (loadedObject != null)
-                    {
-                        MigrationJobs = loadedObject.MigrationJobs;
+        }
 
-                        if(loadBackup)
+        public bool LoadJobs(out string errorMessage,bool loadBackup= false)
+        {
+            errorMessage = string.Empty;
+            lock (_loadLock)
+            {
+                string path;
+
+                path = loadBackup ? GetBestRestoreSlotFilePath() : _filePath;
+
+                if (path == null || !File.Exists(path))
+                {
+                    errorMessage = "No suitable backup file found for restoration.";
+                    return false;
+                }
+
+                //this.log = log;
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        string json = File.ReadAllText(path);
+                        var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                        if (loadedObject != null)
                         {
-                            //delete all files in SlotNames
-                            foreach( string name in SlotNames)
+                            MigrationJobs = loadedObject.MigrationJobs;
+
+                            if (loadBackup)
                             {
-                                if(System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
-                                    System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                //delete all files in SlotNames
+                                foreach (string name in SlotNames)
+                                {
+                                    if (System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
+                                        System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                }
+                                Save(out errorMessage,true);
                             }
                         }
                     }
+                    errorMessage= string.Empty;
+                    return true;
                 }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                log.WriteLine($"Error loading data: {ex.ToString()}");
-                return false;
+                catch (Exception ex)
+                {
+                    errorMessage = $"Error loading data: {ex.ToString()}";
+                    return false;
+                }
             }
         }
 
@@ -123,8 +134,6 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-
-
         public DateTime GetBackupDate()
         {
             var path = GetBestRestoreSlotFilePath();
@@ -132,9 +141,13 @@ namespace OnlineMongoMigrationProcessor
             var backupDataUpdatedOn= File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
             return backupDataUpdatedOn;
         }
-          
 
         public bool Save()
+        {
+           return Save(out string errorMessage);
+        }
+
+        public bool Save(out string errorMessage, bool forceBackup=false)
         {
             try
             {
@@ -153,11 +166,11 @@ namespace OnlineMongoMigrationProcessor
 
                     bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
 
-                    if (File.Exists(_filePath) && hasJobs && processedMin != now.ToString("MM/dd/yyyy HH:mm"))
+                    if (File.Exists(_filePath) && hasJobs && (processedMin != now.ToString("MM/dd/yyyy HH:mm")|| forceBackup))
                     {
 
                         // Rotate every 15 minutes
-                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0)
+                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0 || forceBackup)
                         {
 
                             //set processed minute               
@@ -170,13 +183,14 @@ namespace OnlineMongoMigrationProcessor
                             File.Copy(_filePath, latestSlot, overwrite: true);
                         }
                     }
-                    
+                    errorMessage = string.Empty;
                     return true;
                 }
             }
             catch (Exception ex)
             {
-                log.WriteLine($"Error saving data: {ex}", LogType.Error);
+                errorMessage = $"Error saving data: {ex}";
+                log?.WriteLine(errorMessage, LogType.Error);
                 return false;
             }
         }
@@ -203,7 +217,7 @@ namespace OnlineMongoMigrationProcessor
         public bool IsOnline { get; set; }
         public bool IsCancelled { get; set; }
         public bool IsStarted { get; set; }
-        public bool CurrentlyActive { get; set; }
+        //public bool CurrentlyActive { get; set; }
         public bool UseMongoDump { get; set; }
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
@@ -228,6 +242,9 @@ namespace OnlineMongoMigrationProcessor
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? ResumeToken { get; set; }
+        public string? OriginalResumeToken { get; set; }
+
+        public bool InitialDocumenReplayed { get; set; } = false;
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         [JsonProperty("ResumeDocumentId")]
@@ -296,25 +313,32 @@ namespace OnlineMongoMigrationProcessor
         public List<Boundary> Boundaries { get; set; }
     }
 
-    public class MigrationSettings
+    public class MigrationSettings : ICloneable
     {
+      
         public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
         public bool ReadBinary { get; set; }
         public long ChunkSizeInMb { get; set; }
         public int ChangeStreamMaxDocsInBatch { get; set; }
 		public int ChangeStreamBatchDuration { get; set; }
-		public int ChangeStreamMaxCollsInBatch { get; set; }
+        public int ChangeStreamBatchDurationMin { get; set; }
+        public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         private string _filePath = string.Empty;
-        private Log log;
 
-        public MigrationSettings(Log log)
+        public MigrationSettings()
         {
             _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
-            this.log = log;
         }
 
+        public object Clone()
+        {
+            // Deep clone using JSON serialization
+            var json = JsonConvert.SerializeObject(this);
+            return JsonConvert.DeserializeObject<MigrationSettings>(json);
+        }
+   
         public void Load()
         {
             bool initialized = false;
@@ -328,13 +352,16 @@ namespace OnlineMongoMigrationProcessor
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
 					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
-					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 1 : loadedObject.ChangeStreamBatchDuration;
-					ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
+					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 120 : loadedObject.ChangeStreamBatchDuration;
+                    ChangeStreamBatchDurationMin = loadedObject.ChangeStreamBatchDurationMin == 0 ? 30 : loadedObject.ChangeStreamBatchDurationMin;
+                    ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
 					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     initialized = true;
                     if (ChangeStreamMaxDocsInBatch > 10000)
                         ChangeStreamMaxDocsInBatch = 10000;
+                    if (ChangeStreamBatchDuration < 30)
+                        ChangeStreamBatchDuration = 120;
                 }
             }
             if (!initialized)
@@ -343,27 +370,31 @@ namespace OnlineMongoMigrationProcessor
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
                 ChunkSizeInMb = 5120;
 				MongoCopyPageSize = 500;
-				ChangeStreamMaxDocsInBatch = 10000;                
-                ChangeStreamBatchDuration = 1;
+				ChangeStreamMaxDocsInBatch = 10000;
+                ChangeStreamBatchDuration = 120;
+                ChangeStreamBatchDurationMin = 30;
                 ChangeStreamMaxCollsInBatch = 5;
                 CACertContentsForSourceServer = string.Empty;
             }
         }
 
-        public bool Save()
+        public bool Save(out string errorMessage)
         {
             try
             {
                 string json = JsonConvert.SerializeObject(this);
                 File.WriteAllText(_filePath, json);
+                errorMessage=string.Empty;
                 return true;
             }
             catch (Exception ex)
             {
-                log.WriteLine($"Error saving data: {ex.ToString()}", LogType.Error);
+                errorMessage= $"Error saving data: {ex.ToString()}";    
                 return false;
             }
         }
+
+        
     }
 
     public enum LogType

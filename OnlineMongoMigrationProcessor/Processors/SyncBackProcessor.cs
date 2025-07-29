@@ -13,7 +13,7 @@ namespace OnlineMongoMigrationProcessor.Processors
     {
         public bool ProcessRunning { get; set; }
         private MongoChangeStreamProcessor? _syncBackToSource;
-        private JobList? _jobs;
+        private JobList? _jobList;
         private MigrationJob? _job;
         private bool _executionCancelled = false;
 
@@ -21,17 +21,22 @@ namespace OnlineMongoMigrationProcessor.Processors
         private CancellationTokenSource _cts;
         private Log _log;
 
-        public SyncBackProcessor(Log log,   JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
+        public SyncBackProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
         {
             _log = log;
-			_jobs = jobs ?? throw new ArgumentNullException(nameof(jobs), "JobList cannot be null.");
+			_jobList = jobList ?? throw new ArgumentNullException(nameof(jobList), "JobList cannot be null.");
             _job = job ?? throw new ArgumentNullException(nameof(job), "MigrationJob cannot be null.");
             _config = config ?? throw new ArgumentNullException(nameof(config), "MigrationSettings cannot be null.");
         }
 
-        public void StopProcessing()
+        public void StopProcessing(bool updateStatus = true)
         {
-            ProcessRunning = false;
+            if (_job != null)
+                _job.IsStarted = false;
+            _jobList?.Save();
+
+            if(updateStatus) 
+                ProcessRunning = false;
 
             _executionCancelled = true;
             _cts?.Cancel();
@@ -43,6 +48,11 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            ProcessRunning = true;
+
+            if (_job != null)
+                _job.IsStarted = true;
+
             int maxRetries = 10;
             int attempts = 0;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
@@ -51,13 +61,13 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
             _syncBackToSource = null;
-            _syncBackToSource = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobs, _job,_config,true);
+            _syncBackToSource = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobList, _job,_config,true);
 
             _cts=new CancellationTokenSource();
 
             bool continueProcessing = true;
 
-            ProcessRunning=true;
+            
             while (attempts < maxRetries && !_executionCancelled && continueProcessing)
             {
                 attempts++;
@@ -107,12 +117,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 _log.WriteLine("Maximum retry attempts reached. Aborting operation.", LogType.Error);
                 
-
-                _job.CurrentlyActive = false;
-                _jobs?.Save();
                 continueProcessing = false;
-
-                ProcessRunning=false;
+                StopProcessing();
 
                 _syncBackToSource.ExecutionCancelled = true;
                 _syncBackToSource = null;

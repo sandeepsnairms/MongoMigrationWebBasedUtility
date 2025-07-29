@@ -113,6 +113,8 @@
     [Parameter]
     public MigrationJob Job { get; set; }
 
+
+
     [Parameter]
     public EventCallback<MigrationJob> OnSubmit { get; set; }
 
@@ -124,7 +126,6 @@
     private bool useMongoDump = true; // Variable to track the selected value
     private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
     private bool isSimulatedRun = false; // Variable to track the dummy run option
-    private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool isOnline = true; // Default to online migration
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
@@ -137,7 +138,7 @@
     private string SelectedMode = "Offline"; // default or loaded value
     private string sourceConnectionString { get; set; } = string.Empty;
     private string targetConnectionString { get; set; } = string.Empty;
-   
+    private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
 
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
@@ -149,6 +150,8 @@
         selectedOption = e.Value.ToString();
         useMongoDump = selectedOption == "Use MongoDump and MongoRestore"; // Set useMongoDump based on selection
     }
+
+
 
 
     protected override void OnInitialized()

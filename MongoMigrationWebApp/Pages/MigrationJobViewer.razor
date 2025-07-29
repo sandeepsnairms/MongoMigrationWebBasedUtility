@@ -15,7 +15,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if (MigrationJob != null && !MigrationJob.IsCompleted && !MigrationJob.CurrentlyActive && (MigrationJob.IsStarted || (JobManager.MigrationWorker != null && !JobManager.MigrationWorker.IsProcessRunning())) || _logBackupFile != string.Empty)
+        @if(IsResumeEnabled())
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -25,13 +25,13 @@
                     <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
                     @if (!string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
                     {
-                        <li><a class="dropdown-item" @onclick="ResumeJob">With Existing Connection Strings</a></li>
+                        <li><a class="dropdown-item" @onclick="ResumeJobWithExistingConnectionString">With Existing Connection Strings</a></li>
                     }
                 </ul>
             </div>
         }
 
-        @if (MigrationJob != null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && JobManager.MigrationWorker != null && JobManager.MigrationWorker.IsProcessRunning())
+        @if (IsPauseEnabled())
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
 
@@ -160,15 +160,15 @@
     }
 </div>
 
-@if (LogBucket != null && JobManager.Log.GetVerboseMessages() != null && JobManager.Log.GetVerboseMessages().Count > 0 && _logBackupFile == string.Empty)
+@if (LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !_showLogBackupFile)
 {
     <h5 class="pt-4">
         Monitor
     </h5>
     <div>
         <table class="table message-output">
-            <tbody>           
-                @foreach (var logObject in JobManager.Log.GetVerboseMessages())
+            <tbody>
+                @foreach (var logObject in VerboseMessages)
                 {
                     <tr class="@GetRowClass(logObject.Type.ToString(), logObject.Message)">
                         <td>
@@ -188,7 +188,7 @@
     </div>
 }
 
-@if (LogBucket != null && LogBucket != null && _logBackupFile == string.Empty)
+@if (LogBucket != null && LogBucket.Logs != null && !_showLogBackupFile)
 {
     <h5 class=" pt-4">
         <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
@@ -234,7 +234,7 @@
 
 
 }
-else if (@_logBackupFile !=string.Empty )
+else if (@_showLogBackupFile)
 {
     <div class="alert alert-danger">
         <p>
@@ -262,8 +262,8 @@ else if (@_logBackupFile !=string.Empty )
     [Parameter]
     public MigrationJob? MigrationJob { get; set; }
 
-    [Parameter]
-    public LogBucket? LogBucket { get; set; }
+    private LogBucket? LogBucket { get; set; }
+    private List<LogObject> VerboseMessages { get; set; }
 
     private string _errorMessage = string.Empty;
     private bool _migrationDetailsPopUpOpen;
@@ -273,6 +273,7 @@ else if (@_logBackupFile !=string.Empty )
     private YesNoDialog.Category _yesNoDiaLogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
     private bool _resetChangeStreamDialogOpen;
+    private bool _showLogBackupFile = false;
     private string _logBackupFile = string.Empty;
 
     private string GetRowClass(string type, string message)
@@ -295,14 +296,31 @@ else if (@_logBackupFile !=string.Empty )
 
     private void GoBack()
     {
+        _refreshTimer?.Dispose();
         NavigationManager.NavigateTo("/"); // Navigate back to the previous page
     }
 
     private void StartAutoRefresh()
     {
-        _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 10 seconds
+        _showLogBackupFile = false;
+        _logBackupFile = string.Empty;  
+        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+        if (MigrationJob != null && MigrationJob.IsStarted)
+        {
+            _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 5 seconds
+            UpdateTimerStatus(JobId); // check to set the timer status based on whether the job is live or not
+        }
+
     }
 
+    private List<MigrationJob> GetMigrations()
+    {
+        return JobManager.GetMigrations(out string errorMessage);
+        if (!string.IsNullOrEmpty(errorMessage))
+        {
+            _errorMessage = errorMessage;
+        }
+    }
 
     private async Task DownloadLogBackupFile()
     {
@@ -334,21 +352,67 @@ else if (@_logBackupFile !=string.Empty )
         }
     }
 
+    // private string GetLogBackupFileName()
+    // {
+    //     //MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+    //     JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
+    //     return logBackupFile;
+    // }
+
     private void Refresh(object? state)
     {
-        MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
-        LogBucket = JobManager.Log.ReadLogFile(JobId, out string logBackupFile);
-
-        if (logBackupFile != JobId)
+        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+        if (MigrationJob != null && MigrationJob.IsStarted && !_showLogBackupFile)
         {
-            _logBackupFile = logBackupFile;
+
+            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                _logBackupFile = logBackup;
+
+            VerboseMessages = JobManager.GetVerboseMessages(JobId);
+            //Console.WriteLine($"Refresh called for {JobId}");                        
+
+            if (! string.IsNullOrEmpty(_logBackupFile))
+            {
+                _refreshTimer?.Dispose(); 
+                _refreshTimer = null;
+                _showLogBackupFile = true;
+            }
+            else
+                _showLogBackupFile = false;
+
+            InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
         }
         else
+            _refreshTimer?.Dispose();
+    }
+
+    private async Task UpdateTimerStatus(string id)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(30)); // Wait for 30 seconds before processing
+
+        Console.WriteLine($"UpdateTimerStatus Invoked");
+
+        if (id!= JobId)
         {
-            _logBackupFile = string.Empty;
+            return; // Exit if the JobId does not match
         }
 
-        InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
+        MigrationJob = GetMigrations().Find(m => m.Id == id);
+        if (MigrationJob != null && MigrationJob.IsStarted)
+        {
+            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                _logBackupFile = logBackup;
+
+            if (!isLive)               
+            {
+                _refreshTimer?.Dispose(); // Stop the timer if not live
+                _refreshTimer = null;
+                //_showLogBackupFile = false;
+            }
+        }
+
     }
 
     private Task<bool> CheckIfNameExistsAsync(string name)
@@ -401,31 +465,34 @@ else if (@_logBackupFile !=string.Empty )
 
     protected override async Task OnParametersSetAsync()
     {
-        MigrationJob = JobManager.GetMigrations().Find(m => m.Id == JobId);
+        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
 
         if (MigrationJob == null) // Fixed the condition to check for null
         {
             return;
         }
 
-        LogBucket = JobManager.GetLogBucket(JobId, out string logBackupFile);
-        if (logBackupFile != JobId)
+
+        LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+        if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+            _logBackupFile = logBackup;
+
+        if (!string.IsNullOrEmpty(_logBackupFile))
         {
-            _logBackupFile = logBackupFile;
+            _showLogBackupFile = true;
         }
         else
         {
-            _logBackupFile = string.Empty;
-        }
-
-        if (!MigrationJob.IsStarted || (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && !IsJobRunning() && _logBackupFile==string.Empty))
-        {
-            await ResumeJob();
-        }
-        if (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && MigrationJob.CurrentlyActive && IsJobRunning())
-        {
-            StartAutoRefresh();
-        }
+            _showLogBackupFile = false;
+            if (IsResumeEnabled())
+            {
+                await ResumeJob();
+            }
+            if (!MigrationJob.IsCancelled && !MigrationJob.IsCompleted && IsJobRunning())// && MigrationJob.CurrentlyActive
+            {
+                StartAutoRefresh();
+            }
+        }        
     }
 
     private async Task OnMigrationDetailsPopUpSubmit(MigrationJob job)
@@ -437,42 +504,47 @@ else if (@_logBackupFile !=string.Empty )
             MigrationJob.SourceConnectionString = job.SourceConnectionString;
             MigrationJob.TargetConnectionString = job.TargetConnectionString;
 
-            MigrationJob.CurrentlyActive = true;
+            // MigrationJob.CurrentlyActive = true;
             MigrationJob.IsCancelled = false;
 
             if (!MigrationJob.StartedOn.HasValue)
                 MigrationJob.StartedOn = DateTime.UtcNow;
 
-            MigrationJob.IsStarted = true;
+            MigrationJob.IsStarted = true;            
 
-            StartAutoRefresh();
-
-            JobManager.Save();
+            JobManager.SaveJobs(out string errorMessage);
+            if(!string.IsNullOrEmpty(errorMessage))
+            {
+                _errorMessage = errorMessage;                
+                return;
+            }
 
             // Run the long task on a separate thread
             await Task.Run(() =>
             {
-                JobManager.DisposeLogs();
+                // JobManager.DisposeLogs();
 
                 if (MigrationJob.ProcessingSyncBack && !MigrationJob.IsSimulatedRun)
                 {
-                    JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
+                    JobManager.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
                 }
                 else
                 {
-                    JobManager.MigrationWorker.StartMigrationAsync(MigrationJob, MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob.NameSpaces, MigrationJob.UseMongoDump, MigrationJob.IsOnline);
+                    JobManager.StartMigrationAsync(MigrationJob, MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob.NameSpaces, MigrationJob.UseMongoDump, MigrationJob.IsOnline);
                 }
             });
+
+            StartAutoRefresh();
         }
-        else
-        {
-            MigrationJob.CurrentlyActive = false;
-        }
+        // else
+        // {
+        //     MigrationJob.CurrentlyActive = false;
+        // }
     }
     private void ResetChangeStream()
     {
         _errorMessage = string.Empty;
-        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
+        if (IsResumeEnabled() && !MigrationJob.ProcessingSyncBack)
         {
             _resetChangeStreamDialogOpen = true;
         }
@@ -487,7 +559,7 @@ else if (@_logBackupFile !=string.Empty )
     private void ManageCollections()
     {
         _errorMessage = string.Empty;
-        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() && !MigrationJob.ProcessingSyncBack)
+        if (IsResumeEnabled() && !MigrationJob.ProcessingSyncBack)
         {
             _manageCollectionDialogOpen = true;
         }
@@ -501,20 +573,35 @@ else if (@_logBackupFile !=string.Empty )
     }
     private async Task ResumeJobWithNewConnectionString()
     {
-        MigrationJob.SourceConnectionString = string.Empty;
-        MigrationJob.TargetConnectionString = string.Empty;
-        await ResumeJob();
+        await DecideAndResumeJob(true);
+    }
+
+    private async Task ResumeJobWithExistingConnectionString()
+    {
+        if (IsResumeEnabled() && NoOtherActiveJobs())
+            await OnMigrationDetailsPopUpSubmit(MigrationJob);
+        else
+            _migrationDetailsPopUpOpen = true;
     }
 
     private async Task ResumeJob()
     {
+        await DecideAndResumeJob(false);
+    }
+
+    private async Task DecideAndResumeJob(bool showDialog=false)
+    {
         _errorMessage = string.Empty;
-        if (!JobManager.MigrationWorker.IsProcessRunning() && NoOtherActiveJobs() )
+        if (IsResumeEnabled() && NoOtherActiveJobs())
         {
-            if (string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
+            if(showDialog)
                 _migrationDetailsPopUpOpen = true;
             else
-                await OnMigrationDetailsPopUpSubmit(MigrationJob);
+            {
+                if (CanAutoStart())
+                    await OnMigrationDetailsPopUpSubmit(MigrationJob);                
+                
+            }
         }
         else
         {
@@ -524,7 +611,7 @@ else if (@_logBackupFile !=string.Empty )
 
     private bool IsJobRunning()
     {
-        return JobManager.MigrationWorker.IsProcessRunning();
+        return JobManager.IsProcessRunning(JobId);
     }
 
     private void InitSyncBackJob()
@@ -562,7 +649,7 @@ else if (@_logBackupFile !=string.Empty )
                 else
                     MigrationJob.MigrationUnits[i].ResetChangeStream = false; // Ensure other collections are not reset
             }
-            JobManager.Save();
+            if (!SaveJobs()) return;
         }
     }
 
@@ -576,9 +663,22 @@ else if (@_logBackupFile !=string.Empty )
         {
             MigrationJob.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
             MigrationJob.MigrationUnits = migrationUnits;
-            JobManager.Save();
+            JobManager.SaveJobs(out string errorMessage);
+            if (!SaveJobs()) return;
         }
     }
+
+    private bool SaveJobs()
+    {
+        JobManager.SaveJobs(out string errorMessage);
+        if (!string.IsNullOrEmpty(errorMessage))
+        {
+            _errorMessage = errorMessage;
+            return false;
+        }
+        return true;
+    }
+
 
     private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
     {
@@ -587,18 +687,18 @@ else if (@_logBackupFile !=string.Empty )
         {
             if (result.DiaLogType == YesNoDialog.Category.CutoverNot || result.DiaLogType == YesNoDialog.Category.CompleteNot)
             {
-                JobManager.MigrationWorker.StopMigration();
+                JobManager.StopMigration();
                 MigrationJob.IsCancelled = true;
                 MigrationJob.IsCompleted = true;
-                MigrationJob.CurrentlyActive = false;
-                JobManager.Save();
+                // MigrationJob.CurrentlyActive = false;
+                if(!SaveJobs()) return;
                 _refreshTimer = null;
             }
             else if (result.DiaLogType == YesNoDialog.Category.SyncBackNot)
             {
 
-                JobManager.MigrationWorker.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
-                JobManager.Save();
+                JobManager.SyncBackToSource(MigrationJob.SourceConnectionString, MigrationJob.TargetConnectionString, MigrationJob);
+                if (!SaveJobs()) return;
             }
         }
     }
@@ -606,22 +706,41 @@ else if (@_logBackupFile !=string.Empty )
     private void PauseJob()
     {
         _errorMessage = string.Empty;
-
-        JobManager.MigrationWorker.StopMigration();
-        MigrationJob.IsCancelled = true;
-        MigrationJob.CurrentlyActive = false;
-        JobManager.Save();
+        JobManager.StopMigration();
+        // MigrationJob.CurrentlyActive = false;
+        if (!SaveJobs()) return;
         _refreshTimer = null;
     }
 
     private bool NoOtherActiveJobs()
+    {        
+
+        string activeJob = JobManager?.GetRunningJobId() ?? string.Empty;
+        if (activeJob != string.Empty && activeJob != JobId)
+            return false;
+        else
+            return true;
+    }
+
+    private  bool  IsPauseEnabled()
     {
-        foreach (var job in JobManager.GetMigrations())
+        return MigrationJob != null && !MigrationJob.IsCancelled && !MigrationJob.IsCompleted && IsJobRunning() && NoOtherActiveJobs();
+    }
+
+
+    private bool IsResumeEnabled()
+    {
+        return MigrationJob != null && !MigrationJob.IsCompleted && !IsJobRunning() ;
+    }
+
+    private bool CanAutoStart()
+    {
+
+        if (IsResumeEnabled() && NoOtherActiveJobs() && MigrationJob.IsStarted && (!string.IsNullOrEmpty(MigrationJob.SourceConnectionString) || !string.IsNullOrEmpty(MigrationJob.TargetConnectionString)))
         {
-            if (job.CurrentlyActive && job.Id != JobId)
-                return false;
-        }
-        return true;
+            return true;
+        }        
+        return false;
     }
 }
 
