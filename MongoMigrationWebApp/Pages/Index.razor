@@ -102,7 +102,7 @@
 
 @if (_editSettingsOpen)
 {
-    <MigrationSettings _configuration="@GetConfig()" On_configurationSaved="Handle_configurationSaved" />
+    <MigrationSettings _configuration="@GetConfig()" On_configurationSaved="HandleConfigurationSaved" />
 }
 
 @code {
@@ -311,7 +311,7 @@
         _editSettingsOpen = true;
     }
 
-    private void Handle_configurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
+    private void HandleConfigurationSaved(OnlineMongoMigrationProcessor.MigrationSettings updatedConfig)
     {
         _editSettingsOpen = false;
 
