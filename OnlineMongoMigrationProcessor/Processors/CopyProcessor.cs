@@ -31,18 +31,25 @@ namespace OnlineMongoMigrationProcessor
 		public bool ProcessRunning { get; set; }
 
 
-        public CopyProcessor(Log log,JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
+        public CopyProcessor(Log log,JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
         {
             _log = log;
-            _jobList = jobs;
+            _jobList = jobList;
             _job = job;
             _sourceClient = sourceClient;
             _config = config;
         }
 
-        public void StopProcessing()
+        public void StopProcessing(bool updateStatus = true)
         {
-            ProcessRunning = false;
+            if (_job != null)
+                _job.IsStarted = false;
+
+            _jobList?.Save();
+
+            if(updateStatus)
+                ProcessRunning = false; 
+
             _executionCancelled = true;
 
             _cts?.Cancel();
@@ -54,8 +61,10 @@ namespace OnlineMongoMigrationProcessor
 
         public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            ProcessRunning = true;
             int maxRetries = 10;
             string jobId = _job.Id;
+            //_job.CurrentlyActive = true;
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
@@ -105,7 +114,7 @@ namespace OnlineMongoMigrationProcessor
 
                 for (int i = 0; i < item.MigrationChunks.Count; i++)
                 {
-                    if (_executionCancelled || !_job.CurrentlyActive) return;
+                    if (_executionCancelled) return;// || !_job.CurrentlyActive) return;
 
                     double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                     double contributionFactor = 1.0 / item.MigrationChunks.Count;
@@ -118,7 +127,7 @@ namespace OnlineMongoMigrationProcessor
                         backoff = TimeSpan.FromSeconds(2);
                         bool continueProcessing = true;
 
-                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing && _job.CurrentlyActive)
+                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing )//&& _job.CurrentlyActive)
                         {
                             dumpAttempts++;
                             FilterDefinition<BsonDocument> filter;
@@ -188,12 +197,7 @@ namespace OnlineMongoMigrationProcessor
                                 if (dumpAttempts >= maxRetries)
                                 {
                                     _log.WriteLine("Maximum Document copy attempts reached. Aborting operation.", LogType.Error);
-                                    
-
-                                    _job.CurrentlyActive = false;
-                                    _jobList?.Save();
-
-                                    ProcessRunning = false;
+                                    StopProcessing();
                                 }
 
                                 // Wait for the backoff duration before retrying
@@ -207,18 +211,12 @@ namespace OnlineMongoMigrationProcessor
                             catch (Exception ex)
                             {
                                 _log.WriteLine(ex.ToString(), LogType.Error);
-                                
-
-                                _job.CurrentlyActive = false;
-                                _jobList?.Save();
-                                ProcessRunning = false;
+                                StopProcessing();
                             }
                         }
                         if (dumpAttempts == maxRetries)
                         {
-                            _job.CurrentlyActive = false;
-                            _jobList?.Save();
-                            ProcessRunning = false;
+                            StopProcessing();                          
                         }
                     }
                     else
@@ -258,10 +256,8 @@ namespace OnlineMongoMigrationProcessor
                             _log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
-                            migrationJob.CurrentlyActive = false;
-                            _job.CurrentlyActive = false;
-                            ProcessRunning = false;
-                            _jobList?.Save();
+                            //migrationJob.CurrentlyActive = false;
+                            StopProcessing();
                         }
                         else if (_job.IsOnline &&_job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)
                         {

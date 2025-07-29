@@ -47,7 +47,7 @@ public class FileController : ControllerBase
         }
     }
 
-    [HttpGet("download/jobs")]
+    [HttpGet("download/Jobs")]
     public IActionResult DownloadFile()
     {
         string fileSharePath = $"{Helper.GetWorkingFolder()}migrationjobs"; // UNC path to your file share
@@ -61,6 +61,6 @@ public class FileController : ControllerBase
         var fileBytes = System.IO.File.ReadAllBytes(filePath);
         var contentType = "application/octet-stream";
 
-        return File(fileBytes, contentType, "jobs.json");
+        return File(fileBytes, contentType, "jobList.json");
     }
 }

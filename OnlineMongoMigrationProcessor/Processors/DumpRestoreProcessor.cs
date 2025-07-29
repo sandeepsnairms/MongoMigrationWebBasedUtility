@@ -18,7 +18,7 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class DumpRestoreProcessor : IMigrationProcessor
     {
-        private JobList? _jobs;
+        private JobList? _jobList;
         private MigrationJob? _job;
         private string _toolsLaunchFolder = string.Empty;
         private bool _executionCancelled = false;
@@ -41,11 +41,11 @@ namespace OnlineMongoMigrationProcessor
         public bool ProcessRunning { get; set; }
 
 
-        public DumpRestoreProcessor(Log log,JobList jobs, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
+        public DumpRestoreProcessor(Log log,JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config, string toolsLaunchFolder)
 
         {
             _log = log;
-            _jobs = jobs;
+            _jobList = jobList;
             _job = job;
             _toolsLaunchFolder = toolsLaunchFolder;
             _sourceClient = sourceClient;
@@ -55,9 +55,16 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        public void StopProcessing()
+        public void StopProcessing(bool updateStatus = true)
         {
-            ProcessRunning = false;
+            if (_job != null)
+                _job.IsStarted = false;
+
+            _jobList?.Save();
+
+            if(updateStatus)
+                ProcessRunning = false;
+
             _executionCancelled = true;
             _processExecutor.Terminate();
             _cts?.Cancel();
@@ -69,9 +76,11 @@ namespace OnlineMongoMigrationProcessor
 
         public void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            ProcessRunning = true;
 
             int maxRetries = 10;
             string jobId = _job.Id;
+            //_job.CurrentlyActive = true;
 
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
@@ -104,7 +113,7 @@ namespace OnlineMongoMigrationProcessor
             //if (_job.CSPostProcessingStarted && !Helper.IsOfflineJobCompleted(_job))
             //{
             //    _job.CSPostProcessingStarted = false;
-            //    _jobs?.Save(); // Save the job state to indicate that CS post-processing has started
+            //    _jobList?.Save(); // Save the job state to indicate that CS post-processing has started
             //}
 
             if (_job.IsOnline && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
@@ -115,7 +124,7 @@ namespace OnlineMongoMigrationProcessor
                     _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                 if (_changeStreamProcessor == null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs, _job, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList, _job, _config);
 
                 var result = _changeStreamProcessor.RunCSPostProcessingAsync(_cts);
                 return;
@@ -134,14 +143,14 @@ namespace OnlineMongoMigrationProcessor
                 {
                     long count = MongoHelper.GetActualDocumentCount(collection, item);
                     item.ActualDocCount = count;
-                    _jobs?.Save();
+                    _jobList?.Save();
                 });
 
                 long downloadCount = 0;
 
                 for (int i = 0; i < item.MigrationChunks.Count; i++)
                 {
-                    if (_executionCancelled || _job == null || !_job.CurrentlyActive) return;
+                    if (_executionCancelled || _job == null) return;//|| !_job.CurrentlyActive) return;
 
                     double initialPercent = ((double)100 / item.MigrationChunks.Count) * i;
                     double contributionFactor = 1.0 / item.MigrationChunks.Count;
@@ -154,7 +163,7 @@ namespace OnlineMongoMigrationProcessor
                         backoff = TimeSpan.FromSeconds(2);
                         bool continueProcessing = true;
 
-                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing && _job.CurrentlyActive)
+                        while (dumpAttempts < maxRetries && !_executionCancelled && continueProcessing )//&& _job.CurrentlyActive)
                         {
                             dumpAttempts++;
                             string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection={colName}  --out {folder}\\{i}.bson";
@@ -175,7 +184,7 @@ namespace OnlineMongoMigrationProcessor
                                         MigrationUnitsPendingUpload.AddOrUpdate($"{item.DatabaseName}.{item.CollectionName}",item);
                                         Task.Run(() => Upload(item, targetConnectionString));
 
-                                        _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobs are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobs. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
+                                        _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobList are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobList. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
                                         
                                         Thread.Sleep(TimeSpan.FromMinutes(5));
                                     }
@@ -215,7 +224,7 @@ namespace OnlineMongoMigrationProcessor
                                 if (Directory.Exists($"folder\\{i}.bson"))
                                     Directory.Delete($"folder\\{i}.bson", true);
 
-                                var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongodump.exe", args));
+                                var task = Task.Run(() => _processExecutor.Execute(_jobList, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongodump.exe", args));
                                 task.Wait(); // Wait for the task to complete
                                 bool result = task.Result; // Capture the result after the task completes
 
@@ -223,7 +232,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     continueProcessing = false;
                                     item.MigrationChunks[i].IsDownloaded = true;
-                                    _jobs?.Save(); // Persist state
+                                    _jobList?.Save(); // Persist state
                                     dumpAttempts = 0;
          
                                     _log.WriteLine($"{dbName}.{colName} added to uploader queue");
@@ -249,12 +258,8 @@ namespace OnlineMongoMigrationProcessor
                                 if (dumpAttempts >= maxRetries)
                                 {
                                     _log.WriteLine("Maximum dump attempts reached. Aborting operation.", LogType.Error);
-                                    
 
-                                    _job.CurrentlyActive = false;
-                                    _jobs?.Save();
-
-                                    ProcessRunning = false;
+                                    StopProcessing();
                                 }
 
                                 if (!_executionCancelled)
@@ -271,17 +276,12 @@ namespace OnlineMongoMigrationProcessor
                             catch (Exception ex)
                             {
                                 _log.WriteLine(ex.ToString(), LogType.Error);
-                                
-
-                                _job.CurrentlyActive = false;
-                                _jobs?.Save();
-                                ProcessRunning = false;
+                                StopProcessing();
                             }
                         }
                         if (dumpAttempts == maxRetries)
                         {
-                            _job.CurrentlyActive = false;
-                            _jobs?.Save();
+                            StopProcessing();
                         }
                     }
                     else
@@ -329,7 +329,7 @@ namespace OnlineMongoMigrationProcessor
 
             _log.WriteLine($"{dbName}.{colName} starting uploader");
 
-            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && _job.CurrentlyActive && !_job.IsSimulatedRun)
+            while (!item.RestoreComplete && Directory.Exists(folder) && !_executionCancelled && !_job.IsSimulatedRun)// && _job.CurrentlyActive 
             {
                 int restoredChunks = 0;
                 long restoredDocs = 0;
@@ -370,7 +370,7 @@ namespace OnlineMongoMigrationProcessor
                             backoff = TimeSpan.FromSeconds(2);
                             bool continueProcessing = true;
                             bool skipRestore = false;
-                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete && _job.CurrentlyActive )
+                            while (restoreAttempts < maxRetries && !_executionCancelled && continueProcessing && !item.RestoreComplete)// && _job.CurrentlyActive )
                             {
                                 restoreAttempts++;
                                 skipRestore=false;
@@ -382,7 +382,7 @@ namespace OnlineMongoMigrationProcessor
                                     else
                                         docCount = docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount); ;
 
-                                    var task = Task.Run(() => _processExecutor.Execute(_jobs, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
+                                    var task = Task.Run(() => _processExecutor.Execute(_jobList, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
                                     task.Wait(); // Wait for the task to complete
                                     bool result = task.Result; // Capture the result after the task completes
                                     _log.WriteLine($"{dbName}.{colName}-{i} uploader processing completed");
@@ -426,7 +426,7 @@ namespace OnlineMongoMigrationProcessor
                                                 
                                             }
 
-                                            _jobs?.Save(); // Persist state
+                                            _jobList?.Save(); // Persist state
                                         }
 
                                         //skip updating the chunk status as we are reprocessing the chunk
@@ -435,7 +435,7 @@ namespace OnlineMongoMigrationProcessor
                                             
                                             continueProcessing = false;
                                             item.MigrationChunks[i].IsUploaded = true;
-                                            _jobs?.Save(); // Persist state
+                                            _jobList?.Save(); // Persist state
 
                                             restoreAttempts = 0;
 
@@ -455,7 +455,7 @@ namespace OnlineMongoMigrationProcessor
                                         if (item.MigrationChunks[i].IsUploaded == true)
                                         {
                                             continueProcessing = false;
-                                            _jobs?.Save(); // Persist state
+                                            _jobList?.Save(); // Persist state
                                         }
                                         else if (!_executionCancelled)
                                         {
@@ -482,10 +482,7 @@ namespace OnlineMongoMigrationProcessor
                                             
                                         }
 
-                                        _job.CurrentlyActive = false;
-                                        _jobs?.Save();
-
-                                        ProcessRunning = false;
+                                        StopProcessing();
                                     }
 
                                     if (!_executionCancelled)
@@ -508,19 +505,14 @@ namespace OnlineMongoMigrationProcessor
 
                                     }
 
-                                    _job.CurrentlyActive = false;
-                                    _jobs?.Save();
-                                    ProcessRunning = false;
+                                    StopProcessing();
                                 }
                             }
                             if (restoreAttempts == maxRetries)
                             {
                                 _log.WriteLine("Maximum restore attempts reached. Aborting operations.", LogType.Error);
-                                
 
-                                _job.CurrentlyActive = false;
-                                _jobs?.Save();
-                                ProcessRunning = false;
+                                StopProcessing();
                             }
                         }
                         else if (item.MigrationChunks[i].IsUploaded == true)
@@ -535,7 +527,7 @@ namespace OnlineMongoMigrationProcessor
                         item.RestoreGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - restoredDocs;
                         item.RestorePercent = 100;
                         item.RestoreComplete = true;
-                        _jobs?.Save(); // Persist state
+                        _jobList?.Save(); // Persist state
                     }
                     else
                     {
@@ -557,7 +549,7 @@ namespace OnlineMongoMigrationProcessor
                             _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                         if (_changeStreamProcessor == null)
-                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs,_job, _config);
+                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList,_job, _config);
 
                         _changeStreamProcessor.AddCollectionsToProcess(item, _cts);
                     }
@@ -577,16 +569,14 @@ namespace OnlineMongoMigrationProcessor
 
                     if (!_executionCancelled)
                     {                       
-                        var migrationJob = _jobs.MigrationJobs.Find(m => m.Id == jobId);
+                        var migrationJob = _jobList.MigrationJobs.Find(m => m.Id == jobId);
                         if (!_job.IsOnline && Helper.IsOfflineJobCompleted(migrationJob))
                         {
                             _log.WriteLine($"{migrationJob.Id} Completed");
 
                             migrationJob.IsCompleted = true;
-                            migrationJob.CurrentlyActive = false;
-                            _job.CurrentlyActive = false;
-                            ProcessRunning = false;
-                            _jobs?.Save();
+                            //migrationJob.CurrentlyActive = false;
+                            StopProcessing();
                         }
                         else if(_job.IsOnline && _job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)
                         {
@@ -597,7 +587,7 @@ namespace OnlineMongoMigrationProcessor
                                 _targetClient = MongoClientFactory.Create(_log,targetConnectionString);
 
                             if (_changeStreamProcessor == null)
-                                _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobs, _job, _config);
+                                _changeStreamProcessor = new MongoChangeStreamProcessor(_log,_sourceClient, _targetClient, _jobList, _job, _config);
 
 
                             var result=_changeStreamProcessor.RunCSPostProcessingAsync(_cts);

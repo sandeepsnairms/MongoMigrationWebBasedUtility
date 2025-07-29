@@ -240,7 +240,7 @@ namespace OnlineMongoMigrationProcessor
                 string trimmedItem = item.Trim(); // Remove any extra whitespace
                 if (Regex.IsMatch(trimmedItem, pattern))
                 {
-                    Console.WriteLine($"'{trimmedItem}' matches the pattern.");
+                    //Console.WriteLine($"'{trimmedItem}' matches the pattern.");
                     validItems.Add(trimmedItem); // HashSet ensures uniqueness
                 }
                 else
@@ -284,18 +284,32 @@ namespace OnlineMongoMigrationProcessor
         {
             if (migrationJob == null) return true;
 
-            foreach (var mu in migrationJob.MigrationUnits)
+            if (migrationJob.IsSimulatedRun)
             {
-                if (mu.SourceStatus == CollectionStatus.OK)
+                foreach (var mu in migrationJob.MigrationUnits)
                 {
-                    if(mu.DumpComplete && migrationJob.IsSimulatedRun)
-                        return true;
-                    
-                    if (!mu.RestoreComplete || !mu.DumpComplete)
-                        return false;
+                    if (mu.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (!mu.DumpComplete)
+                            return false;
+
+                    }
                 }
+                return true;
             }
-            return true;
+            else
+            {
+
+                foreach (var mu in migrationJob.MigrationUnits)
+                {
+                    if (mu.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (!mu.RestoreComplete || !mu.DumpComplete)
+                            return false;
+                    }
+                }
+                return true;
+            }
         }
 
         public static string ExtractHost(string connectionString)
