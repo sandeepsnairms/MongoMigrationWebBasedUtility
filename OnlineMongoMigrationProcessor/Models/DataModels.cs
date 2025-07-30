@@ -48,7 +48,7 @@ namespace OnlineMongoMigrationProcessor
 
         public bool LoadJobs(out string errorMessage,bool loadBackup= false)
         {
-            errorMessage = string.Empty;
+            //errorMessage = string.Empty;
             lock (_loadLock)
             {
                 string path;
@@ -61,35 +61,78 @@ namespace OnlineMongoMigrationProcessor
                     return false;
                 }
 
+                int max= loadBackup? 1 : 5; //if loading backup, try once  else 4 attempts 
                 //this.log = log;
                 try
                 {
-                    if (File.Exists(path))
+                    if (File.Exists(path)) 
                     {
-                        string json = File.ReadAllText(path);
-                        var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                        if (loadedObject != null)
+                        for (int i = 0; i < max; i++) //4 attempts to load json
                         {
-                            MigrationJobs = loadedObject.MigrationJobs;
-
-                            if (loadBackup)
+                            try
                             {
-                                //delete all files in SlotNames
-                                foreach (string name in SlotNames)
+                                string json = File.ReadAllText(path);
+                                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+
+                                MigrationJobs = loadedObject.MigrationJobs;
+
+                                if (loadBackup)
                                 {
-                                    if (System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
-                                        System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                    //delete all files in SlotNames
+                                    foreach (string name in SlotNames)
+                                    {
+                                        if (System.IO.File.Exists(Path.Combine(_backupFolderPath, name)))
+                                            System.IO.File.Delete(Path.Combine(_backupFolderPath, name));
+                                    }
+                                    Save(out errorMessage, true);
                                 }
-                                Save(out errorMessage,true);
+
+                                if (MigrationJobs != null)
+                                {
+                                    errorMessage=string.Empty;
+                                    return true;
+                                }
                             }
+                            catch (JsonException)
+                            {
+                                // If deserialization fails, wait and retry
+                                Thread.Sleep(100); // Wait for 100 milliseconds before retrying
+                            }
+
                         }
+
+                        if (MigrationJobs == null && !loadBackup)
+                        {
+                            string directory = Path.GetDirectoryName(path) ?? string.Empty;
+                            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(path);
+                            string extension = Path.GetExtension(path);
+                            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                            string newFileName = $"{fileNameWithoutExtension}_{timestamp}{extension}";
+                            string newFilePath = Path.Combine(directory, newFileName);
+
+                            if (!File.Exists(newFilePath))
+                            {
+                                File.Copy(path, newFilePath);
+                            }
+
+                            errorMessage = $"Error loading migration jobs. Please restore from backup.";
+                        }
+                        else
+                        {
+                            errorMessage = string.Empty;
+                        }
+                        return false;
                     }
-                    errorMessage= string.Empty;
-                    return true;
+                    else
+                    {
+                        errorMessage = "Migration jobs file does not exist.";
+                        MigrationJobs = new List<MigrationJob>();
+                        return true; // Return true even if the file does not exist, as it will be created later
+                    }                   
                 }
                 catch (Exception ex)
                 {
-                    errorMessage = $"Error loading data: {ex.ToString()}";
+                    errorMessage = $"Error loading migration jobs: {ex.ToString()}";
                     return false;
                 }
             }

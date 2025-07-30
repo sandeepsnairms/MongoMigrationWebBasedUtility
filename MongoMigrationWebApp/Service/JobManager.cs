@@ -78,22 +78,30 @@ namespace MongoMigrationWebApp.Service
             return _jobList.Save(out errorMessage);
         }
 
-        public List<MigrationJob> GetMigrations(out string errorMessage)
+        
+
+        public List<MigrationJob> GetMigrations(out string errorMessage, bool force = false)
         {
             errorMessage=string.Empty;
+            bool isSucess=true;
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                _jobList.LoadJobs(out errorMessage, false);
+                isSucess=_jobList.LoadJobs(out errorMessage, false);
             }
-
-            if (_jobList.MigrationJobs == null)
+            else
+            {
+                errorMessage = string.Empty;
+                return _jobList.MigrationJobs;
+            }
+            if ((isSucess || force) && _jobList.MigrationJobs == null)
             {
                 _jobList.MigrationJobs = new List<MigrationJob>();
                 SaveJobs(out errorMessage);
+                return _jobList.MigrationJobs;
             }
 
-            return _jobList.MigrationJobs ??= new List<MigrationJob>();
+            return null;
         }
 
         public void ClearJobFiles(string jobId)

@@ -72,11 +72,11 @@
                     </tr>
                 }
             </tbody>
-        </table>
-        <div class="d-flex align-items-center mb-3">
-            <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Recover Jobs</button>
-        </div>
+        </table>        
     }
+    <div class="d-flex align-items-center mb-3">
+        <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Recover Jobs</button>
+    </div>
 }
 
 @if (_migrationDetailsPopUpOpen)
@@ -120,6 +120,7 @@
     private MigrationJob? _selectedMigrationJob;
     private List<MigrationJob>? migrationJobs;
     private bool _loadingComplete;
+    private bool _jobLoadError;
 
     private string GetToolName(bool useMongoDump)
     {
@@ -133,7 +134,7 @@
             return;
 
         _loadingComplete = false;
-        migrationJobs = GetMigrations();
+        migrationJobs = GetMigrationsFromManager(false, true);
         _loadingComplete = true;
     }
 #pragma warning restore CS1998
@@ -192,9 +193,9 @@
             {
                 return;
             }
-            
-            
-            foreach(var job in GetMigrations())
+
+
+            foreach (var job in GetMigrationsFromManager(true,false))
             {
                 job.IsCancelled = true;
                 // job.CurrentlyActive = false;
@@ -202,7 +203,8 @@
                 JobManager.CancelMigration(job.Id);
             }
             JobManager.StopMigration();
-    
+
+
 
             bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
             if (success)
@@ -229,12 +231,24 @@
 
     private List<MigrationJob> GetMigrations()
     {
-        return JobManager.GetMigrations(out string errorMessage);
-        if(!string.IsNullOrEmpty(errorMessage))
+        return GetMigrationsFromManager(true, true);
+    }
+
+    private List<MigrationJob> GetMigrationsFromManager(bool silent, bool force = false)
+    {
+        var result=JobManager.GetMigrations(out string errorMessage, force);
+        if(!string.IsNullOrEmpty(errorMessage) || result==null)
         {
-            _message = errorMessage;
-            _messageDialogOpen = true;
+            if (!silent)
+            {
+                _message = "Job details could not be loaded.Please use the backup for recovery.";
+                _messageDialogOpen = true;            
+                _jobLoadError = true;
+            }
+            return new List<MigrationJob>();
         }
+        return result;
+
     }
 
 

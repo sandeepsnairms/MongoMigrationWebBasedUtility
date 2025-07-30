@@ -40,8 +40,8 @@ public class FileController : ControllerBase
         }
         else
         {
-            
-            var fileBytes = new Log().DownloadLogsAsJsonBytes(filePath);
+
+            var fileBytes = new Log().DownloadLogsAsJsonBytes(filePath, 0, 0);
             var contentType = "application/octet-stream";
             return File(fileBytes, contentType, fileName);
         }

@@ -339,53 +339,67 @@ namespace OnlineMongoMigrationProcessor
 
         public byte[] DownloadLogsAsJsonBytes(string binPath, int topEntries = 20, int bottomEntries = 230)
         {
-            var logs = new List<LogObject>();
-            var offsets = new List<long>();
+            //var logs = new List<LogObject>();
+            //var offsets = new List<long>();
 
-            try
-            {
-                using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                using var br = new BinaryReader(fs);
+            //try
+            //{
+            //    using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            //    using var br = new BinaryReader(fs);
 
-                // Pass 1: Index all log entry positions
-                while (fs.Position < fs.Length)
-                {
-                    long offset = fs.Position;
+            //    // Pass 1: Index all log entry positions
+            //    while (fs.Position < fs.Length)
+            //    {
+            //        long offset = fs.Position;
 
-                    try
-                    {
-                        int msgLen = br.ReadInt32();
-                        fs.Position += msgLen + 1 + 8; // Skip remainder: message, enum, datetime
-                        offsets.Add(offset);
-                    }
-                    catch
-                    {
-                        break; // Stop on malformed log
-                    }
-                }
+            //        try
+            //        {
+            //            int msgLen = br.ReadInt32();
+            //            fs.Position += msgLen + 1 + 8; // Skip remainder: message, enum, datetime
+            //            offsets.Add(offset);
+            //        }
+            //        catch
+            //        {
+            //            break; // Stop on malformed log
+            //        }
+            //    }
 
-                // Select top + bottom
-                var selectedOffsets = offsets
-                    .Take(topEntries)
-                    .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomEntries)))
-                    .Distinct()
-                    .OrderBy(i => i)
-                    .ToList();
+            //    List<long> selectedOffsets;
 
-                // Pass 2: Read selected logs
-                foreach (var offset in selectedOffsets)
-                {
-                    fs.Position = offset;
-                    var log = TryReadLogEntry(br);
-                    if (log != null)
-                        logs.Add(log);
-                }
-            }
-            catch
-            {
-                // Optionally log or handle error
-            }
+            //    if (topEntries > 0 || bottomEntries > 0)
+            //    {
+            //        selectedOffsets = offsets
+            //            .Take(topEntries)
+            //            .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomEntries)))
+            //            .Distinct()
+            //            .OrderBy(i => i)
+            //            .ToList();
+            //    }
+            //    else
+            //    {
+            //        // Return full list without filtering
+            //        selectedOffsets = offsets
+            //            .Distinct()
+            //            .OrderBy(i => i)
+            //            .ToList();
+            //    }
 
+
+            //    // Pass 2: Read selected logs
+            //    foreach (var offset in selectedOffsets)
+            //    {
+            //        fs.Position = offset;
+            //        var log = TryReadLogEntry(br);
+            //        if (log != null)
+            //            logs.Add(log);
+            //    }
+            //}
+            //catch
+            //{
+            //    // Optionally log or handle error
+            //}
+
+            var logs=ParseLogBinFile(binPath, topEntries, bottomEntries);
             // Serialize selected logs to JSON
             var options = new JsonSerializerOptions
             {
@@ -442,12 +456,23 @@ namespace OnlineMongoMigrationProcessor
                 List<long> selectedOffsets;
                 if (offsets.Count > topCount + bottomCount)
                 {
-                    selectedOffsets = offsets
-                        .Take(topCount)
-                        .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomCount)))
-                        .Distinct()
-                        .OrderBy(o => o)
-                        .ToList();
+                    if (topCount > 0 && bottomCount > 0)
+                    {
+                        selectedOffsets = offsets
+                            .Take(topCount)
+                            .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomCount)))
+                            .Distinct()
+                            .OrderBy(i => i)
+                            .ToList();
+                    }
+                    else
+                    {
+                        // Return full list without filtering
+                        selectedOffsets = offsets
+                            .Distinct()
+                            .OrderBy(i => i)
+                            .ToList();
+                    }
                 }
                 else
                 {
