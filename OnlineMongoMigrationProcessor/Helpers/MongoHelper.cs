@@ -85,12 +85,12 @@ namespace OnlineMongoMigrationProcessor
                 var localDb = client.GetDatabase("local");
                 var oplog = localDb.GetCollection<BsonDocument>("oplog.rs");
 
-                var ts = new BsonTimestamp((int)secondsSinceEpoch, 0);
+                // Convert secondsSinceEpoch (UNIX timestamp) to DateTime (UTC)
+                var wallTime = DateTimeOffset.FromUnixTimeSeconds(secondsSinceEpoch).UtcDateTime;
 
-                var regexPattern = Regex.Escape(collectionNameNamespace);
                 var filter = Builders<BsonDocument>.Filter.And(
-                    Builders<BsonDocument>.Filter.Gte("ts", ts),
-                    Builders<BsonDocument>.Filter.Regex("ns", new BsonRegularExpression(regexPattern, "i"))
+                    Builders<BsonDocument>.Filter.Gte("wall", wallTime),
+                    Builders<BsonDocument>.Filter.Eq("ns", collectionNameNamespace)
                 );
 
                 var count = oplog.CountDocuments(filter);
