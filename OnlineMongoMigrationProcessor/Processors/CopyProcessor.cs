@@ -226,11 +226,18 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
-                item.RestoreGap = item.DumpGap;
-                item.DumpPercent = 100;
-                item.RestorePercent = 100;
-                item.DumpComplete = true;
-                item.RestoreComplete = true;
+                item.RestoreGap = downloadCount-item.MigrationChunks.Sum(chunk => chunk.DumpResultDocCount) ;
+                if(item.DumpGap <= 0)
+                {
+                    item.DumpPercent = 100;
+                    item.DumpComplete = true;
+                }
+                if (item.RestoreGap <= 0)
+                {
+                    item.RestorePercent = 100;
+                    item.RestoreComplete = true;
+                }             
+  
             }
             if (item.RestoreComplete && item.DumpComplete && !_executionCancelled)
             {
