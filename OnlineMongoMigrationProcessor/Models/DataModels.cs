@@ -277,6 +277,25 @@ namespace OnlineMongoMigrationProcessor
         public long ActualDocCount { get; set; }
         public long DumpGap { get; set; }
         public long RestoreGap { get; set; }
+
+        public long CSDInsertEvents { get; set; }
+        public long CSDeleteEvents { get; set; }
+        public long CSUpdatedEvents { get; set; }
+
+        public long CSDocsInserted { get; set; }
+        public long CSDocsDeleted { get; set; }
+        public long CSDocsUpdated { get; set; }
+        public long CSDuplicateDocsSkipped { get; set; }
+
+        public long SyncBackInsertEvents { get; set; }
+        public long SyncBackDeleteEvents { get; set; }
+        public long SyncBackUpdateEvents { get; set; }
+
+        public long SyncBackDocsInserted { get; set; }
+        public long SyncBackDocsDeleted { get; set; }
+        public long SyncBackDocsUpdated { get; set; }
+        public long SyncBackDuplicateDocsSkipped { get; set; }
+
         public List<MigrationChunk> MigrationChunks { get; set; }
 
         public MigrationUnit(string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
@@ -438,12 +457,6 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 
-    public class ChnageStreamsDocuments
-    {
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeInserted = new List<ChangeStreamDocument<BsonDocument>>();
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeUpdated = new List<ChangeStreamDocument<BsonDocument>>();
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeDeleted = new List<ChangeStreamDocument<BsonDocument>>();
-    }
 
     public enum DataType
     {

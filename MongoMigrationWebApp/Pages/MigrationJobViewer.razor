@@ -91,6 +91,11 @@
 {
     <ResetChangeStream MigrationUnits="@MigrationJob.MigrationUnits.Where(mu => mu.SourceStatus == CollectionStatus.OK).ToList()" OnCollectionsUpdated="@OnCSReset" />
 }
+@if (_collectionDetailsDialogOpen && _selectedMigrationUnit != null)
+{
+    <CollectionDetails MigrationJob="@MigrationJob"  MigrationUnit="@_selectedMigrationUnit" OnClose="HandleCollectionDetailsClose" />
+}
+
 
 <table class="table">
     <thead>
@@ -124,9 +129,13 @@
             @foreach (var unit in MigrationJob.MigrationUnits)
             {
                 <tr>
-                    <td>@unit.DatabaseName</td>
-                    <td>@unit.CollectionName</td>                    
 
+                    <td>
+                        <i class="bi bi-info-circle-fill me-2" title="More info" style="cursor: pointer;"
+                           @onclick="() => ShowCollectionDetails(unit)"></i>
+                        @unit.DatabaseName
+                    </td>
+                    <td>@unit.CollectionName</td>
                     <td>
                         @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
                     </td>
@@ -273,8 +282,10 @@ else if (@_showLogBackupFile)
     private YesNoDialog.Category _yesNoDiaLogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
     private bool _resetChangeStreamDialogOpen;
+    private bool _collectionDetailsDialogOpen;
     private bool _showLogBackupFile = false;
     private string _logBackupFile = string.Empty;
+    private MigrationUnit? _selectedMigrationUnit;
 
     private string GetRowClass(string type, string message)
     {
@@ -311,6 +322,12 @@ else if (@_showLogBackupFile)
             UpdateTimerStatus(JobId); // check to set the timer status based on whether the job is live or not
         }
 
+    }
+
+    private void ShowCollectionDetails(MigrationUnit unit)
+    {
+        _selectedMigrationUnit = unit;
+        _collectionDetailsDialogOpen = true;
     }
 
     private List<MigrationJob> GetMigrations()
@@ -600,7 +617,7 @@ else if (@_showLogBackupFile)
             {
                 if (CanAutoStart())
                     await OnMigrationDetailsPopUpSubmit(MigrationJob);                
-                
+
             }
         }
         else
@@ -636,6 +653,12 @@ else if (@_showLogBackupFile)
         _yesNoDialogOpen = true;
     }
 
+
+    private void HandleCollectionDetailsClose()
+    {
+        _collectionDetailsDialogOpen = false;
+        _selectedMigrationUnit = null;     
+    }
 
     private void OnCSReset(List<MigrationUnit> migrationUnits)
     {
