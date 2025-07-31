@@ -55,8 +55,13 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        public void StopProcessing(bool updateStatus = true)
+        public void StopProcessing(bool updateStatus = true, bool delay = false)
         {
+            if( delay)
+            {
+                Thread.Sleep(5000); // Delay for 5 second before stopping
+            }
+
             if (_job != null)
                 _job.IsStarted = false;
 
@@ -219,6 +224,7 @@ namespace OnlineMongoMigrationProcessor
                                 else
                                 {
                                     docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount);
+                                    item.MigrationChunks[i].DumpQueryDocCount = docCount;
                                 }
 
                                 if (Directory.Exists($"folder\\{i}.bson"))
@@ -291,6 +297,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 if (!_executionCancelled)
                 {
+                    item.SourceCountDuringCopy = item.MigrationChunks.Sum(chunk => chunk.DumpQueryDocCount);
                     item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
                     item.DumpPercent = 100;
                     item.DumpComplete = true;
@@ -380,7 +387,8 @@ namespace OnlineMongoMigrationProcessor
                                     if (item.MigrationChunks.Count > 1)
                                         docCount = item.MigrationChunks[i].DumpQueryDocCount; 
                                     else
-                                        docCount = docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount); ;
+                                        docCount = Math.Max(item.ActualDocCount, item.EstimatedDocCount);
+
 
                                     var task = Task.Run(() => _processExecutor.Execute(_jobList, item, item.MigrationChunks[i],i, initialPercent, contributionFactor, docCount, $"{_toolsLaunchFolder}\\mongorestore.exe", args));
                                     task.Wait(); // Wait for the task to complete

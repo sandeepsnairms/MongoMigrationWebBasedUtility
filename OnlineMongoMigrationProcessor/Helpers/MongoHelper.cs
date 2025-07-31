@@ -495,45 +495,14 @@ namespace OnlineMongoMigrationProcessor
 				log.WriteLine($"Creating indexes for: {targetDatabaseName}.{targetCollectionName}");
                 
 
-                // Get the indexes from the source collection
-                var indexes = await sourceCollection.Indexes.ListAsync();
-                var indexDocuments = await indexes.ToListAsync();
-
                 // Create the target collection
                 await targetDatabase.CreateCollectionAsync(targetCollectionName);
                 var targetCollection = targetDatabase.GetCollection<BsonDocument>(targetCollectionName);
 
-                // Copy the indexes to the target collection
-                foreach (var indexDocument in indexDocuments)
-                {
-                    // Exclude the default "_id_" index as it is automatically created
-                    if (indexDocument.GetValue("name", "") == "_id_")
-                        continue;
+                IndexCopier indexCopier = new IndexCopier();
+                int count=await indexCopier.CopyIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
 
-                    // Extract the keys and options for the index
-                    var keys = indexDocument["key"].AsBsonDocument;
-
-                    CreateIndexOptions options = null;
-                    try
-                    {
-                        options = new CreateIndexOptions
-                        {
-                            Name = indexDocument.GetValue("name", default(BsonValue)).AsString,
-                            Unique = indexDocument.GetValue("unique", false).ToBoolean()
-                        };
-
-                        // Create the index on the target collection
-                        var indexModel = new CreateIndexModel<BsonDocument>(keys, options);
-                        await targetCollection.Indexes.CreateOneAsync(indexModel);
-                    }
-                    catch (Exception ex)
-                    {
-						log.WriteLine($"Error copying index {options?.Name} for {targetDatabaseName}.{targetCollectionName}. Details: {ex.ToString()}", LogType.Error);
-                        
-                    }
-                }
-
-				log.WriteLine($"{indexDocuments.Count} Indexes copied successfully to {targetDatabaseName}.{targetCollectionName}");
+                log.WriteLine($"{count} Indexes copied successfully to {targetDatabaseName}.{targetCollectionName}");
                 
                 return true;
             }

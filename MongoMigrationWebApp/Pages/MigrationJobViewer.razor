@@ -376,36 +376,33 @@ else if (@_showLogBackupFile)
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted && !_showLogBackupFile)
         {
-            UpdateUI();
+            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                _logBackupFile = logBackup;
+
+            VerboseMessages = JobManager.GetVerboseMessages(JobId);
+            //Console.WriteLine($"Refresh called for {JobId}");
+
+            if (!string.IsNullOrEmpty(_logBackupFile))
+            {
+                _refreshTimer?.Dispose();
+                _refreshTimer = null;
+                _showLogBackupFile = true;
+            }
+            else
+                _showLogBackupFile = false;
+
+            InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
         }
         else
-        {       
+        {    
             _refreshTimer?.Dispose();
-            Thread.Sleep(5000); // Wait for 5 seconds and refresh once
-            UpdateUI();
+
         }
+
     }
 
-    private void UpdateUI()
-    {
-        LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
-        if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
-            _logBackupFile = logBackup;
 
-        VerboseMessages = JobManager.GetVerboseMessages(JobId);
-        //Console.WriteLine($"Refresh called for {JobId}");
-
-        if (!string.IsNullOrEmpty(_logBackupFile))
-        {
-            _refreshTimer?.Dispose();
-            _refreshTimer = null;
-            _showLogBackupFile = true;
-        }
-        else
-            _showLogBackupFile = false;
-
-        InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
-    }
 
     private async Task UpdateTimerStatus(string id, int seconds)
     {

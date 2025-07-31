@@ -40,8 +40,13 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
         }
 
-        public void StopProcessing(bool updateStatus = true)
+        public void StopProcessing(bool updateStatus = true, bool delay = false)
         {
+            if (delay)
+            {
+                Thread.Sleep(5000); // Delay for 5 second before stopping
+            }
+
             if (_job != null)
                 _job.IsStarted = false;
 
@@ -269,7 +274,7 @@ namespace OnlineMongoMigrationProcessor
 
                             migrationJob.IsCompleted = true;
                             //migrationJob.CurrentlyActive = false;
-                            StopProcessing();
+                            StopProcessing(true);
                         }
                         else if (_job.IsOnline &&_job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)
                         {

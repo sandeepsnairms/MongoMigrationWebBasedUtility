@@ -12,13 +12,7 @@ namespace MongoMigrationWebApp.Service
     {
         private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
-
-        public JobManager()
-        {
-            
-        }
-
-        
+   
 
         #region _configuration Management
 
