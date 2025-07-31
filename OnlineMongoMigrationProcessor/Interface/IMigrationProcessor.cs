@@ -8,7 +8,7 @@ namespace OnlineMongoMigrationProcessor
     {
 
         // Methods
-        void StopProcessing(bool updateStatus=true, bool delay = false);
+        void StopProcessing(bool updateStatus=true);
         void StartProcess(MigrationUnit item, string sourceConnectionString, string targetConnectionString, string idField = "_id");
         bool ProcessRunning { get; set; }
 

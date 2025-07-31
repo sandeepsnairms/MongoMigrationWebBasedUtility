@@ -374,7 +374,7 @@ else if (@_showLogBackupFile)
     {
 
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-        if (MigrationJob != null && MigrationJob.IsStarted && !_showLogBackupFile)
+        if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
         {
             LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
             if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)

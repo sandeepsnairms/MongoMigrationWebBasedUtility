@@ -40,12 +40,8 @@ namespace OnlineMongoMigrationProcessor
             _config = config;
         }
 
-        public void StopProcessing(bool updateStatus = true, bool delay = false)
+        public void StopProcessing(bool updateStatus = true)
         {
-            if (delay)
-            {
-                Thread.Sleep(5000); // Delay for 5 second before stopping
-            }
 
             if (_job != null)
                 _job.IsStarted = false;

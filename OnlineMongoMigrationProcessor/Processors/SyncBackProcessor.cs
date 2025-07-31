@@ -29,12 +29,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             _config = config ?? throw new ArgumentNullException(nameof(config), "MigrationSettings cannot be null.");
         }
 
-        public void StopProcessing(bool updateStatus = true, bool delay=false)
-        {
-            if (delay)
-            {
-                Thread.Sleep(5000); // Delay for 5 second before stopping
-            }
+        public void StopProcessing(bool updateStatus = true)
+        {           
 
             if (_job != null)
                 _job.IsStarted = false;
