@@ -318,6 +318,7 @@ namespace OnlineMongoMigrationProcessor
         public long EstimatedDocCount { get; set; }
         public CollectionStatus SourceStatus { get; set; }
         public long ActualDocCount { get; set; }
+        public long SourceCountDuringCopy { get; set; }
         public long DumpGap { get; set; }
         public long RestoreGap { get; set; }
 

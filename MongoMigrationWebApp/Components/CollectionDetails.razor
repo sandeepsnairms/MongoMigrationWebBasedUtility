@@ -64,8 +64,10 @@
         // Add properties to display
 
         Properties.Add("Source Status", MigrationUnit.SourceStatus.ToString() ?? "N/A");
-        Properties.Add("Estimated Document Count", MigrationUnit.EstimatedDocCount.ToString() ?? "N/A");
-        Properties.Add("Actual Document Count", MigrationUnit.ActualDocCount.ToString() ?? "N/A");
+        Properties.Add("Source Document Count Initial Estimate", MigrationUnit.EstimatedDocCount.ToString() ?? "N/A");
+        Properties.Add("Source Document Count Before Copying", MigrationUnit.ActualDocCount.ToString() ?? "N/A");
+        
+        
 
         if (MigrationJob.UseMongoDump)
         {
@@ -83,8 +85,9 @@
         }
         else
         {
-            Properties.Add("Documents Missing After Bulk Copy", MigrationUnit.RestoreGap.ToString() ?? "N/A");
-        }       
+            Properties.Add("Source Document Count While Copying ", MigrationUnit.SourceCountDuringCopy.ToString() ?? "N/A");
+            Properties.Add("Target Document Count After Copying", (MigrationUnit.SourceCountDuringCopy - MigrationUnit.RestoreGap).ToString() ?? "N/A");
+        }
 
         if (MigrationJob.IsOnline)
         {

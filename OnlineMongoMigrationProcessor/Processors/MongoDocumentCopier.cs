@@ -48,10 +48,11 @@ namespace OnlineMongoMigrationProcessor
             double contribFactor,
             long targetCount,
             long successCount,
-            long failureCount)
+            long failureCount,
+            long skippedCount)
         {
             MigrationChunk migrationChunk = item.MigrationChunks[migrationChunkIndex];
-            var percent = Math.Round((double)(successCount + _skippedCount) / targetCount * 100, 3);
+            var percent = Math.Round((double)(successCount + skippedCount) / targetCount * 100, 3);
             if (percent > 100)
             {
                 Debug.WriteLine("Percent is greater than 100");
@@ -59,17 +60,17 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0)
             {
-               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
-                
+               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+
                 item.DumpPercent = basePercent + (percent * contribFactor);
                 item.RestorePercent = item.DumpPercent;
                 item.DumpComplete = item.DumpPercent == 100;
                 item.RestoreComplete = item.DumpComplete;
             }
 
-            migrationChunk.SkippedAsDuplicateCount = _skippedCount;
-            migrationChunk.DumpResultDocCount = successCount + _skippedCount;
-            migrationChunk.RestoredSuccessDocCount = successCount + _skippedCount;
+            migrationChunk.SkippedAsDuplicateCount = skippedCount;
+            migrationChunk.DumpResultDocCount = successCount + skippedCount;
+            migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
             jobList.Save();
@@ -177,6 +178,7 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     item.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
+                    item.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
                 }
                 catch (Exception ex)
                 {
@@ -335,7 +337,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     finally
                     {
-                        UpdateProgress(segmentId, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount);
+                        UpdateProgress(segmentId, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
                         pageIndex++;
                     }
 
