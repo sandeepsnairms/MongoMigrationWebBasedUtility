@@ -319,7 +319,7 @@ else if (@_showLogBackupFile)
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 5 seconds
-            UpdateTimerStatus(JobId); // check to set the timer status based on whether the job is live or not
+            UpdateTimerStatus(JobId,30); // check to set the timer status based on whether the job is live or not
         }
 
     }
@@ -369,29 +369,23 @@ else if (@_showLogBackupFile)
         }
     }
 
-    // private string GetLogBackupFileName()
-    // {
-    //     //MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-    //     JobManager.GetLogBucket(JobId, out string logBackupFile, out bool isLive);
-    //     return logBackupFile;
-    // }
 
     private void Refresh(object? state)
     {
-        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-        if (MigrationJob != null && MigrationJob.IsStarted && !_showLogBackupFile)
-        {
 
+        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+        if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
+        {
             LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
             if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
                 _logBackupFile = logBackup;
 
             VerboseMessages = JobManager.GetVerboseMessages(JobId);
-            //Console.WriteLine($"Refresh called for {JobId}");                        
+            //Console.WriteLine($"Refresh called for {JobId}");
 
-            if (! string.IsNullOrEmpty(_logBackupFile))
+            if (!string.IsNullOrEmpty(_logBackupFile))
             {
-                _refreshTimer?.Dispose(); 
+                _refreshTimer?.Dispose();
                 _refreshTimer = null;
                 _showLogBackupFile = true;
             }
@@ -401,12 +395,18 @@ else if (@_showLogBackupFile)
             InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
         }
         else
+        {    
             _refreshTimer?.Dispose();
+
+        }
+
     }
 
-    private async Task UpdateTimerStatus(string id)
+
+
+    private async Task UpdateTimerStatus(string id, int seconds)
     {
-        await Task.Delay(TimeSpan.FromSeconds(30)); // Wait for 30 seconds before processing
+        await Task.Delay(TimeSpan.FromSeconds(seconds)); // Wait for the specified seconds before processing
 
         Console.WriteLine($"UpdateTimerStatus Invoked");
 

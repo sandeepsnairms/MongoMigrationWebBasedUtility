@@ -44,15 +44,15 @@
 
 @code
 {
-    [Parameter]
-    public MigrationUnit MigrationUnit { get; set; }
+        [Parameter]
+        public MigrationUnit MigrationUnit { get; set; }
 
-    [Parameter]
-    public MigrationJob MigrationJob { get; set; }
+        [Parameter]
+        public MigrationJob MigrationJob { get; set; }
 
 
-    [Parameter]
-    public EventCallback OnClose { get; set; }
+        [Parameter]
+        public EventCallback OnClose { get; set; }
 
     private Dictionary<string, string> Properties = new();
 
@@ -64,8 +64,10 @@
         // Add properties to display
 
         Properties.Add("Source Status", MigrationUnit.SourceStatus.ToString() ?? "N/A");
-        Properties.Add("Estimated Document Count", MigrationUnit.EstimatedDocCount.ToString() ?? "N/A");
-        Properties.Add("Actual Document Count", MigrationUnit.ActualDocCount.ToString() ?? "N/A");
+        Properties.Add("Source Document Count Initial Estimate", MigrationUnit.EstimatedDocCount.ToString() ?? "N/A");
+        Properties.Add("Source Document Count Before Copying", MigrationUnit.ActualDocCount.ToString() ?? "N/A");
+
+        /*
 
         if (MigrationJob.UseMongoDump)
         {
@@ -80,11 +82,18 @@
             else
                 Properties.Add("Documents Missing After Restore", "0");
 
-        }
-        else
-        {
-            Properties.Add("Documents Missing After Bulk Copy", MigrationUnit.RestoreGap.ToString() ?? "N/A");
-        }       
+        }*/
+        
+        long totalSkipped = MigrationUnit.MigrationChunks.Sum(MigrationChunk => MigrationChunk.SkippedAsDuplicateCount);
+        long totalInserted = MigrationUnit.MigrationChunks.Sum(MigrationChunk => MigrationChunk.RestoredSuccessDocCount) - totalSkipped;
+        long totalFailed = MigrationUnit.MigrationChunks.Sum(MigrationChunk => MigrationChunk.RestoredFailedDocCount);
+
+        Properties.Add("Source Document Count While Processing ", MigrationUnit.SourceCountDuringCopy.ToString() ?? "N/A");
+        Properties.Add("Processed Total", (totalInserted + totalSkipped + totalFailed).ToString() ?? "N/A");
+        Properties.Add("*********** Insert", (totalInserted).ToString() ?? "N/A");
+        Properties.Add("*********** Duplicates(skipped)", (totalSkipped).ToString() ?? "N/A");
+        Properties.Add("*********** Failed", (totalFailed).ToString() ?? "N/A");
+
 
         if (MigrationJob.IsOnline)
         {

@@ -42,6 +42,7 @@ namespace OnlineMongoMigrationProcessor
 
         public void StopProcessing(bool updateStatus = true)
         {
+
             if (_job != null)
                 _job.IsStarted = false;
 
@@ -225,12 +226,24 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
 
-                item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - downloadCount;
-                item.RestoreGap = item.DumpGap;
-                item.DumpPercent = 100;
-                item.RestorePercent = 100;
-                item.DumpComplete = true;
-                item.RestoreComplete = true;
+                item.SourceCountDuringCopy = item.MigrationChunks.Sum(chunk => chunk.Segments.Sum(item => item.QueryDocCount));
+                item.DumpGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - item.SourceCountDuringCopy;
+                item.RestoreGap = item.SourceCountDuringCopy - item.MigrationChunks.Sum(chunk => chunk.DumpResultDocCount) ;
+                
+
+                long failed= item.MigrationChunks.Sum(chunk => chunk.RestoredFailedDocCount);
+                // don't compare counts source vs target as some documents may have been deleted in source
+                //only  check for failed documents
+                if (failed == 0)
+                {
+                    item.DumpPercent = 100;
+                    item.DumpComplete = true;
+
+                    item.RestorePercent = 100;
+                    item.RestoreComplete = true;
+                }
+                             
+  
             }
             if (item.RestoreComplete && item.DumpComplete && !_executionCancelled)
             {
@@ -257,7 +270,7 @@ namespace OnlineMongoMigrationProcessor
 
                             migrationJob.IsCompleted = true;
                             //migrationJob.CurrentlyActive = false;
-                            StopProcessing();
+                            StopProcessing(true);
                         }
                         else if (_job.IsOnline &&_job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(migrationJob) && !_postUploadCSProcessing)
                         {

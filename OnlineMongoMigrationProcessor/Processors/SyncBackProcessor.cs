@@ -30,7 +30,8 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
 
         public void StopProcessing(bool updateStatus = true)
-        {
+        {           
+
             if (_job != null)
                 _job.IsStarted = false;
             _jobList?.Save();
