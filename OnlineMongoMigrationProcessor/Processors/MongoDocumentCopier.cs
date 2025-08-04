@@ -48,10 +48,11 @@ namespace OnlineMongoMigrationProcessor
             double contribFactor,
             long targetCount,
             long successCount,
-            long failureCount)
+            long failureCount,
+            long skippedCount)
         {
             MigrationChunk migrationChunk = item.MigrationChunks[migrationChunkIndex];
-            var percent = Math.Round((double)(successCount + _skippedCount) / targetCount * 100, 3);
+            var percent = Math.Round((double)(successCount + skippedCount) / targetCount * 100, 3);
             if (percent > 100)
             {
                 Debug.WriteLine("Percent is greater than 100");
@@ -59,17 +60,17 @@ namespace OnlineMongoMigrationProcessor
 
             if (percent > 0)
             {
-               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {_skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
-                
+               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+
                 item.DumpPercent = basePercent + (percent * contribFactor);
                 item.RestorePercent = item.DumpPercent;
                 item.DumpComplete = item.DumpPercent == 100;
                 item.RestoreComplete = item.DumpComplete;
             }
 
-            migrationChunk.SkippedAsDuplicateCount = _skippedCount;
-            migrationChunk.DumpResultDocCount = successCount + _skippedCount;
-            migrationChunk.RestoredSuccessDocCount = successCount + _skippedCount;
+            migrationChunk.SkippedAsDuplicateCount = skippedCount;
+            migrationChunk.DumpResultDocCount = successCount + skippedCount;
+            migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
             jobList.Save();
@@ -177,6 +178,7 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     item.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
+                    item.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, item.MigrationChunks[migrationChunkIndex].DataType);
                 }
                 catch (Exception ex)
                 {
@@ -242,6 +244,7 @@ namespace OnlineMongoMigrationProcessor
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter);
             jobList.Save();
 
+
             try
             {
                 bool failed = false;
@@ -251,71 +254,95 @@ namespace OnlineMongoMigrationProcessor
                 {
                     try
                     {
-                        // Get the next page of results
+                        // 1. Fetch documents from source
                         set = await _sourceCollection.Aggregate()
-                            .Match(combinedFilter)  // Apply the filter
-                            .Skip(pageIndex * _pageSize)  // Skip documents based on the current page
-                            .Limit(_pageSize)  // Limit to the page size
+                            .Match(combinedFilter)
+                            .Skip(pageIndex * _pageSize)
+                            .Limit(_pageSize)
                             .ToListAsync(cancellationToken);
 
                         if (set.Count == 0)
-                        {
-                            // No more results, break the loop
                             break;
-                        }
 
+                        // 2. Write to target (unless simulated)
                         if (!IsWriteSimulated)
                         {
-                            var options = new InsertManyOptions { IsOrdered = false };
-                            // Insert the current batch into the target collection
-                            await _targetCollection.InsertManyAsync(set, options, cancellationToken: cancellationToken);                           
+                            var insertModels = set.Select(doc =>
+                            {
+                                // _id handling only if really needed
+                                if (doc.Contains("_id"))
+                                {
+                                    var id = doc["_id"];
+                                    if (id.IsObjectId)
+                                        doc["_id"] = id.AsObjectId;
+                                }
+                                return new InsertOneModel<BsonDocument>(doc);
+                            }).ToList();
+
+                            var result = await _targetCollection.BulkWriteAsync(
+                                insertModels,
+                                new BulkWriteOptions { IsOrdered = false },
+                                cancellationToken);
+
+                            long insertCount = result.InsertedCount;
+                            Interlocked.Add(ref _successCount, insertCount);
                         }
-                        Interlocked.Add(ref _successCount, set.Count);
-
-                    }
-                    catch (OutOfMemoryException ex)
-                    {
-                       _log.WriteLine($"Document copy encountered out of memory error for segment [{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize in settings. Details: {ex.ToString()}", LogType.Error);
-                        
-                        throw;
-                    }
-                    catch (MongoException mex) when (mex.Message.Contains("DuplicateKey"))
-                    {
-                        Interlocked.Add(ref _skippedCount, ((MongoBulkWriteException)mex).WriteErrors.Count);
-
+                        else
+                        {
+                            Interlocked.Add(ref _successCount, set.Count);
+                        }
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
-                        int successfulInserts = set.Count - ex.WriteErrors.Count;
-                        Interlocked.Add(ref _successCount, successfulInserts);
-                        Interlocked.Add(ref _failureCount, ex.WriteErrors.Count);
-                        LogErrors(ex);
+                        // Partial success
+                        long bulkInserted = ex.Result?.InsertedCount ?? 0;
+                        Interlocked.Add(ref _successCount, bulkInserted);
+
+                        // Analyze errors
+                        int dupeCount = ex.WriteErrors.Count(e => e.Code == 11000);
+                        if (dupeCount > 0)
+                            Interlocked.Add(ref _skippedCount, dupeCount);
+
+                        int otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
+                        if (otherErrors > 0)
+                        {
+                            Interlocked.Add(ref _failureCount, otherErrors);
+                            _log.WriteLine(
+                                $"Document copy MongoBulkWriteException with non-dupe errors for segment [{migrationChunkIndex}.{segmentId}]",
+                                LogType.Error);
+                            LogErrors(
+                                ex.WriteErrors.Where(e => e.Code != 11000).ToList(),
+                                $"segment [{migrationChunkIndex}.{segmentId}]"
+                            );
+                        }
+                    }
+                    catch (OutOfMemoryException ex)
+                    {
+                        _log.WriteLine(
+                            $"Document copy encountered OutOfMemoryException for segment [{migrationChunkIndex}.{segmentId}]. " +
+                            $"Try reducing _pageSize. Details: {ex}", LogType.Error);
+                        throw;
                     }
                     catch (Exception ex) when (ex.ToString().Contains("canceled."))
                     {
-                       _log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentId}]");
-                        
+                        _log.WriteLine($"Document copy operation canceled for segment [{migrationChunkIndex}.{segmentId}]");
                     }
                     catch (Exception ex)
                     {
                         errors.Add(ex);
-                        Interlocked.Add(ref _failureCount, set.Count);
-                       _log.WriteLine($"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentId}]. Details : {ex.ToString()}", LogType.Error);
-                        
-
-                        failed=true;
-
+                        _log.WriteLine(
+                            $"Batch processing error during document copy for segment [{migrationChunkIndex}.{segmentId}]. Details: {ex}",
+                            LogType.Error);
+                        failed = true;
                     }
                     finally
                     {
-                        UpdateProgress(segmentId, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount);
-
-                        // Increment the page index to get the next batch
+                        UpdateProgress(segmentId, jobList, item, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
                         pageIndex++;
                     }
 
                     if (failed)
-                        break;
+                        break;                    
                 }
 
                 if(!cancellationToken.IsCancellationRequested)
@@ -364,12 +391,12 @@ namespace OnlineMongoMigrationProcessor
         //    return deletedCount;
         //}
 
-        private void LogErrors(MongoBulkWriteException<BsonDocument> ex)
+        private void LogErrors(List<BulkWriteError> exceptions, string location)
         {
-            foreach (var error in ex.WriteErrors)
+            foreach (var error in exceptions)
             {
-               _log.WriteLine($"Document copy encountered WriteErrors, Details: {ex.ToString()}");
-                
+               _log.WriteLine($"Document copy encountered WriteErrors for {location}, Details: {error.ToString()}");
+
             }
         }
     }
