@@ -389,9 +389,10 @@ namespace OnlineMongoMigrationProcessor
                                     task.Wait(); // Wait for the task to complete
                                     bool result = task.Result; // Capture the result after the task completes
                                     _log.WriteLine($"{dbName}.{colName}-{i} uploader processing completed");
+                                    //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
+                                    item.MigrationChunks[i].RestoredSuccessDocCount = docCount - (item.MigrationChunks[i].RestoredFailedDocCount + item.MigrationChunks[i].SkippedAsDuplicateCount);
                                     if (result)
-                                    {                                       
-
+                                    {
                                         if (item.MigrationChunks[i].RestoredFailedDocCount > 0)
                                         {
                                             if (_targetClient == null)
@@ -527,6 +528,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (restoredChunks == item.MigrationChunks.Count && !_executionCancelled)
                     {
+
                         item.RestoreGap = Math.Max(item.ActualDocCount, item.EstimatedDocCount) - restoredDocs;
                         item.RestorePercent = 100;
                         item.RestoreComplete = true;
