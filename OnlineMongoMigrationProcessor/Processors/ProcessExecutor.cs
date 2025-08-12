@@ -148,6 +148,13 @@ namespace OnlineMongoMigrationProcessor
                 percent = Math.Round(((double)count / targetCount) * 100, 3);
             }
 
+            //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
+            if (percent==100 & processType == "MongoRestore")
+            {
+                chunk.RestoredSuccessDocCount = targetCount- (chunk.RestoredFailedDocCount + chunk.SkippedAsDuplicateCount);
+                jobList.Save();
+            }
+
             if (percent > 0 && targetCount>0)
             {
                 _log.AddVerboseMessage($"{processType} for {item.DatabaseName}.{item.CollectionName} Chunk[{chunkIndex}] : {percent}%");
@@ -155,7 +162,9 @@ namespace OnlineMongoMigrationProcessor
                 {
                     item.RestorePercent = Math.Min(100,basePercent + (percent * contribFactor));
                     if (item.RestorePercent == 100)
-                        item.RestoreComplete = true;
+                    {
+                        item.RestoreComplete = true;                        
+                    }
                 }
                 else
                 {
@@ -175,17 +184,20 @@ namespace OnlineMongoMigrationProcessor
                         chunk.RestoredSuccessDocCount = restoredCount;
                         chunk.RestoredFailedDocCount = failedCount;
                     }
-                    if (restoredCount == 0 && failedCount == 0 && restorePercent ==100)
+                    if (restoredCount == 0 && failedCount == 0 && restorePercent == 100)
                     {
                         chunk.IsUploaded = true;
                     }
-
+                    jobList.Save();
                 }
+
                 if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                 {
                     _log.WriteLine($"{processType} Response: {Helper.RedactPii(data)}");
                 }
             }
+
+            
         }
 
         private string ExtractPercentage(string input)
