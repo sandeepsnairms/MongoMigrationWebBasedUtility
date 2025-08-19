@@ -17,7 +17,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @foreach (var mu in MigrationUnits)
+                        @foreach (var mu in (MigrationUnits ?? Enumerable.Empty<MigrationUnit>()))
                         {
                             <tr>
                                 <td>@mu.DatabaseName.@mu.CollectionName</td>
@@ -36,7 +36,9 @@
 
             @if (updatedMigrationUnits.Count > 0)
             {
-                <div class="alert alert-danger mt-2"> Resetting the change stream will reprocess all changes for the selected collections from the beginning of the migration. This may increase the migration workload and potentially delay processing for other collections. </div>
+                <div class="alert alert-danger mt-2"> 
+                    Resetting the change stream will reprocess all changes for the selected collections from the beginning of the migration. This may increase the migration workload and potentially delay processing for other collections.
+                 </div>
             }
             <div class="modal-footer">
                 <button type="button" class="btn btn-primary" @onclick=@HandleSubmit>Ok</button>
@@ -63,7 +65,7 @@
 
     private void OnCollectionToggleChanged(ChangeEventArgs e, MigrationUnit mu)
     {
-        bool isChecked = (bool)e.Value;
+        bool isChecked = e.Value is bool b && b;
         if (!isChecked)
         {
             updatedMigrationUnits.Remove(mu);

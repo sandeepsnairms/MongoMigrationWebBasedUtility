@@ -31,7 +31,7 @@
 
                 <div class="mt-3">
                     <label for="nameSpaces" class="form-label">Collections To Add</label>
-                    <input id="nameSpaces" type="text" @bind="newCollection" placeholder="e.g. db1.col1,db1.col2" class="form-control" />
+                    <textarea id="nameSpaces" @bind="newCollection" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme" class="form-control" />
                     <button class="btn btn-primary btn-sm mt-2" @onclick="AddCollection">Add</button>
                 </div>
 
@@ -42,7 +42,10 @@
 
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
-                    <div class="alert alert-danger mt-2">@errorMessage</div>
+                    <div class="alert alert-danger mt-2">
+                        @errorMessage
+                        <button type="button" class="btn-close btn-close-sm" aria-label="Close" @onclick="() => errorMessage = string.Empty"></button>
+                    </div>
                 }
             </div>
             <div class="modal-footer">
@@ -56,22 +59,24 @@
 @code
 {
     [Parameter]
+    public MigrationJob? MigrationJob { get; set; }
+
+    [Parameter]
     public List<MigrationUnit>? MigrationUnits { get; set; }
 
     [Parameter]
-    public EventCallback<List<MigrationUnit>> OnCollectionsUpdated { get; set; }
+    public EventCallback<List<MigrationUnit>?> OnCollectionsUpdated { get; set; }
 
     private string errorMessage = string.Empty;
     private string newCollection = string.Empty;
-    private List<MigrationUnit> updatedMigrationUnits;
+    private List<MigrationUnit> updatedMigrationUnits = new List<MigrationUnit>();
     private bool collectionRemoved = false;
 
     private List<MigrationUnit> LoadUpdatedMigrationUnits()
     {
-        if (updatedMigrationUnits == null)
+        if (updatedMigrationUnits == null || updatedMigrationUnits.Count == 0)
         {
-            updatedMigrationUnits = new List<MigrationUnit>();
-            updatedMigrationUnits = MigrationUnits.ToList();
+            updatedMigrationUnits = (MigrationUnits ?? new List<MigrationUnit>()).ToList();
         }
 
         return updatedMigrationUnits;
@@ -82,41 +87,23 @@
         errorMessage = string.Empty;
         if (!string.IsNullOrWhiteSpace(newCollection))
         {
-            Tuple<bool, string> retValue = Helper.ValidateNamespaceFormat(newCollection);
+            if (MigrationJob== null)
+            {
+                errorMessage = "MigrationJob is not set.";
+                return;
+            };
+
+            Tuple<bool, string,string> retValue = Helper.ValidateNamespaceFormat(newCollection, MigrationJob.JobType);
             if (!retValue.Item1)
             {
-                errorMessage = "Invalid collection name. Please provide the collection name in the format 'database.collection'";
+                errorMessage = retValue.Item2;
                 return;
             }
 
-            // Get list of collections
-            string[] collectionsInput = retValue.Item2
-                .Split(',')
-                .Select(item => item.Trim())
-                .ToArray();
-
-            // Process collections one by one
-            foreach (var fullName in collectionsInput)
+            var newunits = Helper.PopulateJobCollections(newCollection);            
+            foreach (var mu in newunits)
             {
-                // string[] parts = fullName.Split('.');
-                // if (parts.Length != 2) continue;
-
-                // string dbName = parts[0].Trim();
-                // string colName = parts[1].Trim();
-
-                int firstDotIndex = fullName.IndexOf('.');
-                if (firstDotIndex <= 0 || firstDotIndex == fullName.Length - 1) continue;
-
-                string dbName = fullName.Substring(0, firstDotIndex).Trim();
-                string colName = fullName.Substring(firstDotIndex + 1).Trim();
-
-                var mu = new MigrationUnit(dbName, colName, null);
-
-                // Ensure no duplicates based on DatabaseName.CollectionName
-                if (!updatedMigrationUnits.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
-                {
-                    updatedMigrationUnits.Add(mu);
-                }
+                updatedMigrationUnits.Add(mu);
             }
 
             newCollection = string.Empty;

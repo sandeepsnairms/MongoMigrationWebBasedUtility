@@ -10,7 +10,6 @@ using System.Threading;
 
 namespace OnlineMongoMigrationProcessor
 {
-#pragma warning disable CS8602      
 
     public class LogBucket
     {
@@ -19,11 +18,10 @@ namespace OnlineMongoMigrationProcessor
 
     public class Log
     {
-        private LogBucket _logBucket;
-        private List<LogObject>? _verboseMessages = new List<LogObject>();
+        private LogBucket _logBucket = new LogBucket();
+        private List<LogObject> _verboseMessages = new List<LogObject>();
         private string _currentId = string.Empty;
 
-        //private static readonly object _syncLock = new();
         private static readonly object _verboseLock = new object();
         private static readonly object _readLock = new object();
         private static readonly object _writeLock = new object();
@@ -35,16 +33,11 @@ namespace OnlineMongoMigrationProcessor
         {
             lock (_verboseLock)
             {
-                if (_verboseMessages == null)
-                {
-                    return;
-                }
-
                 if (_verboseMessages.Count == 5)
                 {
-                    _verboseMessages.RemoveAt(0); // Remove the oldest item
+                    _verboseMessages.RemoveAt(0); // Remove the oldest mu
                 }
-                _verboseMessages.Add(new LogObject(LogType, message)); // Add the new item
+                _verboseMessages.Add(new LogObject(LogType, message)); // Add the new mu
             }
         }
 
@@ -55,7 +48,7 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                if (_verboseMessages == null || _verboseMessages.Count == 0)
+                if (_verboseMessages.Count == 0)
                 {
                     return new List<LogObject>();
                 }
@@ -123,15 +116,16 @@ namespace OnlineMongoMigrationProcessor
                     {
                         string logBackupFile = string.Empty;
                         _logBucket = ReadLogFile(_currentId, out logBackupFile);
-                        Console.WriteLine($"LogBucket was null, re-initialized from file during WriteLine .");
+                        Console.WriteLine($"LogBucket was null, re-initialized from file during WriteLine.");
                     }
 
                     var logObj = new LogObject(LogType, message);
 
                     // Add new log
+                    _logBucket.Logs ??= new List<LogObject>();
                     _logBucket.Logs.Add(logObj);
 
-                    // If more than 300 logs, remove the 21st item (index 20), keep it small
+                    // If more than 300 logs, remove the 21st mu (index 20), keep it small
                     if (_logBucket.Logs.Count > 300 && _logBucket.Logs.Count > 20)
                     {
                         _logBucket.Logs.RemoveAt(20);
@@ -252,7 +246,7 @@ namespace OnlineMongoMigrationProcessor
                 return _logBucket;
             }
 
-            return null;
+            return new LogBucket();
         }
 
         public LogBucket ReadLogFile(string id, out string fileName)
@@ -286,8 +280,8 @@ namespace OnlineMongoMigrationProcessor
                         try
                         {
                             //old format with LogBucket
-                            LogBucket logBucket = JsonSerializer.Deserialize<LogBucket>(json, _jsonOptions);
-                            if (logBucket == null || logBucket.Logs.Count == 0)
+                            LogBucket? logBucket = JsonSerializer.Deserialize<LogBucket>(json, _jsonOptions);
+                            if (logBucket == null || logBucket.Logs == null || logBucket.Logs.Count == 0)
                             {
                                 return new LogBucket(); // empty log
                             }

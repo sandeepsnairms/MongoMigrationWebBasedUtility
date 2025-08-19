@@ -35,7 +35,7 @@
         <table class="table">
             <thead>
                 <tr>
-                    <th> &nbsp;&nbsp;&nbsp;&nbsp;</th>
+                    <th></th>
                     <th>Name</th>
                     <th>Migration Tool</th>
                     <th>Started On (UTC)</th>
@@ -50,20 +50,23 @@
                 {
                     <tr>
                         <td>
-                            @if (JobManager.IsProcessRunning(migration.Id))
+                            @if (JobManager.IsProcessRunning(migration.Id ?? string.Empty))
                             {
                                 <i class="bi bi-star-fill text-warning"></i>
                             }
                         </td>
                         <td>@migration.Name</td>
-                        <td>@GetToolName(migration.UseMongoDump)</td>
+                        <td>@GetToolName(migration.JobType)</td>
                         <td>@migration.StartedOn</td>
-                        <td class="tooltip-text" title="@migration.NameSpaces">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
+                        <td class="tooltip-text" title="@GetTootTip(migration)">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
                         <td>@migration.IsOnline</td>
                         <td>@migration.IsCompleted</td>
                         <td>
                             <button class="btn btn-primary" title="View Job" @onclick="() => ViewMigration(migration.Id)">
                                 <i class="bi bi-eye"></i>
+                            </button>
+                            <button class="btn btn-success" title="Job Report" @onclick="() => ViewJobReport(migration.Id)">
+                                <i class="bi bi-printer"></i>
                             </button>
                             <button class="btn btn-secondary" title="Delete Job" @onclick="() => RemoveMigration(migration.Id)">
                                 <i class="bi bi-trash"></i>
@@ -120,11 +123,28 @@
     private MigrationJob? _selectedMigrationJob;
     private List<MigrationJob>? migrationJobs;
     private bool _loadingComplete;
-    private bool _jobLoadError;
 
-    private string GetToolName(bool useMongoDump)
+    private string GetTootTip(MigrationJob migrationJob)
     {
-        return useMongoDump ? "MongoDump and MongoRestore" : "Mongo Driver";
+        return string.Join(",",
+            migrationJob?.MigrationUnits?
+                .Select(mu => $"{mu.DatabaseName}.{mu.CollectionName}") ?? Enumerable.Empty<string>());
+    }
+
+
+    private string GetToolName(OnlineMongoMigrationProcessor.Models.JobType jobType)
+    {
+        switch(jobType)
+        {
+            case OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy:
+                return "MongoDB Driver (Cosmos DB RU read optimized)";
+            case OnlineMongoMigrationProcessor.Models.JobType.MongoDriver:
+                return "MongoDB Driver";
+            case OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore:
+                return "MongoDump and MongoRestore";
+            default:
+                return "NA";
+        }
     }
 
 #pragma warning disable CS1998
@@ -161,6 +181,7 @@
 
     private async Task RestoreBackup()
     {
+        await Task.Yield();
         var backupDate = JobManager.GetJobBackupDate();
 
         if (backupDate == DateTime.MinValue)
@@ -217,7 +238,7 @@
                 _messageDialogOpen = true;
             }
         }
-        catch (Exception ex)
+    catch (Exception)
         {
             _message = "Failed to restore backup.";
             _messageDialogOpen = true;
@@ -243,7 +264,6 @@
             {
                 _message = "Unable to load job details at the moment. Please wait a while, and if the issue continues, you can recover the jobs from the backup.";
                 _messageDialogOpen = true;            
-                _jobLoadError = true;
             }
             return new List<MigrationJob>();
         }
@@ -257,7 +277,7 @@
         var migrationJob = GetMigrations().Find(m => m.Id == id);
         _selectedMigrationJob = migrationJob;
         //if (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(id
-        if (!JobManager.IsProcessRunning(id))
+        if (!JobManager.IsProcessRunning(id ?? string.Empty))
         {
             _message = "Are you sure you want to delete " + _selectedMigrationJob.Name + " ?";
             _yesNoDialogOpen = true;
@@ -281,7 +301,7 @@
             _yesNoDialogOpen = false;
 
             //if (result.IsConfirmed && (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
-            if (result.IsConfirmed && (!JobManager.IsProcessRunning(_selectedMigrationJob.Id)))
+            if (result.IsConfirmed && (!JobManager.IsProcessRunning(_selectedMigrationJob?.Id ?? string.Empty)))
             {
 
                 if (_selectedMigrationJob != null)
@@ -319,7 +339,6 @@
 
 
 
-
     private void OpenConfig()
     {
         _editSettingsOpen = true;
@@ -343,6 +362,11 @@
     {
 
         NavigationManager.NavigateTo($"/migrationjobviewer/{id}");
+    }
+
+    private void ViewJobReport(string? id)
+    {
+        NavigationManager.NavigateTo($"/jobreport/{id}");
     }
 
     private void StartMigrationAsync()
