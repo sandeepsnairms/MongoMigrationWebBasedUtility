@@ -1,4 +1,6 @@
-﻿using SharpCompress.Common;
+﻿using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Models;
+using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,6 +8,7 @@ using System.IO.Compression;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
+using System.Xml.Linq;
 
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -74,7 +77,6 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-
                 return true;
             }
               
@@ -117,7 +119,7 @@ namespace OnlineMongoMigrationProcessor
                 // Check if tools exist
                 if (File.Exists(mongodumpPath) && File.Exists(mongorestorePath))
                 {
-                    log.WriteLine("Environment ready to use.");
+                    log.WriteLine("Environment is ready to use.");
                     
                     return toolsLaunchFolder;
                 }
@@ -146,11 +148,11 @@ namespace OnlineMongoMigrationProcessor
 
                 if (File.Exists(mongodumpPath) && File.Exists(mongorestorePath))
                 {
-                    log.WriteLine("Environment ready to use.");
+                    log.WriteLine("Environment is ready to use.");
                     
                     return toolsLaunchFolder;
                 }
-                log.WriteLine("Environment failed.", LogType.Error);
+                log.WriteLine("Environment setup failed.", LogType.Error);
                 
                 return string.Empty;
             }
@@ -216,14 +218,185 @@ namespace OnlineMongoMigrationProcessor
 
                 return updatedConnectionString;
             }
-            catch (Exception ex)
+            catch (Exception)
             {                
                 return connectionString; // Return the original connection string in case of error
             }
         }
 
-        public static Tuple<bool, string> ValidateNamespaceFormat(string input)
+        public static long GetMigrationUnitDocCount(MigrationUnit mu)
         {
+            if (mu.UserFilter != null && mu.UserFilter.Any())
+                return mu.ActualDocCount;
+            else
+               return Math.Max(mu.ActualDocCount, mu.EstimatedDocCount);
+        }
+
+        public static (long Total, long Inserted, long Skipped, long Failed) GetProcessedTotals(MigrationUnit mu)
+        {
+            long skipped = mu.MigrationChunks?.Sum(c => c.SkippedAsDuplicateCount) ?? 0;
+            long inserted = (mu.MigrationChunks?.Sum(c => c.RestoredSuccessDocCount) ?? 0) - skipped;
+            long failed = mu.MigrationChunks?.Sum(c => c.RestoredFailedDocCount) ?? 0;
+            long total = inserted + skipped + failed;
+            return (total, inserted, skipped, failed);
+        }
+
+        public static string GetChangeStreamLag(MigrationUnit unit, bool isSyncBack)
+        {
+            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+                return "NA";
+            var lag = DateTime.UtcNow - timestamp;
+            if (lag.TotalSeconds < 0) return "Invalid";
+            return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+        }
+
+        public static List<MigrationUnit> PopulateJobCollections(string namespacesToMigrate)
+        {
+            List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
+            if (string.IsNullOrWhiteSpace(namespacesToMigrate))
+            {
+                return new List<MigrationUnit>();
+            }
+
+            //desrialize  input into  List of CollectionInfo
+            List<CollectionInfo>? loadedObject = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(namespacesToMigrate))
+                {
+                    loadedObject = JsonConvert.DeserializeObject<List<CollectionInfo>>(namespacesToMigrate)!;
+                }
+            }
+            catch
+            {
+                //do nothing
+            }
+            if (loadedObject != null)
+            {
+                foreach (var item in loadedObject)
+                {
+                    var tmpList = PopulateJobCollectionsFromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}");
+                    if (tmpList.Count > 0)
+                    {
+                        foreach (var mu in tmpList)
+                        {
+                            // Ensure no duplicates based on DatabaseName.CollectionName
+                            if (!unitsToAdd.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
+                            {
+                                mu.UserFilter = item.Filter;
+                                unitsToAdd.Add(mu);
+                            }
+                        }
+                    }
+                }
+            }
+            else
+            {
+                unitsToAdd = PopulateJobCollectionsFromCSV(namespacesToMigrate);                
+            }
+
+           
+
+            return unitsToAdd;
+        }
+
+        public static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
+        {
+            if (job == null)
+            {
+                return;
+            }
+            if (job?.MigrationUnits == null)
+            {
+                job!.MigrationUnits = new List<MigrationUnit>();
+            }
+
+            // Check if the MigrationUnit already exists
+            if (job.MigrationUnits.Any(existingMu => existingMu.DatabaseName == mu.DatabaseName && existingMu.CollectionName == mu.CollectionName))
+            {
+                return;
+            }
+            job.MigrationUnits.Add(mu);
+        }
+
+        private static List<MigrationUnit> PopulateJobCollectionsFromCSV(string namespacesToMigrate)
+        {
+            List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
+
+            string[] collectionsInput = namespacesToMigrate
+                .Split(',')
+                .Select(mu => mu.Trim())
+                .ToArray();
+
+
+            foreach (var fullName in collectionsInput)
+            {
+
+                int firstDotIndex = fullName.IndexOf('.');
+                if (firstDotIndex <= 0 || firstDotIndex == fullName.Length - 1) continue;
+
+                string dbName = fullName.Substring(0, firstDotIndex).Trim();
+                string colName = fullName.Substring(firstDotIndex + 1).Trim();
+
+                var migrationUnit = new MigrationUnit(dbName, colName, new List<MigrationChunk>());
+                unitsToAdd.Add(migrationUnit);
+            }
+
+            return unitsToAdd;
+        }
+
+        public static Tuple<bool, string,string> ValidateNamespaceFormat(string input, JobType jobType)
+        {
+            
+            string  errorMessage = string.Empty;
+            if (string.IsNullOrWhiteSpace(input))
+            {
+                errorMessage="Namespaces cannot be null or empty.";
+                return new Tuple<bool, string, string>(false, string.Empty, errorMessage);
+            }
+
+            //input can  be CSV or JSON format
+
+            //desrialize  input into  List of CollectionInfo
+            List<CollectionInfo>? loadedObject=null;
+            try
+            {
+                 loadedObject = JsonConvert.DeserializeObject<List<CollectionInfo>>(input);
+            }
+            catch
+            {
+                //do nothing
+            }
+            if (loadedObject != null)
+            {
+                if(jobType==JobType.RUOptimizedCopy)
+                {
+                    if (loadedObject.Any(x => x.Filter != null))
+                    {
+                        errorMessage = "Filter is not supported in RU Optimized Copy job type.";
+                        return new Tuple<bool, string, string>(false, string.Empty, errorMessage);
+                    }                  
+                }
+
+                foreach (var item in loadedObject)
+                {                   
+                    var validationResult = ValidateNamespaceFormatfromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}");
+                    if (!validationResult.Item1)
+                    {
+                        errorMessage = validationResult.Item2;
+                        return new Tuple<bool, string,string>(false, string.Empty, errorMessage);
+                    }                     
+                }
+                return new Tuple<bool, string,string >(true, input, errorMessage);
+            }
+            else
+            {
+                return ValidateNamespaceFormatfromCSV(input);
+            }
+        }
+        private static Tuple<bool, string, string> ValidateNamespaceFormatfromCSV(string input)
+        { 
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
             //string pattern = @"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$";
             string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?\s]+$";
@@ -235,9 +408,9 @@ namespace OnlineMongoMigrationProcessor
             // Use a HashSet to ensure no duplicates
             HashSet<string> validItems = new HashSet<string>();
 
-            foreach (string item in items)
+            foreach (string mu in items)
             {
-                string trimmedItem = item.Trim(); // Remove any extra whitespace
+                string trimmedItem = mu.Trim(); // Remove any extra whitespace
                 if (Regex.IsMatch(trimmedItem, pattern))
                 {
                     //Console.WriteLine($"'{trimmedItem}' matches the pattern.");
@@ -245,13 +418,14 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    return new Tuple<bool, string>(false, string.Empty);
+                    string errorMessage = $"Invalid namespace format: '{trimmedItem}'";
+                    return new Tuple<bool, string,string>(false, string.Empty,errorMessage);
                 }
             }
 
             // Join valid items into a cleaned comma-separated list
             var cleanedNamespace = string.Join(",", validItems);
-            return new Tuple<bool, string>(true, cleanedNamespace);
+            return new Tuple<bool, string,string>(true, cleanedNamespace,string.Empty);
         }
 
         public static string RedactPii(string input)
@@ -343,5 +517,6 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
+
 
 

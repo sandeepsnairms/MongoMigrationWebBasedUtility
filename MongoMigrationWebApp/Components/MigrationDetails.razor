@@ -2,6 +2,7 @@
 @inject IConfiguration Configuration
 
 @using OnlineMongoMigrationProcessor
+@using OnlineMongoMigrationProcessor.Models
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
     <div class="modal-dialog bg-dark">
@@ -22,9 +23,10 @@
                         <select id="mongo-options" class="form-select" @onchange="OnSelectionChanged">
                             @if (AllowMongoDump)
                             {
-                                <option value="Use MongoDump and MongoRestore">Use MongoDump and MongoRestore</option>
+                                <option value="MongoDump and MongoRestore">MongoDump and MongoRestore</option>
                             }
-                            <option value="Use Mongo Driver">Use Mongo Driver</option>
+                            <option value="MongoDB Driver">MongoDB Driver</option>
+                            <option value="MongoDB Driver (Cosmos DB RU read optimized)">MongoDB Driver (Cosmos DB RU read optimized)</option>
                         </select>
                     </div>
                 }                
@@ -37,7 +39,7 @@
                     </div>
                     <div class="checkbox-group">                    
                         <label title="Skip copying indexes from the source; only data will be migrated.">
-                            <input type="checkbox" id="copyIndex" disabled="@(!NewMode || appendMode)" @bind="skipIndexes" />
+                            <input type="checkbox" id="copyIndex" disabled="@(!NewMode || appendMode || jobType==JobType.RUOptimizedCopy)" @bind="skipIndexes" />
                             Skip Indexes
                         </label>
                     </div>
@@ -78,7 +80,7 @@
 
                 <div class="mb-3">
                     <label for="nameSpaces" class="form-label">Collections To Migrate</label>
-                    <textarea id="nameSpaces" disabled="@(!NewMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5" class="form-control" @bind="namespaces"></textarea>
+                    <textarea id="nameSpaces" disabled="@(!NewMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme" class="form-control" @bind="namespaces"></textarea>
                 </div>
 
                 <div class="mb-3">
@@ -86,51 +88,61 @@
                         <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" />
                         Simulation Mode (No Writes to Target)
                     </label>
-                </div>
+                </div>                             
+
+                @if(ShowWarning())
+                {
+                    <div class="alert alert-warning mt-2">
+                        <label for="overwrite" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
+                        <input type="checkbox" id="overwrite" @bind="overwrite" />
+                            I agree to overwrite the target collections. This will remove all existing data in the target collections before migration begins.
+                        </label>
+                        Choose the <b>Append Mode</b> option if you want to keep existing data without overwriting it.
+                    </div>
+                }
 
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
-                    <div class="alert alert-danger mt-2">@errorMessage</div>
+                    <div class="alert alert-danger mt-2">
+                        @errorMessage
+                        <button type="button" class="btn-close btn-close-sm" aria-label="Close" @onclick="() => errorMessage = string.Empty"></button>
+                    </div>
                 }
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-primary" @onclick=@HandleSubmit>Ok</button>
+                <button type="button" class="btn btn-primary" @onclick="@HandleSubmit">Ok</button>
                 <button type="button" class="btn btn-secondary" @onclick="@Cancel">Cancel</button>
             </div>
+
+            
         </div>
     </div>
 </div>
 
 @code {
 
-    #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
-#pragma warning disable CS8601
-#pragma warning disable CS8602
 
     [Parameter]
     public bool NewMode { get; set; }
 
     [Parameter]
-    public MigrationJob Job { get; set; }
-
-
+    public MigrationJob? Job { get; set; }
 
     [Parameter]
     public EventCallback<MigrationJob> OnSubmit { get; set; }
 
     [Parameter]
-    public Func<string, Task<bool>> CheckNameExists { get; set; }
-
+    public Func<string, Task<bool>>? CheckNameExists { get; set; }
 
     private string errorMessage = string.Empty;
-    private bool useMongoDump = true; // Variable to track the selected value
-    private string selectedOption = "Use MongoDump and MongoRestore"; // Default dropdown value
+    private JobType jobType = JobType.MongoDriver; // Use JobType enum instead of boolean
+    private string selectedOption = "MongoDB Driver"; // Default dropdown value
     private bool isSimulatedRun = false; // Variable to track the dummy run option
     private bool isOnline = true; // Default to online migration
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
     private bool skipIndexes = false;// create indexes on Target
-    private bool appendMode = false;// if the target collection exists, it will be deleted
+    private bool appendMode = true;// if the target collection exists, it will be deleted
     private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
     private string name = string.Empty; // Name of the migration job
     private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
@@ -139,19 +151,34 @@
     private string sourceConnectionString { get; set; } = string.Empty;
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
-
+    private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
-        isOnline = e.Value.ToString() == "Online";
+    var val = e?.Value?.ToString() ?? string.Empty;
+    isOnline = val == "Online";
+    }
+
+    private bool ShowWarning()
+    {
+        // Show warning if the job is new, and append mode is not selected
+        return NewMode && !appendMode && !isSimulatedRun;
     }
 
     private void OnSelectionChanged(ChangeEventArgs e)
     {
-        selectedOption = e.Value.ToString();
-        useMongoDump = selectedOption == "Use MongoDump and MongoRestore"; // Set useMongoDump based on selection
+        selectedOption = e?.Value?.ToString() ?? selectedOption;
+        jobType = selectedOption switch
+        {
+            "MongoDump and MongoRestore" => JobType.DumpAndRestore,
+            "MongoDB Driver (Cosmos DB RU read optimized)" => JobType.RUOptimizedCopy,
+            _ => JobType.MongoDriver
+        };
+
+        if (jobType == JobType.RUOptimizedCopy)
+        {
+            skipIndexes = true; // Skip indexes for RU optimized copy
+        }       
     }
-
-
 
 
     protected override void OnInitialized()
@@ -164,25 +191,32 @@
             namespaces = string.Empty;
             isOnline = false;
             enableSyncBack = false;
-            useMongoDump = true;
+            jobType = JobType.DumpAndRestore;
+            selectedOption = "MongoDump and MongoRestore";
             isSimulatedRun = false;
             skipIndexes = false;
-            appendMode = false;
+            appendMode = true;
         }
         else
         {
-            name = Job.Name;
-            sourceConnectionString = Job.SourceConnectionString;
-            targetConnectionString = Job.TargetConnectionString;
-            namespaces = Job.NameSpaces;
-            sourceEndpoint = Job.SourceEndpoint;
-            targetEndpoint = Job.TargetEndpoint;
-            isOnline = Job.IsOnline;
-            enableSyncBack = Job.SyncBackEnabled && isOnline && !Job.IsSimulatedRun; // Reverse sync only if online and not a simulated run
-            useMongoDump = Job.UseMongoDump;
-            isSimulatedRun = Job.IsSimulatedRun;
-            skipIndexes = Job.SkipIndexes;
-            appendMode = Job.AppendMode;
+            name = Job?.Name ?? string.Empty;
+            sourceConnectionString = Job?.SourceConnectionString ?? string.Empty;
+            targetConnectionString = Job?.TargetConnectionString ?? string.Empty;
+            namespaces = Job?.NameSpaces ?? string.Empty;
+            sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
+            targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
+            isOnline = Job?.IsOnline ?? false;
+            enableSyncBack = (Job?.SyncBackEnabled ?? false) && isOnline && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
+            jobType = Job?.JobType ?? JobType.MongoDriver;
+            selectedOption = jobType switch
+            {
+                JobType.DumpAndRestore => "MongoDump and MongoRestore",
+                JobType.RUOptimizedCopy => "MongoDB Driver (Cosmos DB RU read optimized)",
+                _ => "MongoDB Driver"
+            };
+            isSimulatedRun = Job?.IsSimulatedRun ?? false;
+            skipIndexes = Job?.SkipIndexes ?? false;
+            appendMode = Job?.AppendMode ?? false;
 
             if(isOnline)
             {
@@ -196,12 +230,18 @@
     }
     private async void HandleSubmit()
     {
+        if (ShowWarning() && !overwrite)
+        {
+            errorMessage = "Please check the overwrite option to proceed with migration.";
+            return;
+        }
 
         if (string.IsNullOrEmpty(name))
         {
             errorMessage = "Name can't be empty.";
             return;
         }
+
         if (NewMode && CheckNameExists != null) // Ensure callback is provided
         {
             var nameExists = await CheckNameExists(name);
@@ -240,10 +280,16 @@
 
         if (NewMode)
         {
-            var retValue = Helper.ValidateNamespaceFormat(namespaces);
+            var retValue = Helper.ValidateNamespaceFormat(namespaces, jobType);
+
+            if (retValue == null)
+            {
+                errorMessage = "Invalid namespace format.";
+                return;
+            }
             if (!retValue.Item1)
             {
-                errorMessage = "Namespaces Format is invalid.";
+                errorMessage = retValue.Item3;
                 return;
             }
             else
@@ -262,7 +308,7 @@
             SourceEndpoint = tmpSrcEndpoint,
             TargetEndpoint = tmpTgtEndpoint,
             NameSpaces = namespaces,
-            UseMongoDump = useMongoDump,
+            JobType = jobType,
             IsSimulatedRun = isSimulatedRun,
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
