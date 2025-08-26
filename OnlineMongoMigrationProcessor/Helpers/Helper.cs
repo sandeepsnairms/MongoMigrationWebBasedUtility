@@ -285,6 +285,15 @@ namespace OnlineMongoMigrationProcessor
                             if (!unitsToAdd.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
                             {
                                 mu.UserFilter = item.Filter;
+
+                                if (!string.IsNullOrEmpty(item.DataTypeFor_Id) && Enum.TryParse<DataType>(item.DataTypeFor_Id, out var parsedDataType))
+                                {
+                                    mu.DataTypeFor_Id = parsedDataType;
+                                }
+                                else
+                                {
+                                    mu.DataTypeFor_Id = null;
+                                }
                                 unitsToAdd.Add(mu);
                             }
                         }

@@ -80,6 +80,8 @@ namespace OnlineMongoMigrationProcessor
         public long SyncBackDocsUpdated { get; set; }
         public long SyncBackDuplicateDocsSkipped { get; set; }
 
+        public DataType? DataTypeFor_Id { get; set; } = null;
+
         public List<MigrationChunk> MigrationChunks { get; set; }
 
         public MigrationUnit(string databaseName, string collectionName, List<MigrationChunk> migrationChunks)

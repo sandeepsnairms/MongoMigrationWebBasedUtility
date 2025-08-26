@@ -122,14 +122,26 @@ namespace OnlineMongoMigrationProcessor
             BsonValue? gte,
             BsonValue? lte,
             DataType dataType,
-            BsonDocument userFilterDoc ) 
+            BsonDocument userFilterDoc,
+            bool skipDataTypeFilter = false) 
         {
 
             var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(userFilterDoc);
 
             var filterBuilder = Builders<BsonDocument>.Filter;
 
-            var typeFilter = filterBuilder.Eq("_id", new BsonDocument("$type", DataTypeToBsonType(dataType)));
+            FilterDefinition<BsonDocument> typeFilter;
+            
+            if (skipDataTypeFilter)
+            {
+                // Skip DataType filtering - use empty filter for type
+                typeFilter = FilterDefinition<BsonDocument>.Empty;
+            }
+            else
+            {
+                // Original DataType filtering logic
+                typeFilter = filterBuilder.Eq("_id", new BsonDocument("$type", DataTypeToBsonType(dataType)));
+            }
 
             bool hasGte = gte != null && !gte.IsBsonNull && !(gte is BsonMaxKey);
             bool hasLte = lte != null && !lte.IsBsonNull && !(lte is BsonMaxKey);
@@ -138,25 +150,49 @@ namespace OnlineMongoMigrationProcessor
 
             if (hasGte && hasLte)
             {
-                idFilter = filterBuilder.And(
-                    typeFilter,
-                    BuildFilterGte("_id", gte!, dataType),
-                    BuildFilterLt("_id", lte!, dataType)
-                );
+                if (skipDataTypeFilter)
+                {
+                    idFilter = filterBuilder.And(
+                        BuildFilterGte("_id", gte!, dataType),
+                        BuildFilterLt("_id", lte!, dataType)
+                    );
+                }
+                else
+                {
+                    idFilter = filterBuilder.And(
+                        typeFilter,
+                        BuildFilterGte("_id", gte!, dataType),
+                        BuildFilterLt("_id", lte!, dataType)
+                    );
+                }
             }
             else if (hasGte)
             {
-                idFilter = filterBuilder.And(
-                    typeFilter,
-                    BuildFilterGte("_id", gte!, dataType)
-                );
+                if (skipDataTypeFilter)
+                {
+                    idFilter = BuildFilterGte("_id", gte!, dataType);
+                }
+                else
+                {
+                    idFilter = filterBuilder.And(
+                        typeFilter,
+                        BuildFilterGte("_id", gte!, dataType)
+                    );
+                }
             }
             else if (hasLte)
             {
-                idFilter = filterBuilder.And(
-                    typeFilter,
-                    BuildFilterLt("_id", lte!, dataType)
-                );
+                if (skipDataTypeFilter)
+                {
+                    idFilter = BuildFilterLt("_id", lte!, dataType);
+                }
+                else
+                {
+                    idFilter = filterBuilder.And(
+                        typeFilter,
+                        BuildFilterLt("_id", lte!, dataType)
+                    );
+                }
             }
             else
             {
@@ -172,9 +208,9 @@ namespace OnlineMongoMigrationProcessor
             return idFilter;
         }
 
-        public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument userFilterDoc)
+        public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument userFilterDoc, bool skipDataTypeFilter = false)
         {
-            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType, userFilterDoc);
+            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType, userFilterDoc, skipDataTypeFilter);
 
             // Execute the query and return the count
             return collection.CountDocuments(filter);
@@ -773,13 +809,19 @@ namespace OnlineMongoMigrationProcessor
             };
         }
 
-        public static string GenerateQueryString(BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument? userFilterDoc)
+        public static string GenerateQueryString(BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument? userFilterDoc, MigrationUnit? migrationUnit = null)
         {
+            // Check if we should skip DataType filter when DataTypeFor_Id is specified
+            bool skipDataTypeFilter = migrationUnit?.DataTypeFor_Id.HasValue == true;
+
             // Build the _id sub-object
-            var idConditions = new List<string>
+            var idConditions = new List<string>();
+
+            // Only add $type condition if we're not skipping DataType filter
+            if (!skipDataTypeFilter)
             {
-                $"\\\"$type\\\": \\\"{DataTypeToBsonType(dataType)}\\\""
-            };
+                idConditions.Add($"\\\"$type\\\": \\\"{DataTypeToBsonType(dataType)}\\\"");
+            }
 
             if (!(gte == null || gte.IsBsonNull) && gte is not BsonMaxKey)
             {
@@ -791,11 +833,13 @@ namespace OnlineMongoMigrationProcessor
                 idConditions.Add($"\\\"$lte\\\": {BsonValueToString(lte, dataType)}");
             }
 
-            // Start with _id filter
-            var rootConditions = new List<string>
+            var rootConditions = new List<string>();
+
+            // Only add _id filter if we have conditions
+            if (idConditions.Count > 0)
             {
-                $"\\\"_id\\\": {{ {string.Join(", ", idConditions)} }}"
-            };
+                rootConditions.Add($"\\\"_id\\\": {{ {string.Join(", ", idConditions)} }}");
+            }
 
             // Add user filter at the root level if provided
             if (userFilterDoc != null && userFilterDoc.ElementCount > 0)
@@ -803,6 +847,12 @@ namespace OnlineMongoMigrationProcessor
                 // Escape quotes for command-line use
                 var userFilterJsonEscaped = userFilterDoc.ToJson().Replace("\"", "\\\"");
                 rootConditions.Add(userFilterJsonEscaped.TrimStart('{').TrimEnd('}'));
+            }
+
+            // If no conditions exist, return empty filter
+            if (rootConditions.Count == 0)
+            {
+                return "{}";
             }
 
             // Combine into a valid JSON object

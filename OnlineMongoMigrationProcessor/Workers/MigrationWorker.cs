@@ -261,7 +261,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         else
                         { 
-                            chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts);
+                            chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts, unit);
                         
                             if (chunks.Count == 0)
                             {
@@ -587,7 +587,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
         }
 
-        private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, CancellationToken cts, string userFilter = "")
+        private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, CancellationToken cts, MigrationUnit migrationUnit, string userFilter = "")
         {
             try
             {
@@ -610,20 +610,19 @@ namespace OnlineMongoMigrationProcessor.Workers
                 long targetChunkSizeBytes = _config.ChunkSizeInMb * 1024 * 1024;
                 var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
 
-
                 if (_job.JobType == JobType.DumpAndRestore)
                 {
                     totalChunks = totalChunksBySize;
-                    minDocsInChunk = documentCount / totalChunks;
+                    minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
                     _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}");
                 }
                 else
                 {
                     _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}");
-                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
+                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / (SamplePartitioner.MaxSamples == 0 ? 1 : SamplePartitioner.MaxSamples));
                     totalChunks = Math.Max(1, totalChunks); // At least one chunk
                     totalChunks = Math.Max(totalChunks, totalChunksBySize);
-                    minDocsInChunk = documentCount / totalChunks;
+                    minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
                 }
 
                 List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
@@ -632,21 +631,33 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     _log.WriteLine($"Chunking {databaseName}.{collectionName}");
 
-                    List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
+                    List<DataType> dataTypes;
 
-                    if (_config.ReadBinary)
+                    // Check if DataTypeFor_Id is specified in the MigrationUnit
+                    if (migrationUnit?.DataTypeFor_Id.HasValue == true)
                     {
-                        dataTypes.Add(DataType.BinData);
+                        // Use only the specified DataType and skip filtering by other data types
+                        dataTypes = new List<DataType> { migrationUnit.DataTypeFor_Id.Value };
+                        _log.WriteLine($"Using specified DataType for _id: {migrationUnit.DataTypeFor_Id.Value}");
+                    }
+                    else
+                    {
+                        // Use all DataTypes (original behavior)
+                        dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
+
+                        if (_config.ReadBinary)
+                        {
+                            dataTypes.Add(DataType.BinData);
+                        }
                     }
 
                     foreach (var dataType in dataTypes)
                     {
                         long docCountByType;
-                        ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, userFilter, totalChunks, dataType, minDocsInChunk, cts, out docCountByType);
+                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, userFilter, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!, out docCountByType);
 
-                        if (docCountByType == 0  || chunkBoundaries == null) continue;
+                        if (docCountByType == 0 || chunkBoundaries == null) continue;
 
-                        
                         CreateSegments(chunkBoundaries, migrationChunks, dataType);
                     }
                 }
@@ -658,8 +669,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 return migrationChunks;
             }
-            catch(OperationCanceledException)
-            {               
+            catch (OperationCanceledException)
+            {
                 return new List<MigrationChunk>();
             }
             catch (Exception ex)
