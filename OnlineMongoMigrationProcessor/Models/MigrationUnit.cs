@@ -2,8 +2,10 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -25,10 +27,44 @@ namespace OnlineMongoMigrationProcessor
         [JsonIgnore]
         public BsonDocument? ResumeDocumentId
         {
-            get => _resumeDocumentIdRaw != null ? BsonDocument.Create(_resumeDocumentIdRaw) : null;
+            get
+            {
+                if (_resumeDocumentIdRaw == null)
+                    return null;
+                var rawString = _resumeDocumentIdRaw.ToString();
+                if (string.IsNullOrEmpty(rawString))
+                    return null;
+                return getResumeDocumentId(rawString);
+            }
             set => _resumeDocumentIdRaw = value;
         }
 
+        private BsonDocument getResumeDocumentId(string raw)
+        {
+            JToken token = JToken.Parse(raw);
+
+
+            if (token is JArray jArr)
+            {
+                // Convert array of {Name,Value} to doc
+                return new BsonDocument(
+                    jArr.Select(j =>
+                        new BsonElement(j["Name"]!.ToString(), BsonValue.Create(j["Value"]!.ToString()))
+                    )
+                );
+            }
+            else if (token is JObject jObj)
+            {
+                // Convert single object {Name,Value} to doc
+                return new BsonDocument
+                {
+                    { jObj["Name"]!.ToString(), BsonValue.Create(jObj["Value"]!.ToString()) }
+                };
+            }
+            else
+                return new BsonDocument();
+            
+        }
 
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }

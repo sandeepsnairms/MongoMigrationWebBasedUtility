@@ -81,6 +81,10 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         protected bool CheckChangeStreamAlreadyProcessingAsync(ProcessorContext ctx)
         {
+            if(_job.AggresiveChangeStream)
+                return false; // Skip processing if aggressive change stream resume is enabled
+
+
             if (_postUploadCSProcessing)
                 return true; // Skip processing if post-upload CS processing is already in progress
 
@@ -105,8 +109,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             return false;
         }
 
-        protected void AddCollectionToChangeStreamQueue(MigrationUnit mu, string targetConnectionString)
+        public void AddCollectionToChangeStreamQueue(MigrationUnit mu, string targetConnectionString)
         {
+
             if (_job.IsOnline && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads && !_job.IsSimulatedRun)
             {
                 if (_targetClient == null)
@@ -120,9 +125,10 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
         }
 
-        protected void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
+        public void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
         {
-            if (_job.IsOnline && _job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
+
+            if (_job.IsOnline && _job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_job)|| _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
@@ -140,6 +146,9 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         protected Task PostCopyChangeStreamProcessor(ProcessorContext ctx, MigrationUnit mu)
         {
+            if (_job.AggresiveChangeStream) 
+                return Task.CompletedTask;
+
             if (mu.RestoreComplete && mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
                 try

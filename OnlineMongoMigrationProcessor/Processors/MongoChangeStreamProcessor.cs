@@ -65,7 +65,7 @@ namespace OnlineMongoMigrationProcessor
         public bool AddCollectionsToProcess(MigrationUnit mu, CancellationTokenSource cts)
         {
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
-            if (mu.SourceStatus != CollectionStatus.OK || mu.DumpComplete != true || mu.RestoreComplete != true)
+            if (mu.SourceStatus != CollectionStatus.OK || ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
             {
                 _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
                 return false;
@@ -108,7 +108,7 @@ namespace OnlineMongoMigrationProcessor
                 _migrationUnitsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
                 {
-                    if (migrationUnit.SourceStatus == CollectionStatus.OK && migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true)
+                    if (migrationUnit.SourceStatus == CollectionStatus.OK && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true)|| _job.AggresiveChangeStream))
                     {
                         _migrationUnitsToProcess[$"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}"] = migrationUnit;
 
@@ -348,18 +348,18 @@ namespace OnlineMongoMigrationProcessor
                             var targetDb2 = _targetClient.GetDatabase(databaseName);
                             targetCollection = targetDb2.GetCollection<BsonDocument>(collectionName);
                         }
-                        if (AutoReplayFirstChangeInResumeToken(mu.ResumeDocumentId, mu.ResumeTokenOperation, sourceCollection!, targetCollection!, mu))
-                        {
-                            // If the first change was replayed, we can proceed
-                            mu.InitialDocumenReplayed = true;
-                            _jobList?.Save();
+                        //if (AutoReplayFirstChangeInResumeToken(mu.ResumeDocumentId, mu.ResumeTokenOperation, sourceCollection!, targetCollection!, mu))
+                        //{
+                        //    // If the first change was replayed, we can proceed
+                        //    mu.InitialDocumenReplayed = true;
+                        //    _jobList?.Save();
 
-                        }
-                        else
-                        {
-                            _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.", LogType.Error);
-                            throw new Exception($"Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.");
-                        }
+                        //}
+                        //else
+                        //{
+                        //    _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.", LogType.Error);
+                        //    throw new Exception($"Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.");
+                        //}
                     }
 
                     if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && resumeToken == null && !(_job.JobType==JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 

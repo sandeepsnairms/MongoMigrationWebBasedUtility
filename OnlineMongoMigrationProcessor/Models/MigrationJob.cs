@@ -49,6 +49,7 @@ namespace OnlineMongoMigrationProcessor
         public bool SyncBackEnabled { get; set; }
         public bool ProcessingSyncBack { get; set; }
         public bool RunComparison { get; set; }
+        public bool AggresiveChangeStream { get; set; }
         public bool CSStartsAfterAllUploads { get; set; }
         public bool CSPostProcessingStarted { get; set; }
         public List<MigrationUnit>? MigrationUnits { get; set; }

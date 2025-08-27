@@ -377,7 +377,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (result == TaskResult.Success)
                             {
                                 // since CS processsing has started, we can break the loop. No need to process all collections
-                                if (_job.IsOnline && _job.SyncBackEnabled && _job.CSPostProcessingStarted && Helper.IsOfflineJobCompleted(_job))
+                                if (_job.IsOnline && _job.SyncBackEnabled && (_job.CSPostProcessingStarted && !_job.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(_job))
                                     break;
                             }
                             else
@@ -407,7 +407,41 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success; //all  actiivty completed successfully
         }
 
-        
+
+
+        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor)
+        {
+            try
+            {
+                if (_job == null)
+                    return TaskResult.FailedAfterRetries;
+
+                var unitsForMigrate = _job.MigrationUnits ?? new List<MigrationUnit>();
+                foreach (var migrationUnit in unitsForMigrate)
+                {
+                    if (_migrationCancelled)
+                        return TaskResult.Canceled;
+
+                    if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (await MongoHelper.CheckCollectionExists(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                        {
+                            processor.AddCollectionToChangeStreamQueue(migrationUnit, _job.TargetConnectionString!);
+                            _log.WriteLine($"Change stream processor added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to the monitoring queue.");
+                        }
+                    }
+                }
+                processor.RunChangeStreamProcessorForAllCollections(_job.TargetConnectionString!);
+                _log.WriteLine("Change stream processor started for all collections.");
+
+                return TaskResult.Success;
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error in starting online migration. Details: {ex}", LogType.Error);
+                return TaskResult.FailedAfterRetries;
+            }
+        }
 
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
@@ -512,6 +546,18 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("Resuming migration.");
             }
             
+
+            if(_job.IsOnline && _job.AggresiveChangeStream)
+            {
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                //deliberately not awaiting this task, since it is expected to run in parallel with the migration
+                StartOnlineForJobCollections(_cts.Token, _migrationProcessor!);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
+                await Task.Delay(30000);
+            }
+
+
             result = await new RetryHelper().ExecuteTask(
                 () => MigrateJobCollections(_cts.Token),
                 (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(

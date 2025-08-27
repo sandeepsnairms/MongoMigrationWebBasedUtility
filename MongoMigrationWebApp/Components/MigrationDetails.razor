@@ -56,8 +56,14 @@
                 <div class="mb-3 checkbox-container">
                     <div class="checkbox-group">
                         <label title="Begin change stream processing once all collections are processed.">
-                            <input type="checkbox" id="startCSAfterUploads" disabled="@(!NewMode || !isOnline)" @bind="startCSAfterUploads" />
-                            Delay Change Stream
+                            <input type="checkbox" id="startCSAfterUploads" disabled="@(!NewMode || !isOnline || aggressiveCS)" @bind="startCSAfterUploads" />
+                            Delayed Change Stream
+                        </label>
+                    </div>
+                    <div class="checkbox-group">
+                        <label title="Enable Aggressive Change stream if opLog is small. Helps reduce risk of resume tokem expiry.">
+                            <input type="checkbox" id="enableAggressiveCS" disabled="@(!NewMode || !isOnline || startCSAfterUploads)" @bind="aggressiveCS" />
+                            Aggressive Change Stream
                         </label>
                     </div>
                     <div class="checkbox-group">
@@ -140,6 +146,7 @@
     private bool isSimulatedRun = false; // Variable to track the dummy run option
     private bool isOnline = true; // Default to online migration
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
+    private bool aggressiveCS = false; // if the migration is online, aggressive change stream can be enabled
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
@@ -154,8 +161,8 @@
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
-    var val = e?.Value?.ToString() ?? string.Empty;
-    isOnline = val == "Online";
+        var val = e?.Value?.ToString() ?? string.Empty;
+        isOnline = val == "Online";
     }
 
     private bool ShowWarning()
@@ -196,6 +203,8 @@
             isSimulatedRun = false;
             skipIndexes = false;
             appendMode = true;
+            aggressiveCS = false;
+            startCSAfterUploads = true;
         }
         else
         {
@@ -206,6 +215,8 @@
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
             isOnline = Job?.IsOnline ?? false;
+            startCSAfterUploads = Job?.CSStartsAfterAllUploads ?? true;
+            aggressiveCS = Job?.AggresiveChangeStream ?? false; 
             enableSyncBack = (Job?.SyncBackEnabled ?? false) && isOnline && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
             jobType = Job?.JobType ?? JobType.MongoDriver;
             selectedOption = jobType switch
@@ -313,7 +324,8 @@
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
             SyncBackEnabled = (enableSyncBack && isOnline && !isSimulatedRun) ? true : false,
-            CSStartsAfterAllUploads = startCSAfterUploads
+            CSStartsAfterAllUploads = startCSAfterUploads,
+            AggresiveChangeStream = aggressiveCS
         };
         await OnSubmit.InvokeAsync(job);
     }
