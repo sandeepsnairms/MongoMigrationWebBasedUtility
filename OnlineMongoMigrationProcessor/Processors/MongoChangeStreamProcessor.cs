@@ -340,7 +340,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    if (!mu.InitialDocumenReplayed && !_job.IsSimulatedRun)
+                    if (!mu.InitialDocumenReplayed && !_job.IsSimulatedRun && !_job.AggresiveChangeStream)
                     {
                         // Guard targetCollection for non-simulated runs
                         if (targetCollection == null)
@@ -348,18 +348,18 @@ namespace OnlineMongoMigrationProcessor
                             var targetDb2 = _targetClient.GetDatabase(databaseName);
                             targetCollection = targetDb2.GetCollection<BsonDocument>(collectionName);
                         }
-                        //if (AutoReplayFirstChangeInResumeToken(mu.ResumeDocumentId, mu.ResumeTokenOperation, sourceCollection!, targetCollection!, mu))
-                        //{
-                        //    // If the first change was replayed, we can proceed
-                        //    mu.InitialDocumenReplayed = true;
-                        //    _jobList?.Save();
+                        if (AutoReplayFirstChangeInResumeToken(mu.ResumeDocumentId, mu.ResumeTokenOperation, sourceCollection!, targetCollection!, mu))
+                        {
+                            // If the first change was replayed, we can proceed
+                            mu.InitialDocumenReplayed = true;
+                            _jobList?.Save();
 
-                        //}
-                        //else
-                        //{
-                        //    _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.", LogType.Error);
-                        //    throw new Exception($"Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.");
-                        //}
+                        }
+                        else
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.", LogType.Error);
+                            throw new Exception($"Failed to replay the first change for {sourceCollection!.CollectionNamespace}. Skipping change stream processing for this collection.");
+                        }
                     }
 
                     if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && resumeToken == null && !(_job.JobType==JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 

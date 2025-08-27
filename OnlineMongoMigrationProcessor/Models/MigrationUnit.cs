@@ -11,6 +11,12 @@ using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace OnlineMongoMigrationProcessor
 {
+    public class NameValuePair
+    {
+        public string Name { get; set; } = "";
+        public string? Value { get; set; }
+    }
+
     public class MigrationUnit
     {
         public string DatabaseName { get; set; }
@@ -22,49 +28,32 @@ namespace OnlineMongoMigrationProcessor
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         [JsonProperty("ResumeDocumentId")]
-        private object? _resumeDocumentIdRaw { get; set; }
+        public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
 
         [JsonIgnore]
         public BsonDocument? ResumeDocumentId
         {
             get
             {
-                if (_resumeDocumentIdRaw == null)
-                    return null;
-                var rawString = _resumeDocumentIdRaw.ToString();
-                if (string.IsNullOrEmpty(rawString))
-                    return null;
-                return getResumeDocumentId(rawString);
-            }
-            set => _resumeDocumentIdRaw = value;
-        }
-
-        private BsonDocument getResumeDocumentId(string raw)
-        {
-            JToken token = JToken.Parse(raw);
-
-
-            if (token is JArray jArr)
-            {
-                // Convert array of {Name,Value} to doc
-                return new BsonDocument(
-                    jArr.Select(j =>
-                        new BsonElement(j["Name"]!.ToString(), BsonValue.Create(j["Value"]!.ToString()))
-                    )
-                );
-            }
-            else if (token is JObject jObj)
-            {
-                // Convert single object {Name,Value} to doc
-                return new BsonDocument
+                if (ResumeDocumentIdRaw == null) return null;
+                var doc = new BsonDocument();
+                foreach (var nv in ResumeDocumentIdRaw)
                 {
-                    { jObj["Name"]!.ToString(), BsonValue.Create(jObj["Value"]!.ToString()) }
-                };
+                    doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
+                        ? BsonNull.Value
+                        : BsonValue.Create(nv.Value);
+                }
+                return doc;
             }
-            else
-                return new BsonDocument();
-            
+            set
+            {
+                if (value == null) { ResumeDocumentIdRaw = null; return; }
+                ResumeDocumentIdRaw = value.Elements
+                    .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
+                    .ToList();
+            }
         }
+
 
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
