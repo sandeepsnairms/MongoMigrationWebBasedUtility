@@ -207,6 +207,14 @@ namespace OnlineMongoMigrationProcessor
                 ? mu.MigrationChunks[chunkIndex].DumpQueryDocCount
                 : Helper.GetMigrationUnitDocCount(mu);
 
+            if(docCount> 100_000 && Environment.ProcessorCount>2)
+            {
+                // for large chunks, we can increase number of insertion workers to speed up the process
+                int workers = Math.Min(Environment.ProcessorCount / 2, 8); // max 8 workers
+                args = $"{args} --numInsertionWorkersPerCollection={workers}";
+                _log.WriteLine($"Restore will use {workers} insertion workers for {dbName}.{colName}[{chunkIndex}]");
+            }
+
             try
             {
                 if (_processExecutor == null)
