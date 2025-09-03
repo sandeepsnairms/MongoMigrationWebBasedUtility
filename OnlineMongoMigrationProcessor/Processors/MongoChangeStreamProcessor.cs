@@ -928,21 +928,21 @@ namespace OnlineMongoMigrationProcessor
             {
                 // Get context for aggressive change stream functionality
                 bool isAggressive = _job.AggresiveChangeStream;
-                bool isRestoreComplete = mu.RestoreComplete;
+                bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
 
                 // Use unified methods that handle both normal and aggressive scenarios
                 int insertFailures = await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
                     mu, collection, insertEvents, counterDelegate, _log, _syncBackPrefix, 
-                    batchSize, isAggressive, jobId, _targetClient);
+                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
 
                 int updateFailures = await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
                     mu, collection, updateEvents, counterDelegate, _log, _syncBackPrefix, 
-                    batchSize, isAggressive, jobId, _targetClient);
+                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
 
                 int deleteFailures = await MongoHelper.ProcessDeletesAsync<MigrationUnit>(
                     mu, collection, deleteEvents, counterDelegate, _log, _syncBackPrefix, 
-                    batchSize, isAggressive, isRestoreComplete, jobId, _targetClient);
+                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
 
                 var totalFailures = insertFailures + updateFailures + deleteFailures;
                 if (totalFailures > 0)
@@ -958,9 +958,9 @@ namespace OnlineMongoMigrationProcessor
 
         }       
 
-        public async Task CleanupAggressiveCSAsync(MigrationUnit mu)
+        private async Task CleanupAggressiveCSAsync(MigrationUnit mu)
         {
-            if (!_job.AggresiveChangeStream || !mu.RestoreComplete)
+            if (!_job.AggresiveChangeStream || !mu.RestoreComplete || _job.IsSimulatedRun)
             {
                 return;
             }
@@ -987,21 +987,7 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"Processing aggressive change stream cleanup for {mu.DatabaseName}.{mu.CollectionName}");
                 
                 long deletedCount = await aggressiveHelper.DeleteStoredDocsAsync(mu.DatabaseName, mu.CollectionName);
-                
-                if (deletedCount > 0)
-                {
-                    // Update counters
-                    if (!_syncBack)
-                        mu.CSDocsDeleted += deletedCount;
-                    else
-                        mu.SyncBackDocsDeleted += deletedCount;
-                        
-                    _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: {deletedCount} documents deleted");
-                }
-                else
-                {
-                    _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: No documents to delete");
-                }
+
 
                 // Mark cleanup as completed
                 lock (_cleanupLock)
@@ -1010,6 +996,23 @@ namespace OnlineMongoMigrationProcessor
                     mu.AggressiveCacheDeletedOn = DateTime.UtcNow;
                 }
 
+                // retry deletion in case some documents were added during the first deletion pass
+                deletedCount += await aggressiveHelper.DeleteStoredDocsAsync(mu.DatabaseName, mu.CollectionName);
+
+                if (deletedCount > 0)
+                {
+                    // Update counters
+                    if (!_syncBack)
+                        mu.CSDocsDeleted += deletedCount;
+                    else
+                        mu.SyncBackDocsDeleted += deletedCount;
+
+                    _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: {deletedCount} documents deleted");
+                }
+                else
+                {
+                    _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: No documents to delete");
+                }
                 // Save the updated state
                 _jobList?.Save();
             }
@@ -1071,7 +1074,7 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, _job.Id ?? string.Empty);
-                    await aggressiveHelper.CleanupTempCollectionsAsync();
+                    await aggressiveHelper.CleanupTempDatabaseAsync();
                 }
                 catch (Exception ex)
                 {
