@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
@@ -251,6 +253,19 @@ namespace OnlineMongoMigrationProcessor
             return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
         }
 
+        public static string GetChangeStreamMode(MigrationJob job)
+        {
+            if (job == null || !job.IsOnline)
+                return "N/A";
+
+            if (job.AggresiveChangeStream)
+                return "Aggressive";
+            else if (job.CSStartsAfterAllUploads)
+                return "Delayed";
+            else
+                return "Immediate";
+        }
+
         public static List<MigrationUnit> PopulateJobCollections(string namespacesToMigrate)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
@@ -285,6 +300,15 @@ namespace OnlineMongoMigrationProcessor
                             if (!unitsToAdd.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
                             {
                                 mu.UserFilter = item.Filter;
+
+                                if (!string.IsNullOrEmpty(item.DataTypeFor_Id) && Enum.TryParse<DataType>(item.DataTypeFor_Id, out var parsedDataType))
+                                {
+                                    mu.DataTypeFor_Id = parsedDataType;
+                                }
+                                else
+                                {
+                                    mu.DataTypeFor_Id = null;
+                                }
                                 unitsToAdd.Add(mu);
                             }
                         }
@@ -517,6 +541,8 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
+
+
 
 
 

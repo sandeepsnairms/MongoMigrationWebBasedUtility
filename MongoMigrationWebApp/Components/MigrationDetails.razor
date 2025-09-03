@@ -19,7 +19,7 @@
                 @if (NewMode)
                 {
                     <div class="mb-3">
-                        <label for="mongo-options" class="form-label">Migration Tool:</label>
+                        <label for="mongo-options" class="form-label">Migration Tool</label>
                         <select id="mongo-options" class="form-select" @onchange="OnSelectionChanged">
                             @if (AllowMongoDump)
                             {
@@ -46,27 +46,24 @@
                 </div>
                 <div class="mb-3">
                     <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
-                        Migration Mode:
+                        Migration Mode
                     </label>                
                     <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
                         <option value="Offline">Offline</option>
                         <option value="Online">Online</option>
                     </select>
                 </div>
-                <div class="mb-3 checkbox-container">
-                    <div class="checkbox-group">
-                        <label title="Begin change stream processing once all collections are processed.">
-                            <input type="checkbox" id="startCSAfterUploads" disabled="@(!NewMode || !isOnline)" @bind="startCSAfterUploads" />
-                            Delay Change Stream
-                        </label>
-                    </div>
-                    <div class="checkbox-group">
-                        <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
-                            <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || !isOnline)" @bind="enableSyncBack" />
-                            Post Migration Sync Back
-                        </label>
-                    </div>
+                <div class="mb-3">
+                    <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
+                        Change Stream Mode
+                    </label>                
+                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || !isOnline)">
+                        <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
+                        <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
+                        <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
+                    </select>
                 </div>
+                
                
                 <div class="mb-3">
                     <label for="sourceConnectionString" class="form-label">Source Connection String</label>
@@ -82,7 +79,14 @@
                     <label for="nameSpaces" class="form-label">Collections To Migrate</label>
                     <textarea id="nameSpaces" disabled="@(!NewMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme" class="form-control" @bind="namespaces"></textarea>
                 </div>
-
+                <div class="mb-3 checkbox-container">
+                    <div class="checkbox-group">
+                        <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
+                            <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || !isOnline)" @bind="enableSyncBack" />
+                            Post Migration Sync Back
+                        </label>
+                    </div>
+                </div>
                 <div class="mb-3">
                     <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
                         <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" />
@@ -140,6 +144,7 @@
     private bool isSimulatedRun = false; // Variable to track the dummy run option
     private bool isOnline = true; // Default to online migration
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
+    private bool aggressiveCS = false; // if the migration is online, aggressive change stream can be enabled
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
@@ -148,14 +153,38 @@
     private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
     private string targetEndpoint = string.Empty;   // Target endpoint extracted from the connection string
     private string SelectedMode = "Offline"; // default or loaded value
+    private string SelectedChangeStreamMode = "Delayed"; // Default change stream mode
     private string sourceConnectionString { get; set; } = string.Empty;
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
-    var val = e?.Value?.ToString() ?? string.Empty;
-    isOnline = val == "Online";
+        var val = e?.Value?.ToString() ?? string.Empty;
+        isOnline = val == "Online";
+    }
+
+    private void OnChangeStreamModeChanged(ChangeEventArgs e)
+    {
+        var val = e?.Value?.ToString() ?? "Delayed";
+        SelectedChangeStreamMode = val;
+        
+        // Map dropdown selection to boolean flags
+        switch (val)
+        {
+            case "Delayed":
+                startCSAfterUploads = true;
+                aggressiveCS = false;
+                break;
+            case "Immediate":
+                startCSAfterUploads = false;
+                aggressiveCS = false;
+                break;
+            case "Aggressive":
+                startCSAfterUploads = false;
+                aggressiveCS = true;
+                break;
+        }
     }
 
     private bool ShowWarning()
@@ -180,7 +209,6 @@
         }       
     }
 
-
     protected override void OnInitialized()
     {
         if (NewMode)
@@ -196,6 +224,9 @@
             isSimulatedRun = false;
             skipIndexes = false;
             appendMode = true;
+            aggressiveCS = false;
+            startCSAfterUploads = true;
+            SelectedChangeStreamMode = "Delayed"; // Default to Delayed
         }
         else
         {
@@ -206,6 +237,8 @@
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
             isOnline = Job?.IsOnline ?? false;
+            startCSAfterUploads = Job?.CSStartsAfterAllUploads ?? true;
+            aggressiveCS = Job?.AggresiveChangeStream ?? false; 
             enableSyncBack = (Job?.SyncBackEnabled ?? false) && isOnline && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
             jobType = Job?.JobType ?? JobType.MongoDriver;
             selectedOption = jobType switch
@@ -217,6 +250,20 @@
             isSimulatedRun = Job?.IsSimulatedRun ?? false;
             skipIndexes = Job?.SkipIndexes ?? false;
             appendMode = Job?.AppendMode ?? false;
+
+            // Set dropdown value based on existing boolean flags
+            if (aggressiveCS)
+            {
+                SelectedChangeStreamMode = "Aggressive";
+            }
+            else if (startCSAfterUploads)
+            {
+                SelectedChangeStreamMode = "Delayed";
+            }
+            else
+            {
+                SelectedChangeStreamMode = "Immediate";
+            }
 
             if(isOnline)
             {
@@ -313,7 +360,8 @@
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
             SyncBackEnabled = (enableSyncBack && isOnline && !isSimulatedRun) ? true : false,
-            CSStartsAfterAllUploads = startCSAfterUploads
+            CSStartsAfterAllUploads = startCSAfterUploads,
+            AggresiveChangeStream = aggressiveCS
         };
         await OnSubmit.InvokeAsync(job);
     }

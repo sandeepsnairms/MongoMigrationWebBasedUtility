@@ -129,11 +129,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                         var lt = bounds.lt;
 
                         // Filter by id bounds
-                        FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!));
+                        FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
 
-                        // Filter by datatype
+                        // Filter by datatype (skip if DataTypeFor_Id is specified)
                         BsonDocument? userFilter = BsonDocument.Parse(mu.UserFilter ?? "{}");
-                        BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter);
+                        BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter, mu.DataTypeFor_Id.HasValue);
 
                         // Combine the filters using $and
                         combinedFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
@@ -189,8 +189,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 try
                 {
-                    mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!));
-                    mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!));
+                    mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                    mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
                 }
                 catch (Exception ex)
                 {

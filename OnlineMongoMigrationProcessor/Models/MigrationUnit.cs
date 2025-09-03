@@ -2,13 +2,21 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
 namespace OnlineMongoMigrationProcessor
 {
+    public class NameValuePair
+    {
+        public string Name { get; set; } = "";
+        public string? Value { get; set; }
+    }
+
     public class MigrationUnit
     {
         public string DatabaseName { get; set; }
@@ -20,13 +28,30 @@ namespace OnlineMongoMigrationProcessor
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         [JsonProperty("ResumeDocumentId")]
-        private object? _resumeDocumentIdRaw { get; set; }
+        public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
 
         [JsonIgnore]
         public BsonDocument? ResumeDocumentId
         {
-            get => _resumeDocumentIdRaw != null ? BsonDocument.Create(_resumeDocumentIdRaw) : null;
-            set => _resumeDocumentIdRaw = value;
+            get
+            {
+                if (ResumeDocumentIdRaw == null) return null;
+                var doc = new BsonDocument();
+                foreach (var nv in ResumeDocumentIdRaw)
+                {
+                    doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
+                        ? BsonNull.Value
+                        : BsonValue.Create(nv.Value);
+                }
+                return doc;
+            }
+            set
+            {
+                if (value == null) { ResumeDocumentIdRaw = null; return; }
+                ResumeDocumentIdRaw = value.Elements
+                    .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
+                    .ToList();
+            }
         }
 
 
@@ -79,6 +104,12 @@ namespace OnlineMongoMigrationProcessor
         public long SyncBackDocsDeleted { get; set; }
         public long SyncBackDocsUpdated { get; set; }
         public long SyncBackDuplicateDocsSkipped { get; set; }
+
+        public DataType? DataTypeFor_Id { get; set; } = null;
+
+        // Aggressive Change Stream cleanup tracking
+        public bool AggressiveCacheDeleted { get; set; } = false;
+        public DateTime? AggressiveCacheDeletedOn { get; set; }
 
         public List<MigrationChunk> MigrationChunks { get; set; }
 

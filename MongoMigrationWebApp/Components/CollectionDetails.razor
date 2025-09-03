@@ -68,6 +68,7 @@
                                 <td class="group">
                                     @if (MigrationJob?.IsOnline ?? false)
                                     {
+                                        <div><span class="lbl">Mode:</span> @Helper.GetChangeStreamMode(MigrationJob)</div>
                                         <div><span class="lbl">Started On (UTC):</span> @(MigrationUnit.ChangeStreamStartedOn?.ToString() ?? "N/A")</div>
                                         <div><span class="lbl">Start Resume Token:</span> @(MigrationUnit.OriginalResumeToken ?? "N/A")</div>
                                         <div><span class="lbl">Current Timestamp:</span> @MigrationUnit.CursorUtcTimestamp</div>
@@ -80,6 +81,10 @@
                                         <div><span class="lbl">Updated:</span> @FormatLong(MigrationUnit.CSDocsUpdated) (from @FormatLong(MigrationUnit.CSUpdateEvents) events)</div>
                                         <div><span class="lbl">Duplicate Processed:</span> @FormatLong(MigrationUnit.CSDuplicateDocsSkipped) skipped</div>
                                         <div><span class="lbl">Failed (with retries):</span> @FormatLong(MigrationUnit.CSErrors)</div>
+                                        @if (Helper.GetChangeStreamMode(MigrationJob) == "Aggressive" && MigrationUnit.AggressiveCacheDeleted)
+                                        {
+                                            <div><span class="lbl">Aggressive:</span> Completed on @(MigrationUnit.AggressiveCacheDeletedOn?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A") UTC</div>
+                                        }
                                     }
                                     else
                                     {

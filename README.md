@@ -587,9 +587,10 @@ When creating or resuming a job, you can tailor behavior via these options:
 - Skip Indexes
     - If ON: Skips index creation on target (data only). Forced ON for RU-optimized copy. You can create indexes separately before migration.
 
-- Delay Change Stream (CS starts after uploads)
-    - If ON: For online jobs, change stream processing starts only after all collections finish bulk upload.
-    - If OFF: Change streams start per-collection after that collection’s bulk upload is done.
+- Change Stream Modes
+    - Delayed: Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.
+    - Immediate: Start change stream processing immediately as each collection is processed.
+    - Aggressive: Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.
 
 - Post Migration Sync Back
     - For online jobs, after Cut Over you can enable syncing from target back to source. This reduces rollback risk. UI shows Time Since Sync Back once active.
@@ -610,7 +611,8 @@ You can specify collections in two ways:
 
 Notes:
 - Filters must be valid MongoDB query JSON (as a string). Only supports basic operators (`eq`,`lt`,`lte`,`gt`,`gte`,`in`) on root fields. They apply to both bulk copy and change stream.
-- RU-optimized copy does not support filters; provide only DatabaseName and CollectionName.
+- Specify DataTypeFor_Id if the collection contains only a single data type for the _id field. Supported values are: ObjectId, Int, Int64, Decimal128, Date, BinData, String, and Object.
+- RU-optimized copy does not support filters or DataTypeFor_Id ; provide only DatabaseName and CollectionName.
 - System collections are not supported.
 
 ### CollectionInfoFormat Format
@@ -619,7 +621,7 @@ Notes:
 [
     { "CollectionName": "Customers", "DatabaseName": "SalesDB", "Filter": "{ \"status\": \"active\"}" },
     { "CollectionName": "Orders", "DatabaseName": "SalesDB", "Filter": "{ \"orderDate\": { \"$gte\": { \"$date\": \"2024-01-01T00:00:00Z\" } } }" },
-    { "CollectionName": "Products", "DatabaseName": "InventoryDB", "Filter": null }
+    { "CollectionName": "Products", "DatabaseName": "InventoryDB", "DataTypeFor_Id": "ObjectId" }
 ]
 ```
 
