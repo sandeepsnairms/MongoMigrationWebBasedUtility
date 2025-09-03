@@ -229,13 +229,7 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");                
                 //_job.CurrentlyActive = false;//causes failure do not undo
-                _jobList?.Save();
-
-                // For aggressive change stream, run final cleanup when change stream processing completes (only once)
-                if (_job.AggresiveChangeStream && !_syncBack && !_finalCleanupExecuted)
-                {
-                    _ = Task.Run(async () => await CleanupAggressiveCSAllCollectionsAsync());
-                }
+                _jobList?.Save();              
 
             }
             catch (OperationCanceledException)
