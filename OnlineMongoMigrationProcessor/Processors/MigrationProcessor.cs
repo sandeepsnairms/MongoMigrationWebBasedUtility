@@ -81,6 +81,10 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         protected bool CheckChangeStreamAlreadyProcessingAsync(ProcessorContext ctx)
         {
+            if(_job.AggresiveChangeStream)
+                return false; // Skip processing if aggressive change stream resume is enabled
+
+
             if (_postUploadCSProcessing)
                 return true; // Skip processing if post-upload CS processing is already in progress
 
@@ -105,8 +109,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             return false;
         }
 
-        protected void AddCollectionToChangeStreamQueue(MigrationUnit mu, string targetConnectionString)
+        public void AddCollectionToChangeStreamQueue(MigrationUnit mu, string targetConnectionString)
         {
+
             if (_job.IsOnline && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads && !_job.IsSimulatedRun)
             {
                 if (_targetClient == null)
@@ -120,9 +125,10 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
         }
 
-        protected void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
+        public void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
         {
-            if (_job.IsOnline && _job.CSStartsAfterAllUploads && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
+
+            if (_job.IsOnline && _job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_job)|| _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
@@ -144,7 +150,20 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 try
                 {
-                    if (_job.IsOnline && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads)
+                    // For aggressive change stream, process cleanup when collection is complete
+                    if (_job.AggresiveChangeStream && _job.IsOnline && mu.RestoreComplete)
+                    {
+                        if (_targetClient == null)
+                            _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
+
+                        if (_changeStreamProcessor == null && _sourceClient != null && _targetClient != null)
+                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
+
+                        // Process cleanup for this specific collection
+                        _ = _changeStreamProcessor?.CleanupAggressiveCSAsync(mu);
+                    }
+
+                    if (_job.IsOnline && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads && !_job.AggresiveChangeStream)
                     {
                         AddCollectionToChangeStreamQueue(mu, ctx.TargetConnectionString);
                     }
@@ -152,24 +171,43 @@ namespace OnlineMongoMigrationProcessor.Processors
                     if (!_cts.Token.IsCancellationRequested)
                     {
                         var migrationJob = _jobList.MigrationJobs?.Find(m => m.Id == ctx.JobId);
-                        if (migrationJob != null && !_job.IsOnline && Helper.IsOfflineJobCompleted(migrationJob))
+                        
+                        // Check if the job is completed (all collections processed)
+                        if (migrationJob != null && Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                            _log.WriteLine($"{migrationJob.Id} completed.");
+                           
 
-                            migrationJob.IsCompleted = true;
-                            StopProcessing(true);
-                            _jobList.Save();
+                            // For aggressive change stream jobs, run final cleanup for all collections
+                            if (_job.AggresiveChangeStream && _job.IsOnline)
+                            {
+                                if (_targetClient == null)
+                                    _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
+
+                                if (_changeStreamProcessor == null && _sourceClient != null && _targetClient != null)
+                                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
+
+                                // Process final cleanup for all collections
+                                _ = _changeStreamProcessor?.CleanupAggressiveCSAllCollectionsAsync();
+                            }
+
+                            if (!_job.IsOnline)
+                            {
+                                _log.WriteLine($"{migrationJob.Id} completed.");
+                                migrationJob.IsCompleted = true;
+                                StopProcessing(true);
+                                _jobList.Save();
+                            }
                         }
-                        else if (!_postUploadCSProcessing)
+                        else if (!_postUploadCSProcessing && _job.IsOnline)
                         {
                             // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
                             RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Do nothing
+                    _log.WriteLine($"Error in PostCopyChangeStreamProcessor: {ex.Message}", LogType.Error);
                 }
             }
             return Task.CompletedTask;

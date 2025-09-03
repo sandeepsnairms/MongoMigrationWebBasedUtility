@@ -54,7 +54,7 @@ namespace OnlineMongoMigrationProcessor
                     initialized = true;
                     if (ChangeStreamMaxDocsInBatch > 10000)
                         ChangeStreamMaxDocsInBatch = 10000;
-                    if (ChangeStreamBatchDuration < 30)
+                    if (ChangeStreamBatchDuration < 20)
                         ChangeStreamBatchDuration = 120;
                 }
             }

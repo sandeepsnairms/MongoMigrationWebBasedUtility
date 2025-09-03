@@ -68,6 +68,10 @@ else
                 <tr><td class="nowrap">Job Type</td><td>@GetToolName(MigrationJob.JobType)</td></tr>
                 <tr><td class="nowrap">Started On (UTC)</td><td>@(MigrationJob.StartedOn?.ToString() ?? "N/A")</td></tr>
                 <tr><td class="nowrap">Is Online</td><td>@(MigrationJob.IsOnline ? "Yes" : "No")</td></tr>
+                @if (MigrationJob.IsOnline)
+                {
+                    <tr><td class="nowrap">Change Stream Mode</td><td>@Helper.GetChangeStreamMode(MigrationJob)</td></tr>
+                }
                 <tr><td class="nowrap">Is Completed</td><td>@(MigrationJob.IsCompleted ? "Yes" : "No")</td></tr>
                 <tr><td class="nowrap">Sync Back Enabled</td><td>@(MigrationJob.SyncBackEnabled ? "Yes" : "No")</td></tr>
                 <tr><td class="nowrap">Source Endpoint</td><td class="wrap">@MigrationJob.SourceEndpoint</td></tr>
@@ -116,6 +120,7 @@ else
                 </td>
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.ChangeStreamStartedOn?.ToString() ?? "N/A")</div>
+                    <div><span class="lbl">Mode:</span> @Helper.GetChangeStreamMode(MigrationJob)</div>
                     <div><span class="lbl">Last Event Age:</span> @Helper.GetChangeStreamLag(mu, false)</div>
                     <div><span class="lbl">Last Batch Count:</span> @FormatLong(mu.CSUpdatesInLastBatch)</div>
                     <div><span class="lbl">Inserted:</span> @FormatLong(mu.CSDocsInserted) (from @FormatLong(mu.CSDInsertEvents) events)</div>
@@ -123,6 +128,10 @@ else
                     <div><span class="lbl">Updated:</span> @FormatLong(mu.CSDocsUpdated) (from @FormatLong(mu.CSUpdateEvents) events)</div>
                     <div><span class="lbl">Duplicate Processed:</span> @FormatLong(mu.CSDuplicateDocsSkipped) skipped</div>
                     <div><span class="lbl">Failed (with retries):</span> @FormatLong(mu.CSErrors)</div>
+                    @if (Helper.GetChangeStreamMode(MigrationJob) == "Aggressive" && mu.AggressiveCacheDeleted)
+                    {
+                        <div><span class="lbl">Aggressive:</span> Completed on @(mu.AggressiveCacheDeletedOn?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A") UTC</div>
+                    }
                 </td>
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.SyncBackChangeStreamStartedOn?.ToString() ?? "N/A")</div>

@@ -261,7 +261,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         else
                         { 
-                            chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts);
+                            chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts, unit);
                         
                             if (chunks.Count == 0)
                             {
@@ -377,7 +377,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (result == TaskResult.Success)
                             {
                                 // since CS processsing has started, we can break the loop. No need to process all collections
-                                if (_job.IsOnline && _job.SyncBackEnabled && _job.CSPostProcessingStarted && Helper.IsOfflineJobCompleted(_job))
+                                if (_job.IsOnline && _job.SyncBackEnabled && (_job.CSPostProcessingStarted && !_job.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(_job))
                                     break;
                             }
                             else
@@ -407,7 +407,41 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success; //all  actiivty completed successfully
         }
 
-        
+
+
+        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor)
+        {
+            try
+            {
+                if (_job == null)
+                    return TaskResult.FailedAfterRetries;
+
+                var unitsForMigrate = _job.MigrationUnits ?? new List<MigrationUnit>();
+                foreach (var migrationUnit in unitsForMigrate)
+                {
+                    if (_migrationCancelled)
+                        return TaskResult.Canceled;
+
+                    if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                    {
+                        if (await MongoHelper.CheckCollectionExists(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                        {
+                            processor.AddCollectionToChangeStreamQueue(migrationUnit, _job.TargetConnectionString!);
+                            _log.WriteLine($"Change stream processor added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to the monitoring queue.");
+                        }
+                    }
+                }
+                processor.RunChangeStreamProcessorForAllCollections(_job.TargetConnectionString!);
+                _log.WriteLine("Change stream processor started for all collections.");
+
+                return TaskResult.Success;
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error in starting online migration. Details: {ex}", LogType.Error);
+                return TaskResult.FailedAfterRetries;
+            }
+        }
 
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
@@ -512,6 +546,18 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("Resuming migration.");
             }
             
+
+            if(_job.IsOnline && _job.AggresiveChangeStream)
+            {
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                //deliberately not awaiting this task, since it is expected to run in parallel with the migration
+                StartOnlineForJobCollections(_cts.Token, _migrationProcessor!);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+
+                await Task.Delay(30000);
+            }
+
+
             result = await new RetryHelper().ExecuteTask(
                 () => MigrateJobCollections(_cts.Token),
                 (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(
@@ -587,7 +633,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
         }
 
-        private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, CancellationToken cts, string userFilter = "")
+        private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, CancellationToken cts, MigrationUnit migrationUnit, string userFilter = "")
         {
             try
             {
@@ -610,20 +656,19 @@ namespace OnlineMongoMigrationProcessor.Workers
                 long targetChunkSizeBytes = _config.ChunkSizeInMb * 1024 * 1024;
                 var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
 
-
                 if (_job.JobType == JobType.DumpAndRestore)
                 {
                     totalChunks = totalChunksBySize;
-                    minDocsInChunk = documentCount / totalChunks;
+                    minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
                     _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}");
                 }
                 else
                 {
                     _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}");
-                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
+                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / (SamplePartitioner.MaxSamples == 0 ? 1 : SamplePartitioner.MaxSamples));
                     totalChunks = Math.Max(1, totalChunks); // At least one chunk
                     totalChunks = Math.Max(totalChunks, totalChunksBySize);
-                    minDocsInChunk = documentCount / totalChunks;
+                    minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
                 }
 
                 List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
@@ -632,21 +677,33 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     _log.WriteLine($"Chunking {databaseName}.{collectionName}");
 
-                    List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
+                    List<DataType> dataTypes;
 
-                    if (_config.ReadBinary)
+                    // Check if DataTypeFor_Id is specified in the MigrationUnit
+                    if (migrationUnit?.DataTypeFor_Id.HasValue == true)
                     {
-                        dataTypes.Add(DataType.BinData);
+                        // Use only the specified DataType and skip filtering by other data types
+                        dataTypes = new List<DataType> { migrationUnit.DataTypeFor_Id.Value };
+                        _log.WriteLine($"Using specified DataType for _id: {migrationUnit.DataTypeFor_Id.Value}");
+                    }
+                    else
+                    {
+                        // Use all DataTypes (original behavior)
+                        dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
+
+                        if (_config.ReadBinary)
+                        {
+                            dataTypes.Add(DataType.BinData);
+                        }
                     }
 
                     foreach (var dataType in dataTypes)
                     {
                         long docCountByType;
-                        ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, userFilter, totalChunks, dataType, minDocsInChunk, cts, out docCountByType);
+                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, userFilter, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!, out docCountByType);
 
-                        if (docCountByType == 0  || chunkBoundaries == null) continue;
+                        if (docCountByType == 0 || chunkBoundaries == null) continue;
 
-                        
                         CreateSegments(chunkBoundaries, migrationChunks, dataType);
                     }
                 }
@@ -658,8 +715,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 return migrationChunks;
             }
-            catch(OperationCanceledException)
-            {               
+            catch (OperationCanceledException)
+            {
                 return new List<MigrationChunk>();
             }
             catch (Exception ex)

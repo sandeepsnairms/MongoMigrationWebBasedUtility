@@ -11,5 +11,6 @@ namespace OnlineMongoMigrationProcessor.Models
         public required string CollectionName { get; set; }
         public required string DatabaseName { get; set; }
         public string? Filter { get; set; }
+        public string? DataTypeFor_Id { get; set; }
     }
 }
