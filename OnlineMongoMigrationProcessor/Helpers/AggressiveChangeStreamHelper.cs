@@ -25,37 +25,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             _jobId = jobId ?? throw new ArgumentNullException(nameof(jobId));
         }
 
-        /// <summary>
-        /// Stores a document key in the temporary collection for later deletion after bulk copy completion.
-        /// </summary>
-        /// <param name="sourceDatabaseName">Source database name</param>
-        /// <param name="sourceCollectionName">Source collection name</param>
-        /// <param name="documentKey">Document key from change stream delete event</param>
-        /// <returns>True if successfully stored, false otherwise</returns>
-        public async Task<bool> StoreDocumentKeyAsync(string sourceDatabaseName, string sourceCollectionName, BsonDocument documentKey)
-        {
-            try
-            {
-                var tempDb = _targetClient.GetDatabase(_jobId);
-                var tempCollectionName = $"{sourceDatabaseName}_{sourceCollectionName}";
-                var tempCollection = tempDb.GetCollection<BsonDocument>(tempCollectionName);
-
-                var tempDocument = new BsonDocument
-                {
-                    ["_id"] = ObjectId.GenerateNewId(), // Use generated ObjectId for temp collection
-                    ["documentKey"] = documentKey,
-                    ["createdAt"] = DateTime.UtcNow
-                };
-
-                await tempCollection.InsertOneAsync(tempDocument);               
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _log.WriteLine($"Error storing document key for aggressive change stream: {ex.Message}", LogType.Error);
-                return false;
-            }
-        }
+        
 
         /// <summary>
         /// Stores multiple document keys in the temporary collection for later deletion after bulk copy completion.
@@ -96,38 +66,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             }
         }
 
-        /// <summary>
-        /// Removes a document key from the temporary collection when an insert/update is processed for the same key.
-        /// </summary>
-        /// <param name="sourceDatabaseName">Source database name</param>
-        /// <param name="sourceCollectionName">Source collection name</param>
-        /// <param name="documentKey">Document key to remove</param>
-        /// <returns>True if successfully removed, false otherwise</returns>
-        public async Task<bool> RemoveDocumentKeyAsync(string sourceDatabaseName, string sourceCollectionName, BsonDocument documentKey)
-        {
-            try
-            {
-                var tempDb = _targetClient.GetDatabase(_jobId);
-                var tempCollectionName = $"{sourceDatabaseName}_{sourceCollectionName}";
-                var tempCollection = tempDb.GetCollection<BsonDocument>(tempCollectionName);
-
-                var filter = Builders<BsonDocument>.Filter.Eq("documentKey", documentKey);
-                var result = await tempCollection.DeleteManyAsync(filter);
-
-                if (result.DeletedCount > 0)
-                {
-                    _log.AddVerboseMessage($"Removed {result.DeletedCount} document key(s) from temp collection {tempCollectionName}: {documentKey.ToJson()}");
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _log.WriteLine($"Error removing document key from temp collection: {ex.Message}", LogType.Error);
-                return false;
-            }
-        }
-
+        
         /// <summary>
         /// Removes multiple document keys from the temporary collection when inserts/updates are processed for the same keys.
         /// This is a batch version for better performance.
@@ -172,6 +111,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         /// <summary>
         /// Processes all stored document keys for deletion after bulk copy completion.
+        /// Uses pagination to handle large collections efficiently.
         /// </summary>
         /// <param name="sourceDatabaseName">Source database name</param>
         /// <param name="sourceCollectionName">Source collection name</param>
@@ -192,58 +132,75 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     return 0;
                 }
 
-                // Get all stored document keys
-                var storedKeys = await tempCollection.Find(Builders<BsonDocument>.Filter.Empty).ToListAsync();
-                
-                if (storedKeys.Count == 0)
-                {                   
-                    return 0;
-                }
-
                 // Get target collection
                 var targetDb = _targetClient.GetDatabase(sourceDatabaseName);
                 var targetCollection = targetDb.GetCollection<BsonDocument>(sourceCollectionName);
 
-                long deletedCount = 0;
-                const int batchSize = 100;
+                long totalDeletedCount = 0;
+                const int pageSize = 1000; // Process 1000 documents at a time from temp collection
+                const int deleteBatchSize = 100; // Process 100 deletes at a time for target collection
+                int pageNumber = 0;
 
-                // Process deletes in batches
-                for (int i = 0; i < storedKeys.Count; i += batchSize)
+                // Process documents in pages to avoid loading everything into memory
+                while (true)
                 {
-                    var batch = storedKeys.Skip(i).Take(batchSize);
-                    var deleteModels = new List<DeleteOneModel<BsonDocument>>();
+                    var skip = pageNumber * pageSize;
+                    
+                    // Get a page of stored document keys
+                    var storedKeysPage = await tempCollection
+                        .Find(Builders<BsonDocument>.Filter.Empty)
+                        .Skip(skip)
+                        .Limit(pageSize)
+                        .ToListAsync();
 
-                    foreach (var storedDoc in batch)
+                    if (storedKeysPage.Count == 0)
                     {
-                        if (storedDoc.Contains("documentKey"))
+                        // No more documents to process
+                        break;
+                    }
+
+                    _log.AddVerboseMessage($"Processing page {pageNumber + 1} with {storedKeysPage.Count} stored document keys for {sourceDatabaseName}.{sourceCollectionName}");
+
+                    // Process deletes in batches within this page
+                    for (int i = 0; i < storedKeysPage.Count; i += deleteBatchSize)
+                    {
+                        var batch = storedKeysPage.Skip(i).Take(deleteBatchSize);
+                        var deleteModels = new List<DeleteOneModel<BsonDocument>>();
+
+                        foreach (var storedDoc in batch)
                         {
-                            var documentKey = storedDoc["documentKey"].AsBsonDocument;
-                            var filter = MongoHelper.BuildFilterFromDocumentKey(documentKey);
-                            deleteModels.Add(new DeleteOneModel<BsonDocument>(filter));
+                            if (storedDoc.Contains("documentKey"))
+                            {
+                                var documentKey = storedDoc["documentKey"].AsBsonDocument;
+                                var filter = MongoHelper.BuildFilterFromDocumentKey(documentKey);
+                                deleteModels.Add(new DeleteOneModel<BsonDocument>(filter));
+                            }
+                        }
+
+                        if (deleteModels.Count > 0)
+                        {
+                            try
+                            {
+                                var result = await targetCollection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
+                                totalDeletedCount += result.DeletedCount;
+                                _log.AddVerboseMessage($"Deleted {result.DeletedCount} documents from {sourceDatabaseName}.{sourceCollectionName} (page {pageNumber + 1}, batch {i / deleteBatchSize + 1})");
+                            }
+                            catch (MongoBulkWriteException<BsonDocument> ex)
+                            {
+                                totalDeletedCount += ex.Result?.DeletedCount ?? 0;
+                                _log.WriteLine($"Bulk delete partially failed for {sourceDatabaseName}.{sourceCollectionName} (page {pageNumber + 1}, batch {i / deleteBatchSize + 1}): {ex.Message}", LogType.Error);
+                            }
                         }
                     }
 
-                    if (deleteModels.Count > 0)
-                    {
-                        try
-                        {
-                            var result = await targetCollection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
-                            deletedCount += result.DeletedCount;
-                            _log.AddVerboseMessage($"Deleted {result.DeletedCount} documents from {sourceDatabaseName}.{sourceCollectionName} (batch {i / batchSize + 1})");
-                        }
-                        catch (MongoBulkWriteException<BsonDocument> ex)
-                        {
-                            deletedCount += ex.Result?.DeletedCount ?? 0;
-                            _log.WriteLine($"Bulk delete partially failed for {sourceDatabaseName}.{sourceCollectionName}: {ex.Message}", LogType.Error);
-                        }
-                    }
+                    pageNumber++;
                 }
 
                 // Clean up temp collection after processing
                 await tempDb.DropCollectionAsync(tempCollectionName);
-                _log.WriteLine($"Processed aggressive change stream deletes for {sourceDatabaseName}.{sourceCollectionName}: {deletedCount} documents deleted, temp collection cleaned up");
+                _log.WriteLine($"Processed aggressive change stream deletes for {sourceDatabaseName}.{sourceCollectionName}: {totalDeletedCount} documents deleted, temp collection cleaned up");
 
-                return deletedCount;
+                return totalDeletedCount;
             }
             catch (Exception ex)
             {
@@ -256,7 +213,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// Cleans up all temporary collections for the job.
         /// </summary>
         /// <returns>True if cleanup was successful, false otherwise</returns>
-        public async Task<bool> CleanupTempCollectionsAsync()
+        public async Task<bool> CleanupTempDatabaseAsync()
         {
             try
             {

@@ -509,7 +509,10 @@ namespace OnlineMongoMigrationProcessor
                     ),
                     new BsonDocument("$project", new BsonDocument
                     {
-                        { "_id", 1 }
+                        { "_id", 1 },
+                        { "fullDocument", 1 },
+                        { "ns", 1 },
+                        { "documentKey", 1 }
                     })
                     };
             }
@@ -570,10 +573,8 @@ namespace OnlineMongoMigrationProcessor
                             }
 
                             unit.ResumeTokenOperation = (ChangeStreamOperationType)change.OperationType;
-
-                            string json = change.DocumentKey.ToJson(); // save as string
-                            // Deserialize the BsonValue to ensure it is stored correctly
-                            unit.ResumeDocumentId = BsonSerializer.Deserialize<BsonDocument>(json); ;
+                            string json = change.DocumentKey.ToJson();                            
+                            unit.ResumeDocumentId = json;
 
                             // Exit immediately after first change detected
                             return; ;
@@ -1025,6 +1026,7 @@ namespace OnlineMongoMigrationProcessor
             string logPrefix,
             int batchSize = 50,
             bool isAggressive = false,
+            bool isAggressiveComplete = true,
             string jobId = "",
             MongoClient? targetClient = null)
         {
@@ -1034,7 +1036,7 @@ namespace OnlineMongoMigrationProcessor
 
             // Initialize aggressive change stream helper if needed
             AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && targetClient != null)
+            if (isAggressive && !isAggressiveComplete && targetClient != null)
             {
                 aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
             }
@@ -1049,8 +1051,14 @@ namespace OnlineMongoMigrationProcessor
                     .Select(g => g.First()) // Take the first occurrence of each document
                     .ToList();
 
+                //log all ids inbatch as CSV
+                //var idsInBatch = deduplicatedInserts
+                //    .Select(e => e.FullDocument["_id"].ToString())
+                //    .ToList();
+                //log.WriteLine($"{logPrefix} Processing {deduplicatedInserts.Count} inserts (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
+
                 // Remove from temp collection if aggressive mode is enabled
-                if (isAggressive && aggressiveHelper != null)
+                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
                 {
                     var documentKeysToRemove = deduplicatedInserts
                         .Where(insertEvent => insertEvent.DocumentKey != null)
@@ -1095,6 +1103,7 @@ namespace OnlineMongoMigrationProcessor
 
                     incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, (int)duplicateKeyErrors.Count);
 
+
                     // Log non-duplicate key errors for inserts
                     var otherErrors = ex.WriteErrors
                         .Where(err => err.Code != 11000)
@@ -1118,87 +1127,7 @@ namespace OnlineMongoMigrationProcessor
             return failures; // Return the count of failures encountered during processing
         }
 
-        public static async Task<int> ProcessInsertsWithAggressiveStreamAsync<TMigration>(
-            TMigration mu,
-            IMongoCollection<BsonDocument> collection,
-            List<ChangeStreamDocument<BsonDocument>> events,
-            CounterDelegate<TMigration> incrementCounter,
-            Log log,
-            string logPrefix,
-            bool isAggressive,
-            string jobId,
-            MongoClient targetClient,
-            int batchSize = 50)
-        {
-            int failures = 0;
-            string databaseName = collection.Database.DatabaseNamespace.DatabaseName;
-            string collectionName = collection.CollectionNamespace.CollectionName;
-
-            // Aggressive mode: insert directly into the target collection
-            foreach (var batch in events.Chunk(batchSize))
-            {
-                // Deduplicate inserts by _id to avoid duplicate key errors within the same batch
-                var deduplicatedInserts = batch
-                    .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
-                    .GroupBy(e => e.DocumentKey.ToJson()) //use document key instead of _id
-                    .Select(g => g.First()) // Take the first occurrence of each document
-                    .ToList();
-
-                var insertModels = deduplicatedInserts
-                    .Select(e =>
-                    {
-                        var doc = e.FullDocument;
-                        var id = doc["_id"];
-
-                        if (id.IsObjectId)
-                            doc["_id"] = id.AsObjectId;
-
-                        return new InsertOneModel<BsonDocument>(doc);
-                    })
-                    .ToList();
-
-                long insertCount = 0;
-                try
-                {
-                    if (insertModels.Any())
-                    {
-                        var result = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
-                        insertCount += result.InsertedCount;
-                    }
-                }
-                catch (MongoBulkWriteException<BsonDocument> ex)
-                {
-                    insertCount += ex.Result?.InsertedCount ?? 0;
-
-                    var duplicateKeyErrors = ex.WriteErrors
-                        .Where(err => err.Code == 11000)
-                        .ToList();
-
-                    incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, (int)duplicateKeyErrors.Count);
-
-                    // Log non-duplicate key errors for inserts
-                    var otherErrors = ex.WriteErrors
-                        .Where(err => err.Code != 11000)
-                        .ToList();
-
-                    failures += otherErrors.Count;
-
-                    if (otherErrors.Any())
-                    {
-                        log.WriteLine($"{logPrefix} Insert BulkWriteException (non-duplicate errors) in {collection.CollectionNamespace.FullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
-                    }
-                    else if (duplicateKeyErrors.Count > 0)
-                    {
-                        log.AddVerboseMessage($"{logPrefix} Skipped {duplicateKeyErrors.Count} duplicate key inserts in {collection.CollectionNamespace.FullName}");
-                    }
-                }
-                finally
-                {
-                    incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
-                }
-            }
-            return failures;
-        }
+        
 
         public static async Task<int> ProcessUpdatesAsync<TMigration>(
             TMigration mu,
@@ -1209,6 +1138,7 @@ namespace OnlineMongoMigrationProcessor
             string logPrefix,
             int batchSize = 50,
             bool isAggressive = false,
+            bool isAggressiveComplete = true,
             string jobId = "",
             MongoClient? targetClient = null)
         {
@@ -1218,7 +1148,7 @@ namespace OnlineMongoMigrationProcessor
 
             // Initialize aggressive change stream helper if needed
             AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && targetClient != null)
+            if (isAggressive && !isAggressiveComplete && targetClient != null)
             {
                 aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
             }
@@ -1234,7 +1164,7 @@ namespace OnlineMongoMigrationProcessor
                     .ToList();
 
                 // Remove from temp collection if aggressive mode is enabled
-                if (isAggressive && aggressiveHelper != null)
+                if (isAggressive  && isAggressiveComplete && aggressiveHelper != null)
                 {
                     var documentKeysToRemove = groupedUpdates
                         .Where(updateEvent => updateEvent.DocumentKey != null)
@@ -1342,128 +1272,7 @@ namespace OnlineMongoMigrationProcessor
             }
             return failures; // Return the count of failures encountered during processing
         }
-
-        public static async Task<int> ProcessUpdatesWithAggressiveStreamAsync<TMigration>(
-            TMigration mu,
-            IMongoCollection<BsonDocument> collection,
-            List<ChangeStreamDocument<BsonDocument>> events,
-            CounterDelegate<TMigration> incrementCounter,
-            Log log,
-            string logPrefix,
-            bool isAggressive,
-            string jobId,
-            MongoClient targetClient,
-            int batchSize = 50)
-        {
-            int failures = 0;
-            string databaseName = collection.Database.DatabaseNamespace.DatabaseName;
-            string collectionName = collection.CollectionNamespace.CollectionName;
-
-            // Aggressive mode: update directly in the target collection
-            foreach (var batch in events.Chunk(batchSize))
-            {
-                // Group by _id to handle multiple updates to the same document in the batch
-                var groupedUpdates = batch
-                    .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
-                    .GroupBy(e => e.DocumentKey.ToJson()) //use document key instead of _id
-                    .Select(g => g.OrderByDescending(e => e.ClusterTime ?? new MongoDB.Bson.BsonTimestamp(0, 0)).First()) // Take the latest update for each document
-                    .ToList();
-
-                var updateModels = groupedUpdates
-                    .Select(e =>
-                    {
-                        var doc = e.FullDocument;
-                        var id = doc["_id"];
-
-                        if (id.IsObjectId)
-                            id = id.AsObjectId;
-
-                        var filter = MongoHelper.BuildFilterFromDocumentKey(e.DocumentKey);
-                        //var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
-
-                        // Use ReplaceOneModel instead of UpdateOneModel to avoid conflicts with unique indexes
-                        return new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
-                    })
-                    .ToList();
-
-                long updateCount = 0;
-                try
-                {
-                    if (updateModels.Any())
-                    {
-
-                        var result = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
-
-                        updateCount += result.ModifiedCount + result.Upserts.Count;
-                    }
-                }
-                catch (MongoBulkWriteException<BsonDocument> ex)
-                {
-                    updateCount += (ex.Result?.ModifiedCount ?? 0) + (ex.Result?.Upserts?.Count ?? 0);
-
-                    var duplicateKeyErrors = ex.WriteErrors
-                        .Where(err => err.Code == 11000)
-                        .ToList();
-
-                    incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, duplicateKeyErrors.Count);
-
-                    // Log non-duplicate key errors
-                    var otherErrors = ex.WriteErrors
-                        .Where(err => err.Code != 11000)
-                        .ToList();
-
-                    failures += otherErrors.Count;
-
-                    if (otherErrors.Any())
-                    {
-                        log.WriteLine($"{logPrefix} Update BulkWriteException (non-duplicate errors) in {collection.CollectionNamespace.FullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
-                    }
-
-                    // Handle duplicate key errors by attempting individual operations
-                    if (duplicateKeyErrors.Any())
-                    {
-                        log.AddVerboseMessage($"{logPrefix} Handling {duplicateKeyErrors.Count} duplicate key errors for updates in {collection.CollectionNamespace.FullName}");
-
-                        // Process failed operations individually
-                        foreach (var error in duplicateKeyErrors)
-                        {
-                            try
-                            {
-                                // Try to find the corresponding update model and retry as update without upsert
-                                var failedModel = updateModels[error.Index];
-                                if (failedModel is ReplaceOneModel<BsonDocument> replaceModel)
-                                {
-                                    // Try update without upsert first
-                                    var updateResult = await collection.ReplaceOneAsync(replaceModel.Filter, replaceModel.Replacement, new ReplaceOptions { IsUpsert = false });
-                                    if (updateResult.ModifiedCount > 0)
-                                    {
-                                        updateCount++;
-                                    }
-                                    else
-                                    {
-                                        // Document might not exist, but we can't upsert due to unique constraint
-                                        // This is expected in some scenarios - count as skipped
-
-                                        incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, 1);
-                                    }
-                                }
-                            }
-                            catch (Exception retryEx)
-                            {
-                                failures++;
-                                log.AddVerboseMessage($"{logPrefix} Individual retry failed for update in {collection.CollectionNamespace.FullName}: {retryEx.Message}");
-                            }
-                        }
-                    }
-                }
-                finally
-                {
-
-                    incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
-                }
-            }
-            return failures; // Return the count of failures encountered during processing
-        }
+       
 
         public static async Task<int> ProcessDeletesAsync<TMigration>(
             TMigration mu,
@@ -1474,7 +1283,7 @@ namespace OnlineMongoMigrationProcessor
             string logPrefix,
             int batchSize = 50,
             bool isAggressive = false,
-            bool isRestoreComplete = true,
+            bool isAggressiveComplete = true,
             string jobId = "",
             MongoClient? targetClient = null)
         {
@@ -1484,7 +1293,7 @@ namespace OnlineMongoMigrationProcessor
 
             // Initialize aggressive change stream helper if needed
             AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && !isRestoreComplete && targetClient != null)
+            if (isAggressive && !isAggressiveComplete && targetClient != null)
             {
                 aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
             }
@@ -1499,8 +1308,15 @@ namespace OnlineMongoMigrationProcessor
                     .Select(g => g.First())
                     .ToList();
 
+
+                //log all ids inbatch as CSV
+                //var idsInBatch = deduplicatedDeletes
+                //    .Select(e => e.DocumentKey.ToJson())
+                //    .ToList();
+                //log.WriteLine($"{logPrefix} Processing {deduplicatedDeletes.Count} deletes (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
+
                 // Handle aggressive change stream scenario
-                if (isAggressive && !isRestoreComplete && aggressiveHelper != null)
+                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
                 {
                     // Store document keys in temporary collection instead of deleting (batch operation)
                     var documentKeysToStore = deduplicatedDeletes

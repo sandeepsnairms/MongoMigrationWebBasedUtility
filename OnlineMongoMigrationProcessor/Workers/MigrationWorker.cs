@@ -231,7 +231,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     unit.SourceStatus = CollectionStatus.OK;
 
                     var db = _sourceClient!.GetDatabase(unit.DatabaseName);
-                    var coll = db.GetCollection<BsonDocument>(unit.CollectionName);                    
+                    var coll = db.GetCollection<BsonDocument>(unit.CollectionName);
 
                     unit.EstimatedDocCount = coll.EstimatedDocumentCount();
 
@@ -242,13 +242,24 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _jobList?.Save();
                     }, _cts);
 
-                    DateTime currrentTime= DateTime.UtcNow;
+                    DateTime currrentTime = DateTime.UtcNow;
 
-                    if (_job.IsOnline && unit.ResetChangeStream)
+                    if (_job.IsOnline)
                     {
-                        //if  reset CS needto get the latest CS resume token synchronously
-                        _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
-                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit,15,_cts);
+                        if (unit.ResetChangeStream)
+                        { 
+                            //if  reset CS needto get the latest CS resume token synchronously
+                            _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
+                        }
+                        else
+                        {
+                            //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
+                            _ = Task.Run(async () =>
+                            {
+                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
+                            });
+                        }
                     }
 
                     if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
@@ -297,16 +308,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 }
                             }                            
 
-                        }
-
-                        if (_job.IsOnline)
-                        {
-                            //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
-                            _ = Task.Run(async () =>
-                            {
-                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit,300,_cts);
-                            });
-                        }                        
+                        }                                               
                        
                         
                         if(unit.UserFilter!= null && unit.UserFilter.Any())
@@ -571,8 +573,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             {                
                 if (result == TaskResult.Success)
                 {
-                    _job.IsCompleted = true;
-                    _jobList.Save();
+                    if (!_job.IsOnline)
+                    {
+                        _job.IsCompleted = true;
+                        _jobList.Save();
+                    }
                 }
 
                 StopMigration();
