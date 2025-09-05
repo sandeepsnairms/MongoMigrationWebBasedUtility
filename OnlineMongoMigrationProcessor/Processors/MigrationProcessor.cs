@@ -128,19 +128,28 @@ namespace OnlineMongoMigrationProcessor.Processors
         public void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
         {
 
-            if (_job.IsOnline && _job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_job)|| _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
+            if (_job.IsOnline)
             {
-                _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
+                if(_job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_job) || _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
+                {
+                    _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
-                if (_targetClient == null)
-                    _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
+                    if (_targetClient == null)
+                        _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
-                // Ensure _sourceClient is not null before using it
-                if (_changeStreamProcessor == null && _sourceClient != null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _config);
+                    // Ensure _sourceClient is not null before using it
+                    if (_changeStreamProcessor == null && _sourceClient != null)
+                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _config);
 
-                var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
-            }
+                    var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
+                }
+                if (_job.AggresiveChangeStream && (Helper.IsOfflineJobCompleted(_job) || _job.IsSimulatedRun))
+                {
+                    // Process cleanup for all collection
+                    _ = _changeStreamProcessor?.CleanupAggressiveCSAllCollectionsAsync();
+                }
+            }      
+
         }
 
 
@@ -153,14 +162,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     // For aggressive change stream, process cleanup when collection is complete
                     if (_job.AggresiveChangeStream && _job.IsOnline && mu.RestoreComplete)
                     {
-                        if (_targetClient == null)
-                            _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
-
-                        if (_changeStreamProcessor == null && _sourceClient != null && _targetClient != null)
-                            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
-
-                        // Process cleanup for this specific collection
-                        _ = _changeStreamProcessor?.CleanupAggressiveCSAsync(mu);
+                        AddCollectionToChangeStreamQueue(mu, ctx.TargetConnectionString);
                     }
 
                     if (_job.IsOnline && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads && !_job.AggresiveChangeStream)
@@ -175,20 +177,8 @@ namespace OnlineMongoMigrationProcessor.Processors
                         // Check if the job is completed (all collections processed)
                         if (migrationJob != null && Helper.IsOfflineJobCompleted(migrationJob))
                         {
-                           
-
                             // For aggressive change stream jobs, run final cleanup for all collections
-                            if (_job.AggresiveChangeStream && _job.IsOnline)
-                            {
-                                if (_targetClient == null)
-                                    _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
-
-                                if (_changeStreamProcessor == null && _sourceClient != null && _targetClient != null)
-                                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
-
-                                // Process final cleanup for all collections
-                                _ = _changeStreamProcessor?.CleanupAggressiveCSAllCollectionsAsync();
-                            }
+                            RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
 
                             if (!_job.IsOnline)
                             {

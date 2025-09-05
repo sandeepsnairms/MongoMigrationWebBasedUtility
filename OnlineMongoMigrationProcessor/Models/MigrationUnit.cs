@@ -27,32 +27,34 @@ namespace OnlineMongoMigrationProcessor
         public bool InitialDocumenReplayed { get; set; } = false;
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
-        [JsonProperty("ResumeDocumentId")]
-        public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
+        public string? ResumeDocumentId { get; set; }
 
-        [JsonIgnore]
-        public BsonDocument? ResumeDocumentId
-        {
-            get
-            {
-                if (ResumeDocumentIdRaw == null) return null;
-                var doc = new BsonDocument();
-                foreach (var nv in ResumeDocumentIdRaw)
-                {
-                    doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
-                        ? BsonNull.Value
-                        : BsonValue.Create(nv.Value);
-                }
-                return doc;
-            }
-            set
-            {
-                if (value == null) { ResumeDocumentIdRaw = null; return; }
-                ResumeDocumentIdRaw = value.Elements
-                    .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
-                    .ToList();
-            }
-        }
+        //[JsonProperty("ResumeDocumentId")]
+        //public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
+
+        //[JsonIgnore]
+        //public BsonDocument? ResumeDocumentId
+        //{
+        //    get
+        //    {
+        //        if (ResumeDocumentIdRaw == null) return null;
+        //        var doc = new BsonDocument();
+        //        foreach (var nv in ResumeDocumentIdRaw)
+        //        {
+        //            doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
+        //                ? BsonNull.Value
+        //                : BsonValue.Create(nv.Value);
+        //        }
+        //        return doc;
+        //    }
+        //    set
+        //    {
+        //        if (value == null) { ResumeDocumentIdRaw = null; return; }
+        //        ResumeDocumentIdRaw = value.Elements
+        //            .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
+        //            .ToList();
+        //    }
+        //}
 
 
         public DateTime? BulkCopyStartedOn { get; set; }
