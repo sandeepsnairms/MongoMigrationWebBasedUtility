@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Reflection.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 namespace OnlineMongoMigrationProcessor.Workers
@@ -165,6 +166,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
 					return TaskResult.Canceled;
 				}
+
+                // Check for segments with missing documents after all segments are processed
+                //typically caused because of online changes, we saw in some cases some documents are missed.
+                await CheckForMissingDocumentsAsync(jobList, mu, migrationChunkIndex, filter, cancellationToken, isWriteSimulated);
             }
             catch (OperationCanceledException)
             {
@@ -173,8 +178,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (!errors.IsEmpty)
             {
-               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process");
-                
+               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process");                
             }
 
             if (mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0 || errors.Count>0)
@@ -270,6 +274,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                             .Skip(pageIndex * _pageSize)
                             .Limit(_pageSize)
                             .ToListAsync(cancellationToken);
+
+                        segment.ResultDocCount+= set.Count;
 
                         if (set.Count == 0)
                             break;
@@ -393,6 +399,192 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                _log.WriteLine($"Document copy encountered write errors for {location}. Details: {error.ToString()}");
 
+            }
+        }
+
+        private async Task CheckForMissingDocumentsAsync(
+            JobList jobList,
+            MigrationUnit mu,
+            int migrationChunkIndex,
+            FilterDefinition<BsonDocument> baseFilter,
+            CancellationToken cancellationToken,
+            bool isWriteSimulated)
+        {
+            var migrationChunk = mu.MigrationChunks[migrationChunkIndex];
+            
+            // Check if any segment has QueryDocCount > ResultDocCount
+            var segmentsWithMissingDocs = migrationChunk.Segments
+                .Where(s => s.QueryDocCount > s.ResultDocCount)
+                .ToList();
+
+            if (!segmentsWithMissingDocs.Any())
+            {
+                _log.WriteLine($"No missing documents detected during chunk-level comparison of {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+                return;
+            }
+
+            long missingDocCount = segmentsWithMissingDocs.Sum(s => s.QueryDocCount - s.ResultDocCount);
+            _log.WriteLine($"Starting chunk-level comparison for {missingDocCount} missing documents in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}].");
+
+            // Build chunk-level filter instead of segment-specific filters
+            FilterDefinition<BsonDocument> chunkFilter = baseFilter;
+            
+            if (migrationChunk.Segments.Count > 1)
+            {
+#pragma warning disable CS8604 // Possible null reference argument.
+                var bounds = SamplePartitioner.GetChunkBounds(migrationChunk.Gte, migrationChunk.Lt, migrationChunk.DataType);
+#pragma warning restore CS8604 // Possible null reference argument.
+                var gte = bounds.gte;
+                var lt = bounds.lt;
+
+                FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, migrationChunk.DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                
+                BsonDocument? userFilter = BsonDocument.Parse(mu.UserFilter ?? "{}");
+                BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(migrationChunk.DataType, userFilter, mu.DataTypeFor_Id.HasValue);
+
+                chunkFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
+            }
+
+            try
+            {
+                await CompareChunkDocumentsAsync(migrationChunk, mu, migrationChunkIndex, chunkFilter, cancellationToken, isWriteSimulated);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex.Message}", LogType.Error);
+            }
+
+            jobList.Save();
+        }
+
+        private async Task CompareChunkDocumentsAsync(
+            MigrationChunk migrationChunk,
+            MigrationUnit mu,
+            int migrationChunkIndex,
+            FilterDefinition<BsonDocument> chunkFilter,
+            CancellationToken cancellationToken,
+            bool isWriteSimulated)
+        {
+            var missingDocuments = new List<BsonDocument>();
+            int pageIndex = 0;
+            const int comparisonPageSize = 100; // Smaller page size for comparison
+            long processedCount = 0;
+            long foundMissingCount = 0;
+            
+            _log.WriteLine($"Starting chunk-level document comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                // Get documents from source using chunk filter
+                var sourceDocuments = await _sourceCollection.Aggregate()
+                    .Match(chunkFilter)
+                    .Skip(pageIndex * comparisonPageSize)
+                    .Limit(comparisonPageSize)
+                    .ToListAsync(cancellationToken);
+
+                if (sourceDocuments.Count == 0)
+                    break;
+
+                processedCount += sourceDocuments.Count;
+
+                // Batch check documents in target using $in operator for better performance
+                var documentIds = sourceDocuments
+                    .Where(doc => doc.Contains("_id"))
+                    .Select(doc => doc["_id"])
+                    .ToList();
+
+                if (documentIds.Count > 0)
+                {
+                    var targetFilter = Builders<BsonDocument>.Filter.In("_id", documentIds);
+                    var existingTargetDocs = await _targetCollection.Find(targetFilter)
+                        .Project(Builders<BsonDocument>.Projection.Include("_id"))
+                        .ToListAsync(cancellationToken);
+
+                    var existingIds = new HashSet<BsonValue>(existingTargetDocs.Select(doc => doc["_id"]));
+
+                    // Find missing documents
+                    foreach (var sourceDoc in sourceDocuments)
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                            return;
+
+                        if (!sourceDoc.Contains("_id"))
+                            continue;
+
+                        var idValue = sourceDoc["_id"];
+
+                        if (!existingIds.Contains(idValue))
+                        {
+                            missingDocuments.Add(sourceDoc);
+                            foundMissingCount++;
+                            
+                            // Attempt to insert the missing document if not simulated
+                            if (!isWriteSimulated)
+                            {
+                                try
+                                {
+                                    await _targetCollection.InsertOneAsync(sourceDoc, cancellationToken: cancellationToken);
+                                    Interlocked.Increment(ref _successCount);
+                                    
+                                    // Update the segment that should contain this document
+                                    UpdateSegmentResultCount(migrationChunk);
+                                }
+                                catch (MongoDuplicateKeyException)
+                                {
+                                    // Document was inserted by another process, skip                                   
+                                    Interlocked.Increment(ref _skippedCount);
+                                    
+                                    // Update the segment that should contain this document
+                                    UpdateSegmentResultCount(migrationChunk);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _log.WriteLine($"Failed to insert missing document with _id: {idValue}. Error: {ex.Message}", LogType.Error);
+                                    Interlocked.Increment(ref _failureCount);
+                                }
+                            }                            
+                        }
+                    }
+                }
+
+                pageIndex++;
+
+                // Log progress every 10 pages
+                if (pageIndex % 10 == 0)
+                {
+                    _log.AddVerboseMessage($"Processed {processedCount} documents, found {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+                }
+
+                // Limit the number of pages to prevent infinite loops
+                if (pageIndex > 10000)
+                {
+                    _log.WriteLine($"Reached maximum page limit while comparing chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]", LogType.Error);
+                    break;
+                }
+            }
+
+            if (foundMissingCount > 0)
+            {
+                _log.WriteLine($"Found and processed {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] out of {processedCount} total documents checked");
+                migrationChunk.SkippedAsDuplicateCount = _skippedCount;
+                migrationChunk.DumpResultDocCount = _successCount + _skippedCount;
+                migrationChunk.RestoredSuccessDocCount = _successCount + _skippedCount;
+                migrationChunk.RestoredFailedDocCount = _failureCount;
+            }
+            else
+            {
+                _log.WriteLine($"No missing documents found during chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+            }
+        }
+
+        private void UpdateSegmentResultCount(MigrationChunk migrationChunk)
+        {
+            // Simple approach: increment the first segment that might contain this document
+            // This is an approximation since we're not using segment-specific logic
+            var segmentToUpdate = migrationChunk.Segments.FirstOrDefault(s => s.QueryDocCount > s.ResultDocCount);
+            if (segmentToUpdate != null)
+            {
+                segmentToUpdate.ResultDocCount++;
             }
         }
     }

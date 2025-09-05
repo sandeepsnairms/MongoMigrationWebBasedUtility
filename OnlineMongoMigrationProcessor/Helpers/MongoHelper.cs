@@ -509,7 +509,10 @@ namespace OnlineMongoMigrationProcessor
                     ),
                     new BsonDocument("$project", new BsonDocument
                     {
-                        { "_id", 1 }
+                        { "_id", 1 },
+                        { "fullDocument", 1 },
+                        { "ns", 1 },
+                        { "documentKey", 1 }
                     })
                     };
             }
@@ -570,10 +573,8 @@ namespace OnlineMongoMigrationProcessor
                             }
 
                             unit.ResumeTokenOperation = (ChangeStreamOperationType)change.OperationType;
-
-                            string json = change.DocumentKey.ToJson(); // save as string
-                            // Deserialize the BsonValue to ensure it is stored correctly
-                            unit.ResumeDocumentId = BsonSerializer.Deserialize<BsonDocument>(json); ;
+                            string json = change.DocumentKey.ToJson();                            
+                            unit.ResumeDocumentId = json;
 
                             // Exit immediately after first change detected
                             return; ;
@@ -1050,6 +1051,12 @@ namespace OnlineMongoMigrationProcessor
                     .Select(g => g.First()) // Take the first occurrence of each document
                     .ToList();
 
+                //log all ids inbatch as CSV
+                //var idsInBatch = deduplicatedInserts
+                //    .Select(e => e.FullDocument["_id"].ToString())
+                //    .ToList();
+                //log.WriteLine($"{logPrefix} Processing {deduplicatedInserts.Count} inserts (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
+
                 // Remove from temp collection if aggressive mode is enabled
                 if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
                 {
@@ -1095,6 +1102,7 @@ namespace OnlineMongoMigrationProcessor
                         .ToList();
 
                     incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, (int)duplicateKeyErrors.Count);
+
 
                     // Log non-duplicate key errors for inserts
                     var otherErrors = ex.WriteErrors
@@ -1299,6 +1307,13 @@ namespace OnlineMongoMigrationProcessor
                     .Where(g => !string.IsNullOrEmpty(g.Key))
                     .Select(g => g.First())
                     .ToList();
+
+
+                //log all ids inbatch as CSV
+                //var idsInBatch = deduplicatedDeletes
+                //    .Select(e => e.DocumentKey.ToJson())
+                //    .ToList();
+                //log.WriteLine($"{logPrefix} Processing {deduplicatedDeletes.Count} deletes (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
 
                 // Handle aggressive change stream scenario
                 if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)

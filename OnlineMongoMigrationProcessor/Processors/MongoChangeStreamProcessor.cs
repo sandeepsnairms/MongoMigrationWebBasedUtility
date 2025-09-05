@@ -91,6 +91,10 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
+
+            
+
+
             lock (_processingLock)
             {
                 if (_isCSProcessing)
@@ -99,6 +103,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 _isCSProcessing = true;
             }
+
 
             bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
                .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
@@ -666,9 +671,9 @@ namespace OnlineMongoMigrationProcessor
         }
 
         // This method retrieves the event associated with the ResumeToken
-        private bool AutoReplayFirstChangeInResumeToken(BsonDocument? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, MigrationUnit mu)
+        private bool AutoReplayFirstChangeInResumeToken(string? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, MigrationUnit mu)
         {
-            if(documentId == null || documentId.IsBsonNull)
+            if(documentId == null || string.IsNullOrEmpty(documentId))
             {
                 _log.WriteLine($"Auto replay is empty for {sourceCollection.CollectionNamespace}.");
                 return true; // Skip if no document ID is provided
@@ -677,7 +682,9 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.");
             }
-            var filter = MongoHelper.BuildFilterFromDocumentKey(documentId);
+
+            var bsonDoc = BsonDocument.Parse(documentId);
+            var filter = MongoHelper.BuildFilterFromDocumentKey(bsonDoc);
             //var filter = Builders<BsonDocument>.Filter.Eq("_id", documentId); // Assuming _id is your resume token
             var result = sourceCollection.Find(filter).FirstOrDefault(); // Retrieve the document for the resume token
 
@@ -702,7 +709,7 @@ namespace OnlineMongoMigrationProcessor
                         if (result == null || result.IsBsonNull)
                         {
                             _log.WriteLine($"Processing {opType} operation for {sourceCollection.CollectionNamespace} with _id {documentId}. No document found on source, deleting it from target.");
-                            var deleteTTLFilter = MongoHelper.BuildFilterFromDocumentKey(documentId);
+                            var deleteTTLFilter = MongoHelper.BuildFilterFromDocumentKey(bsonDoc);
                             //var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", documentId);
                             try
                             {
@@ -750,7 +757,8 @@ namespace OnlineMongoMigrationProcessor
         private bool ProcessCursor(ChangeStreamDocument<BsonDocument> change, IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor, IMongoCollection<BsonDocument> targetCollection, string collNameSpace ,MigrationUnit mu, ChangeStreamDocuments changeStreamDocuments, ref long counter, BsonDocument userFilterDoc)
         {
             try
-            {
+            {               
+
                 //check if user filter condition is met
 
                 if (change.OperationType != ChangeStreamOperationType.Delete)
@@ -830,6 +838,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     case ChangeStreamOperationType.Insert:
 
+                        
                         IncrementEventCounter(mu, change.OperationType);
 
                         if (change.FullDocument != null && !change.FullDocument.IsBsonNull)
@@ -858,7 +867,6 @@ namespace OnlineMongoMigrationProcessor
                         }
                         break;
                     case ChangeStreamOperationType.Delete:
-
                         IncrementEventCounter(mu, change.OperationType);
                         changeStreamDocuments.AddDelete(change);
                         break;
@@ -931,11 +939,13 @@ namespace OnlineMongoMigrationProcessor
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
 
+              
+
                 // Use unified methods that handle both normal and aggressive scenarios
                 int insertFailures = await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
                     mu, collection, insertEvents, counterDelegate, _log, _syncBackPrefix, 
                     batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
-
+                                
                 int updateFailures = await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
                     mu, collection, updateEvents, counterDelegate, _log, _syncBackPrefix, 
                     batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
