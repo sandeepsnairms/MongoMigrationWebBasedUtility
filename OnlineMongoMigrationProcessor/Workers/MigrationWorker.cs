@@ -203,7 +203,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             if(ex is OperationCanceledException)
             {
-                _log.WriteLine($"{processName} operation was cancelled.");
+                _log.WriteLine($"{processName} operation was paused.");
                 return Task.FromResult(TaskResult.Canceled);
 			}
 			if (ex is MongoExecutionTimeoutException)

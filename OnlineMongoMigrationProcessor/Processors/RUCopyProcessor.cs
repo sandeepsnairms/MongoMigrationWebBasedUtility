@@ -98,7 +98,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                 if (results.Any(r => r == TaskResult.Canceled))
                 {
-                    _log.WriteLine($"RU copy operation for {ctx.DatabaseName}.{ctx.CollectionName} was cancelled.");
+                    _log.WriteLine($"RU copy operation for {ctx.DatabaseName}.{ctx.CollectionName} was paused.");
                     return TaskResult.Canceled;
                 }
 
@@ -324,7 +324,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
             if (ex is OperationCanceledException)
             {
-                _log.WriteLine($"RU copy operation was cancelled for {dbName}.{colName} partition {partitionId}");
+                _log.WriteLine($"RU copy operation was paused for {dbName}.{colName} partition {partitionId}");
                 return Task.FromResult(TaskResult.Abort);
             }
             else if (ex is MongoExecutionTimeoutException)
@@ -389,7 +389,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 }
                 else if (result == TaskResult.Canceled)
                 {
-                    _log.WriteLine($"RU copy operation for {ctx.DatabaseName}.{ctx.CollectionName} was cancelled.");
+                    _log.WriteLine($"RU copy operation for {ctx.DatabaseName}.{ctx.CollectionName} was paused.");
                     StopProcessing();
                     return TaskResult.Canceled;
                 }

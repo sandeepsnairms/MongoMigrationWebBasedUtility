@@ -22,7 +22,7 @@ namespace OnlineMongoMigrationProcessor
         {
             if (ex is OperationCanceledException)
             {
-                _log.WriteLine($"Document copy operation was cancelled for {dbName}.{colName}[{chunkIndex}]");
+                _log.WriteLine($"Document copy operation was paused for {dbName}.{colName}[{chunkIndex}]");
                 return Task.FromResult(TaskResult.Abort);
             }
             else if (ex is MongoExecutionTimeoutException)
@@ -96,7 +96,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else if(result == TaskResult.Canceled)
             {
-                _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName}[{chunkIndex}] was cancelled.");
+                _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName}[{chunkIndex}] was paused.");
 				return TaskResult.Canceled;
 			}
 			else

@@ -420,10 +420,12 @@ namespace OnlineMongoMigrationProcessor
             }
         }
         private static Tuple<bool, string, string> ValidateNamespaceFormatfromCSV(string input)
-        { 
+        {
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
             //string pattern = @"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$";
-            string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?\s]+$";
+            //string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?\s]+$";
+            string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?]+$";
+
 
 
             // Split the input by commas
@@ -469,7 +471,8 @@ namespace OnlineMongoMigrationProcessor
             }
             // Remove invalid characters and trim whitespace
             string sanitizedFileName = Regex.Replace(fileName, @"[<>:""/\\|?*]", "_").Trim();
-            
+            sanitizedFileName = sanitizedFileName.Replace(" ","_-sp-_");
+
             // Ensure the file name is not too long
             if (sanitizedFileName.Length > 255)
             {
