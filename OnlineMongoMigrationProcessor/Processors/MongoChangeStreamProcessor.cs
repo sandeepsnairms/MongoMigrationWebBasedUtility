@@ -239,7 +239,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (OperationCanceledException)
             {
-                _log.WriteLine($"{_syncBackPrefix}Change stream processing was cancelled.");
+                _log.WriteLine($"{_syncBackPrefix}Change stream processing was paused.");
 
             }
             catch (Exception ex)

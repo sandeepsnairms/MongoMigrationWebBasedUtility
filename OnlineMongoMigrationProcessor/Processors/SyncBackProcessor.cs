@@ -25,7 +25,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
             if (ex is OperationCanceledException)
             {
-                _log.WriteLine($"SyncBack operation was cancelled");
+                _log.WriteLine($"SyncBack operation was paused");
                 return Task.FromResult(TaskResult.Abort);
             }
             else if (ex is MongoExecutionTimeoutException)

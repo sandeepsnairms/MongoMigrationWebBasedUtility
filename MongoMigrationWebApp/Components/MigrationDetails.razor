@@ -57,7 +57,7 @@
                     <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
                         Change Stream Mode
                     </label>                
-                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || !isOnline)">
+                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || !isOnline || jobType == JobType.RUOptimizedCopy)">
                         <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
                         <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
                         <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
@@ -206,6 +206,9 @@
         if (jobType == JobType.RUOptimizedCopy)
         {
             skipIndexes = true; // Skip indexes for RU optimized copy
+            SelectedChangeStreamMode = "Immediate"; // Set to Immediate for RU optimized copy
+            startCSAfterUploads = false;
+            aggressiveCS = false;
         }       
     }
 

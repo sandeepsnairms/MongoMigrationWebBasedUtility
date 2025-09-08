@@ -47,7 +47,7 @@ namespace OnlineMongoMigrationProcessor
         {
             if (ex is OperationCanceledException)
             {
-                _log.WriteLine($"Dump operation was cancelled for {dbName}.{colName}[{chunkIndex}]");
+                _log.WriteLine($"Dump operation was paused for {dbName}.{colName}[{chunkIndex}]");
                 return Task.FromResult(TaskResult.Canceled);
             }
             else if (ex is MongoExecutionTimeoutException)
@@ -69,7 +69,7 @@ namespace OnlineMongoMigrationProcessor
             _cts.Token.ThrowIfCancellationRequested();
 
             // Build base args per attempt
-            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection={colName}  --out {folder}\\{chunkIndex}.bson";
+            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\"  --out {folder}\\{chunkIndex}.bson";
 
             // Disk space/backpressure check (retain existing behavior)
             bool continueDownloads;
@@ -162,7 +162,7 @@ namespace OnlineMongoMigrationProcessor
         {
             if (ex is OperationCanceledException)
             {
-                _log.WriteLine($"Restore operation was cancelled for {dbName}.{colName}[{chunkIndex}]");
+                _log.WriteLine($"Restore operation was paused for {dbName}.{colName}[{chunkIndex}]");
                 return Task.FromResult(TaskResult.Canceled);
             }
             else if (ex is MongoExecutionTimeoutException)
