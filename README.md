@@ -90,7 +90,7 @@ Follow these steps to migrate data from a cloud-based MongoDB VM or MongoDB Atla
 This option involves cloning the repository and building the C# project source files locally on a Windows machine. If you’re not comfortable working with code, consider using Option 2 below.
 
 
-1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/6.0)
+1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
 2. Clone/Download the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
 2. Open PowerShell.
 2. Navigate to the cloned project folder.
