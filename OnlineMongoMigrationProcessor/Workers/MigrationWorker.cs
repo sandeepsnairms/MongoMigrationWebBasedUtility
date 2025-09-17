@@ -194,7 +194,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         // Custom exception handler delegate with logic to control retry flow
         private Task<TaskResult> Default_ExceptionHandler(Exception ex, int attemptCount, string processName, int currentBackoff)
         {
-            _log.WriteLine($"{processName} attempt failed. Retrying in {currentBackoff} seconds...");
+            _log.WriteLine($"{processName} attempt {attemptCount} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
             return Task.FromResult(TaskResult.Retry);
         }
 
@@ -208,10 +208,13 @@ namespace OnlineMongoMigrationProcessor.Workers
 			}
 			if (ex is MongoExecutionTimeoutException)
             {
-                _log.WriteLine($"{processName} attempt {attemptCount} failed due to timeout: {ex.ToString()}. Details:{ex.ToString()}", LogType.Error);
+                _log.WriteLine($"{processName} attempt {attemptCount} failed due to timeout: {ex}.", LogType.Error);
             }
-
-            _log.WriteLine($"Retrying in {currentBackoff} seconds...", LogType.Error);            
+            else
+            {
+                _log.WriteLine($"{processName} attempt {attemptCount} failed. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
+            }
+        
             return Task.FromResult(TaskResult.Retry);
         }
 

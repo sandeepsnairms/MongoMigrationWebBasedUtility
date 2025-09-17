@@ -131,7 +131,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    errorMessage = $"Error loading migration jobs: {ex.ToString()}";
+                    errorMessage = $"Error loading migration jobs: {ex}";
                     return false;
                 }
             }

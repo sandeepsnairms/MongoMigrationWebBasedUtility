@@ -30,13 +30,13 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
             else if (ex is MongoExecutionTimeoutException)
             {
-                _log.WriteLine($"SyncBack attempt {attemptCount} failed due to timeout. Details:{ex}", LogType.Error);
+                _log.WriteLine($"SyncBack attempt {attemptCount} failed due to timeout. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
             else
             {
-                _log.WriteLine(ex.ToString(), LogType.Error);
-                return Task.FromResult(TaskResult.Retry);
+				_log.WriteLine($"SyncBack attempt {attemptCount} failed. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
+				return Task.FromResult(TaskResult.Retry);
             }
         }
 

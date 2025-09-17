@@ -353,12 +353,12 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
             else if (ex is MongoExecutionTimeoutException)
             {
-                _log.WriteLine($"{processName} attempt {attemptCount} failed due to timeout. Details: {ex}", LogType.Error);
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName} partition {partitionId} failed due to timeout. Details: {ex}", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
             else if (ex.Message.Contains("Change Stream Token"))
             {
-                _log.WriteLine($"{processName} attempt for {dbName}.{colName} partition {partitionId} failed. Retrying in {currentBackoff} seconds...");
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName} partition {partitionId} failed. Retrying in {currentBackoff} seconds...");
                 return Task.FromResult(TaskResult.Retry);
             }
             else if (ex.Message.Contains("New partitions found during copy process"))
@@ -368,7 +368,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
             else
             {
-                _log.WriteLine($"{processName} error: {ex}", LogType.Error);
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
         }
