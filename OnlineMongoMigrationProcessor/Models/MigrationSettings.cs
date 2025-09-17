@@ -84,7 +84,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                errorMessage= $"Error saving data: {ex.ToString()}";    
+                errorMessage= $"Error saving data: {ex}";    
                 return false;
             }
         }

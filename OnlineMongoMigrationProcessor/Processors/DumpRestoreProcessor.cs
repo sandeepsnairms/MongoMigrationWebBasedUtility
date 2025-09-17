@@ -52,12 +52,12 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (ex is MongoExecutionTimeoutException)
             {
-                _log.WriteLine($" {processName} attempt {attemptCount} failed due to timeout. Details:{ex}", LogType.Error);
+                _log.WriteLine($" {processName} attempt {attemptCount} failed due to timeout. Details:{ex}.  Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
             else
             {
-                _log.WriteLine(ex.ToString(), LogType.Error);
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
         }
@@ -172,7 +172,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                _log.WriteLine(ex.ToString(), LogType.Error);
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
         }

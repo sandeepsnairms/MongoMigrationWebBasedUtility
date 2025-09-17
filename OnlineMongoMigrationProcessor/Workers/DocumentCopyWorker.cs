@@ -198,7 +198,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex.ToString()}", LogType.Error);
+                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Error);
                     
                     ResetSegmentsInChunk(mu.MigrationChunks[migrationChunkIndex]);
                     return TaskResult.Retry;
@@ -387,7 +387,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 errors.Add(ex);
-                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex.ToString()}", LogType.Error);
+                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex}", LogType.Error);
 				return TaskResult.Retry;
 			}
         }

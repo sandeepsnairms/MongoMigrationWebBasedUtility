@@ -27,17 +27,17 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (ex is MongoExecutionTimeoutException)
             {
-                _log.WriteLine($" {processName} attempt {attemptCount} failed due to timeout. Details:{ex.ToString()}", LogType.Error);
+                _log.WriteLine($" {processName} attempt {attemptCount} for {dbName}.{colName}[{chunkIndex}] failed due to timeout. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
             else if (ex.Message== "Copy Document Failed")
             {
-                _log.WriteLine($"{processName} attempt for {dbName}.{colName}[{chunkIndex}] failed. Retrying in {currentBackoff} seconds...");
+                _log.WriteLine($"{processName} attempt {attemptCount} for {dbName}.{colName}[{chunkIndex}] failed. Retrying in {currentBackoff} seconds...");
                 return Task.FromResult(TaskResult.Retry);
             }
             else
             {
-                _log.WriteLine($"{processName} attempt for {dbName}.{colName}[{chunkIndex}] failed. Details:{ex.ToString()}. Retrying in {currentBackoff} seconds...", LogType.Error);
+                _log.WriteLine($"{processName} attempt for {dbName}.{colName}[{chunkIndex}] failed. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
                 return Task.FromResult(TaskResult.Retry);
             }
         }
