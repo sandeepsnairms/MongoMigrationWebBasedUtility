@@ -396,7 +396,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-				log.WriteLine($"Error checking for change streams: {ex.ToString()}", LogType.Error);
+				log.WriteLine($"Error checking for change streams: {ex}", LogType.Error);
                 
                 //return (IsCSEnabled: false, Version: version);
                 throw;
@@ -487,7 +487,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     retryCount++;
 
-                    log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex.ToString()}", LogType.Error);
+                    log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {unit.DatabaseName}.{unit.CollectionName}: {ex}", LogType.Error);
                 }
                 finally
                 {
@@ -745,7 +745,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-				log.WriteLine($"Error copying indexes: {ex.ToString()}", LogType.Error);
+				log.WriteLine($"Error copying indexes: {ex}", LogType.Error);
                 
                 return false;
             }

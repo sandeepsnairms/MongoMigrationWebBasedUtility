@@ -61,7 +61,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    log.WriteLine($"Exception occurred while counting documents in {collection.CollectionNamespace}. Details: {ex.ToString()}", LogType.Error);
+                    log.WriteLine($"Exception occurred while counting documents in {collection.CollectionNamespace}. Details: {ex}", LogType.Error);
                     if(userFilter==null || userFilter.ElementCount == 0)
                     {
                         log.WriteLine($"Using Estimated document count for {collection.CollectionNamespace} due to error in counting documents.");
@@ -191,11 +191,11 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (skipDataTypeFilter)
                         {
-                            log.WriteLine($"Encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex.ToString()}");
+                            log.WriteLine($"Encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex}");
                         }
                         else
                         {
-                            log.WriteLine($"Encountered error in attempt {i} while sampling data where _id is {dataType}: {ex.ToString()}");
+                            log.WriteLine($"Encountered error in attempt {i} while sampling data where _id is {dataType}: {ex}");
                         }
                     }
                 }
@@ -291,11 +291,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (skipDataTypeFilter)
                 {
-                    log.WriteLine($"Error during sampling data (DataType filtering bypassed): {ex.ToString()}", LogType.Error);
+                    log.WriteLine($"Error during sampling data (DataType filtering bypassed): {ex}", LogType.Error);
                 }
                 else
                 {
-                    log.WriteLine($"Error during sampling data where _id is {dataType}: {ex.ToString()}", LogType.Error);
+                    log.WriteLine($"Error during sampling data where _id is {dataType}: {ex}", LogType.Error);
                 }
                 docCountByType = 0;
                 return null;

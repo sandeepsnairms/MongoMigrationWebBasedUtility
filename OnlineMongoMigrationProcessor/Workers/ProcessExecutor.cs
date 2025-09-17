@@ -127,7 +127,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             catch (Exception ex)
             {
                 _log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-                
+
                 return false;
             }
         }
