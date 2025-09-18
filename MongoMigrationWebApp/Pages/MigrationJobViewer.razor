@@ -2,6 +2,7 @@
 
 @using OnlineMongoMigrationProcessor;
 @using MongoMigrationWebApp.Components
+@using MongoMigrationWebApp.Helpers
 @inject Service.JobManager JobManager
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JS
@@ -15,7 +16,7 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
-        @if(IsResumeEnabled())
+        @if (IsResumeEnabled() && !_isLoadingCollections)
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -31,7 +32,7 @@
             </div>
         }
 
-        @if (IsPauseEnabled())
+        @if (IsPauseEnabled() && !_isLoadingCollections)
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
 
@@ -86,7 +87,7 @@
 }
 @if (_manageCollectionDialogOpen && MigrationJob != null)
 {
-    <ManageCollections  MigrationJob="@MigrationJob"  MigrationUnits="@MigrationJob.MigrationUnits" OnCollectionsUpdated="@OnCollectionsUpdated" />
+    <ManageCollections  MigrationJob="@MigrationJob"  MigrationUnits="@MigrationJob.MigrationUnits" SourceConnectionString="@MigrationJob.SourceConnectionString" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
 @if (_resetChangeStreamDialogOpen && MigrationJob != null)
@@ -98,100 +99,220 @@
     <CollectionDetails MigrationJob="@MigrationJob"  MigrationUnit="@_selectedMigrationUnit" OnClose="HandleCollectionDetailsClose" />
 }
 
+@* Collections Loading Spinner *@
+@if (_isLoadingCollections)
+{
+    <div class="d-flex justify-content-center align-items-center my-4">
+        <div class="text-center">
+            <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true" style="width: 3rem; height: 3rem;">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div>
+                <h5>Loading Collections...</h5>
+                <p class="text-muted">Please wait while we discover and load the collections from your database.</p>
+            </div>
+        </div>
+    </div>
+}
 
-<table class="table">
-    <thead>
-        <tr>
-            <th>Database Name</th>
-            <th>Collection Name</th>
-            @if (MigrationJob != null && MigrationJob.JobType==OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
-            {
-                <th>Download Status</th>
-                <th>Upload Status</th>
-            }
-            else
-            {
-                <th>Copy Status</th>
-            }
-            @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
-            {
-                @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
+@* Collections Filter and Pagination Controls *@
+@if (MigrationJob?.MigrationUnits != null && MigrationJob.MigrationUnits.Count > 0 && !_isLoadingCollections)
+{
+    <div class="collections-filter-section">
+        <div class="row">
+            <div class="col-md-8">
+                <div class="input-group filter-input-group">
+                    <span class="input-group-text"><i class="bi bi-search"></i></span>
+                    <input type="text" class="form-control" placeholder="Filter collections (database.collection)" 
+                           @bind="_filterText" @bind:event="oninput" @onkeyup="OnFilterChanged" />
+                    @if (!string.IsNullOrWhiteSpace(_filterText))
+                    {
+                        <button class="btn btn-outline-secondary filter-clear-btn" type="button" @onclick="ClearFilter" title="Clear filter">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    }
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="d-flex justify-content-end">
+                    <div class="page-size-selector-top">
+                        <select id="pageSizeSelect" class="form-select form-select-sm page-size-dropdown" @bind="_pageSize" @bind:after="OnPageSizeChanged" style="width: auto;" title="Items per page">
+                            <option value="10">10 per page</option>
+                            <option value="25">25 per page</option>
+                            <option value="50">50 per page</option>
+                            <option value="100">100 per page</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="collections-table-wrapper">
+    <table class="table collections-table">
+        <thead>
+            <tr>
+                <th>Database Name</th>
+                <th>Collection Name</th>
+                @if (MigrationJob != null && MigrationJob.JobType==OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                 {
-                    <th>Time Since Last Change</th>
-                    <th>Last Batch – Total Changes</th>
+                    <th>Download Status</th>
+                    <th>Upload Status</th>
                 }
                 else
                 {
-                    <th>Change Stream Last Batch – Total Changes</th>
+                    <th>Copy Status</th>
                 }
-
-            }
-            @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
-            {
-
-                 <th>Time Since Last Sync Back</th>
-                <th>Last Batch – Total Changes</th>
-            }
-        </tr>
-    </thead>
-    <tbody>
-        @if (MigrationJob!=null && MigrationJob.MigrationUnits != null)
-        {
-            @foreach (var unit in MigrationJob.MigrationUnits)
-            {
-                <tr>
-
-                    <td>
-                        <i class="bi bi-info-circle-fill me-2" title="More info" style="cursor: pointer;"
-                           @onclick="() => ShowCollectionDetails(unit)"></i>
-                        @unit.DatabaseName
-                    </td>
-                    <td>@unit.CollectionName</td>
-                    <td>
-                        @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
-                    </td>
-
-                    @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
+                @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
+                {
+                    @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
                     {
-                        <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
-                        </td>
+                        <th>Time Since Last Change</th>
+                        <th>Last Batch – Total Changes</th>
                     }
-                    @if (MigrationJob != null && MigrationJob.IsOnline)
+                    else
                     {
-                        @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || MigrationJob.ProcessingSyncBack)
+                        <th>Change Stream Last Batch – Total Changes</th>
+                    }
+
+                }
+                @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
+                {
+
+                     <th>Time Since Last Sync Back</th>
+                    <th>Last Batch – Total Changes</th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @if (!_isLoadingCollections && MigrationJob?.MigrationUnits != null && GetFilteredAndPagedUnits().Any())
+            {
+                @foreach (var unit in GetFilteredAndPagedUnits())
+                {
+                    <tr>
+                        <td>
+                            <i class="bi bi-info-circle-fill me-2 collection-info-icon" title="More info" style="cursor: pointer;"
+                               @onclick="() => ShowCollectionDetails(unit)"></i>
+                            @unit.DatabaseName
+                        </td>
+                        <td>@unit.CollectionName</td>
+                        <td>
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+                        </td>
+
+                        @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                         {
-                            <td>                           
-                               @Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack)                            
+                            <td>
+                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
                             </td>
                         }
-                        <td>
-                            @unit.CSUpdatesInLastBatch
-                        </td>
-                    }
-                   
+                        @if (MigrationJob != null && MigrationJob.IsOnline)
+                        {
+                            @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || MigrationJob.ProcessingSyncBack)
+                            {
+                                <td>                           
+                                   @Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack)                            
+                                </td>
+                            }
+                            <td>
+                                @unit.CSUpdatesInLastBatch
+                            </td>
+                        }
+                    </tr>
+                }
+            }
+            else if (!_isLoadingCollections && MigrationJob?.MigrationUnits != null && !string.IsNullOrWhiteSpace(_filterText))
+            {
+                <tr>
+                    <td colspan="100%" class="empty-collections-state">
+                        <i class="bi bi-search"></i>
+                        <h5>No collections match your filter</h5>
+                        <p>Try adjusting your search terms or <button class="btn btn-link p-0" @onclick="ClearFilter">clear the filter</button></p>
+                    </td>
                 </tr>
             }
-        }
-    </tbody>
-</table>
-<div class="d-flex align-items-center mb-3">
-    <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections">Update Collections</button>
-    @if (MigrationJob != null && MigrationJob.IsOnline)
-    {
-        <button class="btn btn-warning mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">
-            @(((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Any(MigrationUnit => MigrationUnit.ResetChangeStream)) ? "✓ Reset Change Stream" : "☐ Reset Change Stream")
-        </button>
-
-        @if (MigrationJob?.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
-        {
-            <button class="btn btn-warning mx-2" title="Compare randomly selected documents from collections in the source and target accounts to identify any discrepancies or missing entries. Be sure to pause the job before doing so." @onclick="RunComparison">
-                @((MigrationJob?.RunComparison ?? false) ? "✓ Run Hash Check" : "☐ Run Hash Check")
-            </button>
-        }
-    }
-    
+            else if (!_isLoadingCollections && (MigrationJob?.MigrationUnits == null || !MigrationJob.MigrationUnits.Any()))
+            {
+                <tr>
+                    <td colspan="100%" class="empty-collections-state">
+                        <i class="bi bi-collection"></i>
+                        <h5>No collections configured</h5>
+                        <p>Use the "Update Collections" button below to add collections to this migration job.</p>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
 </div>
+
+@* Pagination Controls *@
+@if (!_isLoadingCollections && GetTotalPages() > 1)
+{
+    <nav aria-label="Collections pagination" class="mt-3">
+        <ul class="pagination justify-content-center">
+            <li class="page-item @(IsFirstPage() ? "disabled" : "")">
+                <button class="page-link" @onclick="() => GoToPage(1)" disabled="@IsFirstPage()" title="First page">
+                    <i class="bi bi-chevron-double-left"></i>
+                </button>
+            </li>
+            <li class="page-item @(IsFirstPage() ? "disabled" : "")">
+                <button class="page-link" @onclick="() => GoToPage(_currentPage - 1)" disabled="@IsFirstPage()" title="Previous page">
+                    <i class="bi bi-chevron-left"></i>
+                </button>
+            </li>
+
+            @for (int page = GetStartPage(); page <= GetEndPage(); page++)
+            {
+                var pageNumber = page;
+                <li class="page-item @(_currentPage == pageNumber ? "active" : "")">
+                    <button class="page-link" @onclick="() => GoToPage(pageNumber)" title="Go to page @pageNumber">
+                        @pageNumber
+                    </button>
+                </li>
+            }
+
+            <li class="page-item @(IsLastPage() ? "disabled" : "")">
+                <button class="page-link" @onclick="() => GoToPage(_currentPage + 1)" disabled="@IsLastPage()" title="Next page">
+                    <i class="bi bi-chevron-right"></i>
+                </button>
+            </li>
+            <li class="page-item @(IsLastPage() ? "disabled" : "")">
+                <button class="page-link" @onclick="() => GoToPage(GetTotalPages())" disabled="@IsLastPage()" title="Last page">
+                    <i class="bi bi-chevron-double-right"></i>
+                </button>
+            </li>
+        </ul>
+        
+        <div class="text-center mt-2">
+            <small class="text-muted">
+                Page @_currentPage of @GetTotalPages() 
+                (@GetFilteredItemsCount() @(GetFilteredItemsCount() == 1 ? "collection" : "collections"))
+            </small>
+        </div>
+    </nav>
+}
+
+@if(!_isLoadingCollections)
+{
+    <div class="d-flex align-items-center mb-3 mt-4">
+        <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections" disabled="@_isLoadingCollections">Update Collections</button>
+        @if (MigrationJob != null && MigrationJob.IsOnline)
+        {
+            <button class="btn btn-warning mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">
+                @(((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Any(MigrationUnit => MigrationUnit.ResetChangeStream)) ? "✓ Reset Change Stream" : "☐ Reset Change Stream")
+            </button>
+
+            @if (MigrationJob?.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
+            {
+                <button class="btn btn-warning mx-2" title="Compare randomly selected documents from collections in the source and target accounts to identify any discrepancies or missing entries. Be sure to pause the job before doing so." @onclick="RunComparison">
+                    @((MigrationJob?.RunComparison ?? false) ? "✓ Run Hash Check" : "☐ Run Hash Check")
+                </button>
+            }
+        }
+    
+    </div>
+}
 
 @if (LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !_showLogBackupFile)
 {
@@ -283,8 +404,6 @@ else if (@_showLogBackupFile)
     </div>
 }
 @code {
-
-
     [Parameter]
     public string JobId { get; set; } = string.Empty;
 
@@ -307,6 +426,133 @@ else if (@_showLogBackupFile)
     private bool _showLogBackupFile = false;
     private string _logBackupFile = string.Empty;
     private MigrationUnit? _selectedMigrationUnit;
+
+    // Loading spinner state for collection loading
+    private bool _isLoadingCollections = false;
+
+    // Pagination and filtering properties (kept for UI binding compatibility)
+    private string _filterText = string.Empty;
+    private int _currentPage = 1;
+    private int _pageSize = 25;
+
+    // Pagination helper
+    private PaginationHelper<MigrationUnit> _paginationHelper = new PaginationHelper<MigrationUnit>(
+        new List<MigrationUnit>(),
+        (unit, filterText) =>
+            $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+            unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+            unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+    );
+
+    #region Pagination and Filtering Methods
+
+    private void UpdatePaginationHelper()
+    {
+        var currentUnits = MigrationJob?.MigrationUnits ?? new List<MigrationUnit>();
+        
+        // Only recreate if the collection has changed
+        if (_paginationHelper.TotalItemsCount != currentUnits.Count)
+        {
+            _paginationHelper = new PaginationHelper<MigrationUnit>(
+                currentUnits,
+                (unit, filterText) =>
+                    $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                    unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                    unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+            );
+        }
+        
+        // Always update the helper with current component state
+        _paginationHelper.FilterText = _filterText;
+        _paginationHelper.PageSize = _pageSize;
+        
+        // Ensure current page is within valid bounds
+        var totalPages = _paginationHelper.GetTotalPages();
+        if (_currentPage > totalPages)
+        {
+            _currentPage = Math.Max(1, totalPages);
+        }
+        _paginationHelper.CurrentPage = _currentPage;
+    }
+
+    private List<MigrationUnit> GetFilteredAndPagedUnits()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetPagedItems();
+    }
+
+    private int GetTotalItemsCount()
+    {
+        return MigrationJob?.MigrationUnits?.Count ?? 0;
+    }
+
+    private int GetFilteredItemsCount()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetFilteredItemsCount();
+    }
+
+    private string GetDisplayedItemsInfo()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetDisplayedItemsInfo();
+    }
+
+    private int GetTotalPages()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetTotalPages();
+    }
+
+    private bool IsFirstPage() 
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.IsFirstPage();
+    }
+    
+    private bool IsLastPage() 
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.IsLastPage();
+    }
+
+    private int GetStartPage()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetStartPage();
+    }
+
+    private int GetEndPage()
+    {
+        UpdatePaginationHelper();
+        return _paginationHelper.GetEndPage();
+    }
+
+    private void GoToPage(int pageNumber)
+    {
+        _currentPage = pageNumber;
+        StateHasChanged();
+    }
+
+    private void OnFilterChanged()
+    {
+        _currentPage = 1; // Reset to first page when filter changes
+        StateHasChanged();
+    }
+
+    private void ClearFilter()
+    {
+        _filterText = string.Empty;
+        _currentPage = 1;
+        StateHasChanged();
+    }
+
+    private void OnPageSizeChanged()
+    {
+        _currentPage = 1; // Reset to first page when page size changes
+        StateHasChanged();
+    }
+    #endregion
 
     private string GetRowClass(string type, string message)
     {
@@ -406,6 +652,12 @@ else if (@_showLogBackupFile)
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
         if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
         {
+            // Check if we should hide loading spinner
+            if (_isLoadingCollections && MigrationJob.MigrationUnits != null && MigrationJob.MigrationUnits.Count > 0)
+            {
+                _isLoadingCollections = false;
+            }
+
             LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
             if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
                 _logBackupFile = logBackup;
@@ -576,6 +828,13 @@ else if (@_showLogBackupFile)
                 return;
             }
 
+            // Check if we should show the loading spinner
+            if (mj.MigrationUnits == null || mj.MigrationUnits.Count == 0)
+            {
+                _isLoadingCollections = true;
+                StateHasChanged();
+            }
+
             // Run the long task on a separate thread
             await Task.Run(() =>
             {
@@ -604,6 +863,14 @@ else if (@_showLogBackupFile)
     private void RunComparison()
     {
         _errorMessage = string.Empty;
+        
+        // Check if SourceConnectionString is blank
+        if (string.IsNullOrWhiteSpace(MigrationJob?.SourceConnectionString))
+        {
+            _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before running comparison.";
+            return;
+        }
+
         if (IsResumeEnabled())
         {
             _yesNoDiaLogType=YesNoDialog.Category.RunComparisonNot;
@@ -620,6 +887,7 @@ else if (@_showLogBackupFile)
     private void ResetChangeStream()
     {
         _errorMessage = string.Empty;
+
         if (IsResumeEnabled() && !(MigrationJob?.ProcessingSyncBack ?? false))
         {
             _resetChangeStreamDialogOpen = true;
@@ -635,6 +903,14 @@ else if (@_showLogBackupFile)
     private void ManageCollections()
     {
         _errorMessage = string.Empty;
+        
+        // Check if SourceConnectionString is blank
+        if (string.IsNullOrWhiteSpace(MigrationJob?.SourceConnectionString))
+        {
+            _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before updating collections.";
+            return;
+        }
+
         if (IsResumeEnabled() && !(MigrationJob?.ProcessingSyncBack ?? false))
         {
             _manageCollectionDialogOpen = true;

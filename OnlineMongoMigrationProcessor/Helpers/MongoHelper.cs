@@ -34,9 +34,86 @@ namespace OnlineMongoMigrationProcessor
             return collection.CountDocuments(filter);
         }
 
+		/// <summary>
+		/// Helper method to list all databases from MongoDB connection
+		/// </summary>
+		/// <param name="connectionString">MongoDB connection string</param>
+		/// <returns>List of database names, excluding system databases</returns>
+		public static async Task<List<string>> ListDatabasesAsync(string connectionString)
+		{
+			var databases = new List<string>();
+			try
+			{
+				var client = new MongoClient(connectionString);
+				var databasesCursor = await client.ListDatabasesAsync();
+				var databasesDocument = await databasesCursor.ToListAsync();
 
+				foreach (var db in databasesDocument)
+				{
+					var dbName = db["name"].AsString;
+					// Skip system databases
+					if (!IsSystemDatabase(dbName))
+					{
+						databases.Add(dbName);
+					}
+				}
+			}
+			catch (Exception)
+			{
+				// Return empty list if connection fails
+			}
+			return databases;
+		}
 
-        public static (long Lsn, string Rid, string Min, string Max) ExtractValuesFromResumeToken(BsonDocument bsonDoc)
+		/// <summary>
+		/// Helper method to list all collections from a specific database
+		/// </summary>
+		/// <param name="connectionString">MongoDB connection string</param>
+		/// <param name="databaseName">Database name</param>
+		/// <returns>List of collection names, excluding system collections</returns>
+		public static async Task<List<string>> ListCollectionsAsync(string connectionString, string databaseName)
+		{
+			var collections = new List<string>();
+			try
+			{
+				var client = new MongoClient(connectionString);
+				var database = client.GetDatabase(databaseName);
+				var collectionsCursor = await database.ListCollectionNamesAsync();
+				var allCollections = await collectionsCursor.ToListAsync();
+
+				foreach (var collectionName in allCollections)
+				{
+					// Skip system collections
+					if (!IsSystemCollection(collectionName))
+					{
+						collections.Add(collectionName);
+					}
+				}
+			}
+			catch (Exception)
+			{
+				// Return empty list if connection fails
+			}
+			return collections;
+		}
+
+		/// <summary>
+		/// Check if database name is a system database
+		/// </summary>
+		private static bool IsSystemDatabase(string databaseName)
+		{
+			var systemDatabases = new[] { "admin", "local", "config" };
+			return systemDatabases.Contains(databaseName, StringComparer.OrdinalIgnoreCase);
+		}
+
+		/// <summary>
+		/// Check if collection name is a system collection
+		/// </summary>
+		private static bool IsSystemCollection(string collectionName)
+		{
+			return collectionName.StartsWith("system.", StringComparison.OrdinalIgnoreCase);
+		}
+		public static (long Lsn, string Rid, string Min, string Max) ExtractValuesFromResumeToken(BsonDocument bsonDoc)
         {
             if (bsonDoc == null || !bsonDoc.Contains("_data"))
                 throw new ArgumentException("Invalid BSON document or missing _data field", nameof(bsonDoc));
@@ -816,7 +893,7 @@ namespace OnlineMongoMigrationProcessor
             var idConditions = new List<string>();
 
             // Only add $type condition if we're not skipping DataType filter
-            if (!skipDataTypeFilter)
+            if (!skipDataTypeFilter || dataType== DataType.Other)
             {
                 idConditions.Add($"\\\"$type\\\": \\\"{DataTypeToBsonType(dataType)}\\\"");
             }
