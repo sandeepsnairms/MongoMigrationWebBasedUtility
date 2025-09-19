@@ -225,7 +225,7 @@
             else if (!_isLoadingCollections && MigrationJob?.MigrationUnits != null && !string.IsNullOrWhiteSpace(_filterText))
             {
                 <tr>
-                    <td colspan="100%" class="empty-collections-state">
+                    <td colspan="10" class="empty-collections-state">
                         <i class="bi bi-search"></i>
                         <h5>No collections match your filter</h5>
                         <p>Try adjusting your search terms or <button class="btn btn-link p-0" @onclick="ClearFilter">clear the filter</button></p>
@@ -235,7 +235,7 @@
             else if (!_isLoadingCollections && (MigrationJob?.MigrationUnits == null || !MigrationJob.MigrationUnits.Any()))
             {
                 <tr>
-                    <td colspan="100%" class="empty-collections-state">
+                    <td colspan="10" class="empty-collections-state">
                         <i class="bi bi-collection"></i>
                         <h5>No collections configured</h5>
                         <p>Use the "Update Collections" button below to add collections to this migration job.</p>

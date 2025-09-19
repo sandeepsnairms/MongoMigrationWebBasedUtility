@@ -336,8 +336,23 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!_cts.IsCancellationRequested)
                     {
+                        if (!_job.IsSimulatedRun && !_job.AppendMode)
+                        {
+                            try
+                            {
+                                //try creating empty collection with necessary indexes.
+                                var database = _sourceClient!.GetDatabase(unit.DatabaseName);
+                                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                                var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+                            }
+                            catch
+                            {
+                                //do nothing
+                            }
+                        }
                         unit.SourceStatus = CollectionStatus.NotFound;
                         _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
+                        _jobList.Save();
                         //return TaskResult.Success;
                     }
                     else
@@ -399,7 +414,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     else
                     {
                         migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records", LogType.Error);
+                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records. Created empty collection.", LogType.Error);
                         return TaskResult.Abort;
                     }
                 }               
@@ -685,7 +700,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
-                if (totalChunks > 1 || _job.JobType != JobType.DumpAndRestore)
+                if (totalChunks > 1 )
                 {
                     _log.WriteLine($"Chunking {databaseName}.{collectionName}");
 
@@ -723,6 +738,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false);
                     migrationChunks.Add(chunk);
+                    if(_job.JobType == JobType.MongoDriver)
+                    {
+                        chunk.Segments = new List<Segment>
+                        {
+                            new Segment { Gte = "", Lt = "", IsProcessed = false, Id = "1" }
+                        };
+                    }
                 }
 
                 return migrationChunks;

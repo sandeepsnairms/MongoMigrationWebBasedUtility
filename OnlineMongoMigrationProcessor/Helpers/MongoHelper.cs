@@ -209,6 +209,9 @@ namespace OnlineMongoMigrationProcessor
 
             FilterDefinition<BsonDocument> typeFilter;
             
+            if(dataType== DataType.Other)
+                skipDataTypeFilter=true;
+
             if (skipDataTypeFilter)
             {
                 // Skip DataType filtering - use empty filter for type
