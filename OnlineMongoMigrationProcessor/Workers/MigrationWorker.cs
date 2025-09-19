@@ -276,7 +276,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                         else
                         { 
                             chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts, unit);
-                        
+                            if (_cts.IsCancellationRequested)
+                                return TaskResult.Canceled;
+
                             if (chunks.Count == 0)
                             {
                                 _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has no records to migrate", LogType.Error);
@@ -293,6 +295,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (string.IsNullOrWhiteSpace(_job.TargetConnectionString))
                                 return TaskResult.FailedAfterRetries;
                             var result=await MongoHelper.DeleteAndCopyIndexesAsync(_log,unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+
+                            if (_cts.IsCancellationRequested)
+                                return TaskResult.Canceled;
 
                             if (!result)
                             {
@@ -331,9 +336,24 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!_cts.IsCancellationRequested)
                     {
+                        if (!_job.IsSimulatedRun && !_job.AppendMode)
+                        {
+                            try
+                            {
+                                //try creating empty collection with necessary indexes.
+                                var database = _sourceClient!.GetDatabase(unit.DatabaseName);
+                                var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                                var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+                            }
+                            catch
+                            {
+                                //do nothing
+                            }
+                        }
                         unit.SourceStatus = CollectionStatus.NotFound;
                         _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
-                        return TaskResult.Success;
+                        _jobList.Save();
+                        //return TaskResult.Success;
                     }
                     else
                         return TaskResult.Canceled;
@@ -394,12 +414,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                     else
                     {
                         migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records", LogType.Error);
-                        return TaskResult.Success;
+                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records. Created empty collection.", LogType.Error);
+                        return TaskResult.Abort;
                     }
-                }
-                else
-                    return TaskResult.Success;
+                }               
             }
 
             //wait till all activities are done
@@ -448,6 +466,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
+
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
             _job = job;
@@ -483,7 +502,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _job.MigrationUnits = new List<MigrationUnit>();
             }
 
-            var unitsToAdd= Helper.PopulateJobCollections(namespacesToMigrate);
+            var unitsToAdd= await Helper.PopulateJobCollectionsAsync(namespacesToMigrate, sourceConnectionString);
             if (unitsToAdd.Count > 0)
             {
                 foreach (var mu in unitsToAdd)
@@ -681,7 +700,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
 
-                if (totalChunks > 1 || _job.JobType != JobType.DumpAndRestore)
+                if (totalChunks > 1 )
                 {
                     _log.WriteLine($"Chunking {databaseName}.{collectionName}");
 
@@ -717,8 +736,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 else
                 {
-                    var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.String, false, false);
+                    var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false);
                     migrationChunks.Add(chunk);
+                    if(_job.JobType == JobType.MongoDriver)
+                    {
+                        chunk.Segments = new List<Segment>
+                        {
+                            new Segment { Gte = "", Lt = "", IsProcessed = false, Id = "1" }
+                        };
+                    }
                 }
 
                 return migrationChunks;

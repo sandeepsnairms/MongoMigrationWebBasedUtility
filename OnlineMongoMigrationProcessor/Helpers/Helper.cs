@@ -11,6 +11,8 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Linq;
+using MongoDB.Driver;
+using MongoDB.Bson;
 
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -266,7 +268,13 @@ namespace OnlineMongoMigrationProcessor
                 return "Immediate";
         }
 
-        public static List<MigrationUnit> PopulateJobCollections(string namespacesToMigrate)
+       
+
+        
+
+        
+
+        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
             if (string.IsNullOrWhiteSpace(namespacesToMigrate))
@@ -291,7 +299,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var item in loadedObject)
                 {
-                    var tmpList = PopulateJobCollectionsFromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}");
+                    var tmpList = await PopulateJobCollectionsFromCSVAsync($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString);
                     if (tmpList.Count > 0)
                     {
                         foreach (var mu in tmpList)
@@ -317,13 +325,15 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                unitsToAdd = PopulateJobCollectionsFromCSV(namespacesToMigrate);                
+                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(namespacesToMigrate, connectionString);                
             }
 
            
 
             return unitsToAdd;
         }
+
+
 
         public static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
         {
@@ -344,7 +354,7 @@ namespace OnlineMongoMigrationProcessor
             job.MigrationUnits.Add(mu);
         }
 
-        private static List<MigrationUnit> PopulateJobCollectionsFromCSV(string namespacesToMigrate)
+        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(string namespacesToMigrate, string connectionString)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
 
@@ -353,18 +363,78 @@ namespace OnlineMongoMigrationProcessor
                 .Select(mu => mu.Trim())
                 .ToArray();
 
-
             foreach (var fullName in collectionsInput)
             {
-
                 int firstDotIndex = fullName.IndexOf('.');
                 if (firstDotIndex <= 0 || firstDotIndex == fullName.Length - 1) continue;
 
                 string dbName = fullName.Substring(0, firstDotIndex).Trim();
                 string colName = fullName.Substring(firstDotIndex + 1).Trim();
 
-                var migrationUnit = new MigrationUnit(dbName, colName, new List<MigrationChunk>());
-                unitsToAdd.Add(migrationUnit);
+                // Handle wildcards - require connection string
+                if ((dbName == "*" || colName == "*") && string.IsNullOrWhiteSpace(connectionString))
+                {
+                    // Cannot process wildcards without connection string - skip this entry
+                    continue;
+                }
+
+                // Handle wildcards with connection string
+                if (dbName == "*" && colName == "*")
+                {
+                    // Get all databases and all collections from each database
+                    var databases = await MongoHelper.ListDatabasesAsync(connectionString);
+                    foreach (var database in databases)
+                    {
+                        var collections = await MongoHelper.ListCollectionsAsync(connectionString, database);
+                        foreach (var collection in collections)
+                        {
+                            if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
+                            {
+                                var migrationUnit = new MigrationUnit(database, collection, new List<MigrationChunk>());
+                                unitsToAdd.Add(migrationUnit);
+                            }
+                        }
+                    }
+                }
+                else if (dbName == "*" && colName != "*")
+                {
+                    // Get all databases and find the specific collection in each
+                    var databases = await MongoHelper.ListDatabasesAsync(connectionString);
+                    foreach (var database in databases)
+                    {
+                        var collections = await MongoHelper.ListCollectionsAsync(connectionString, database);
+                        if (collections.Contains(colName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
+                            {
+                                var migrationUnit = new MigrationUnit(database, colName, new List<MigrationChunk>());
+                                unitsToAdd.Add(migrationUnit);
+                            }
+                        }
+                    }
+                }
+                else if (dbName != "*" && colName == "*")
+                {
+                    // Get all collections from the specific database
+                    var collections = await MongoHelper.ListCollectionsAsync(connectionString, dbName);
+                    foreach (var collection in collections)
+                    {
+                        if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
+                        {
+                            var migrationUnit = new MigrationUnit(dbName, collection, new List<MigrationChunk>());
+                            unitsToAdd.Add(migrationUnit);
+                        }
+                    }
+                }
+                else
+                {
+                    // No wildcards, use as-is
+                    if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
+                    {
+                        var migrationUnit = new MigrationUnit(dbName, colName, new List<MigrationChunk>());
+                        unitsToAdd.Add(migrationUnit);
+                    }
+                }
             }
 
             return unitsToAdd;
@@ -421,12 +491,9 @@ namespace OnlineMongoMigrationProcessor
         }
         private static Tuple<bool, string, string> ValidateNamespaceFormatfromCSV(string input)
         {
-            // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format
-            //string pattern = @"^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$";
-            //string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?\s]+$";
-            string pattern = @"^[^\/\\\.\x00\""\*\<\>\|\?\s]+\.{1}[^\/\\\x00\""\*\<\>\|\?]+$";
-
-
+            // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format, with support for wildcards
+            // Allow * for database name or collection name
+            string pattern = @"^([^\/\\\.\x00\""\<\>\|\?\s]+|\*)\.{1}([^\/\\\x00\""\<\>\|\?]+|\*)$";
 
             // Split the input by commas
             string[] items = input.Split(',');
@@ -444,7 +511,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    string errorMessage = $"Invalid namespace format: '{trimmedItem}'";
+                    string errorMessage = $"Invalid namespace format: '{trimmedItem}'. Use 'database.collection', '*.collection', 'database.*', or '*.*' for wildcards.";
                     return new Tuple<bool, string,string>(false, string.Empty,errorMessage);
                 }
             }
@@ -544,6 +611,42 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
