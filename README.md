@@ -422,7 +422,7 @@ Follow these steps to migrate data from an on-premises MongoDB VM. You can deplo
 
 1. Go to the home page: `https://<WebAppName>.azurewebsites.net` and click **New Job**.  
 2. In the **New Job Details** pop-up, enter all required information.  
-3. If necessary, use the [list collection steps](#create-comma-separated-list-of-collections) to create a comma-separated list of collection names.  
+3. Refer to [Collections input formats](#collections-input-formats) to learn multiple ways to input collection list for migration. If necessary, use the [list collection steps](#get-list-of-collections) to create a comma-separated list of collection names.  
 4. Choose the migration tool: either **Mongo Dump/Restore** or **Mongo Driver**.  
 5. Select the desired [migration mode](#migration-modes).
 1. Select **Post Migration Sync Back** to enable syncing back to the source after migration, this helps reduce risk by allowing a rollback to the original server if needed.
@@ -448,71 +448,62 @@ Migrations can be done in two ways:
 
 For online jobs, ensure that the oplog retention size of the source MongoDB is large enough to store operations for at least the duration of both the download and upload activities. If the oplog retention size is too small and there is a high volume of write operations, the online migration may fail or be unable to read all documents from the change stream in time.
 
-### Create Comma Separated List of Collections
+### Get List of Collections
 
-The below script lists all authorized databases and collections in the format `dbname.collectionname`, excluding system collections and databases you don’t have access to.
+Run  the below script in mongo shell  to lists all authorized databases and collections in the format `dbname.collectionname`.
+
+Set `currentOnly=true` to list collections from the current database. To list collections across all databases (excluding system collections and system databases), set `currentOnly=false`.
 
 ```javascript
-// Use global `input` if it exists
-const userInput = typeof input !== "undefined" ? input : null;
+// Optional boolean to restrict to current DB only
+const currentOnly = true;
 
-print("-------------------------------- ")
+print("-------------------------------- ");
 
 function isSystemCollection(name) {
     return name.startsWith("system.");
 }
 
-const result = [];
-
-if (!input) {
-    print("❌ Input required. Use '*.*' or 'dbname.*'");
-    quit(1);
+function isSystemDatabase(name) {
+    return (
+        name === "admin" ||
+        name === "config" ||
+        name === "local" ||
+        name.startsWith("system")
+    );
 }
 
+const result = [];
+
 function listCollectionsSafely(dbName) {
+    if (isSystemDatabase(dbName)) {
+        print(`⚠️ Skipping system database: ${dbName}`);
+        return;
+    }
     try {
         const currentDb = db.getSiblingDB(dbName);
         const collections = currentDb.getCollectionNames().filter(c => !isSystemCollection(c));
         collections.forEach(c => result.push(`${dbName}.${c}`));
     } catch (err) {
-        console.error(`⚠️ Skipping ${dbName}: ${err.message}`);
+        print(`⚠️ Skipping ${dbName}: ${err.message}`);
     }
 }
 
-
-
-if (input === "*.*") {
+if (currentOnly) {
+    // Use only the current database (skip if it’s system)
+    listCollectionsSafely(db.getName());
+} else {
+    // Enumerate all databases
     const dbs = db.adminCommand({ listDatabases: 1 }).databases;
     dbs.forEach(d => listCollectionsSafely(d.name));
-} else if (input.endsWith(".*")) {
-    const dbName = input.slice(0, -2);
-    listCollectionsSafely(dbName);
-} else {
-    print("❌ Invalid input. Use '*.*' or 'dbname.*'");
-    quit(1);
 }
 
-// Print the result as a single comma-separated string without line breaks
-print(" ")
-print("******OUTPUT****************")
+print(" ");
+print("******OUTPUT****************");
+// Print result as CSV (db.coll,db.coll,...)
 print(result.join(","));
-print("-------------------------------- ")
+print("-------------------------------- ");
 
-```
-
-1. Save the script as `listCollections.js` in the same folder where you run `mongosh` or your current working directory
-2. Run the script with `mongosh`
-
-```bash
-# List all collections in all accessible databases
-mongosh "mongodb://localhost:27017"
-input = "*.*";  // or "mydb.*"
-load("listCollections.js");
-
-# List collections in a specific database 'mydb'
-mongosh "mongodb://localhost:27017"
-input = "mydb.*"
-load("listCollections.js");
 
 ```
 
@@ -605,9 +596,13 @@ You can specify collections in two ways:
 1) CSV list
 - Example: `db1.col1,db1.col2,db2.colA`
 - Order matters. Larger collections should appear first to reduce overall time.
+- 
+2) CSV list with wildcards
+- Example: `db1.*,*.users,*.*`
+- If the collection count is large consider splitting it into multiple jobs.
 
-2) JSON list with optional filters
-- Use the structure below (see `CollectionInfoFormat.JSON` in the repo):
+3) JSON list with optional filters
+- Use the [CollectionInfoFormat JSON Format](#collectioninfoformat-json-format):
 
 Notes:
 - Filters must be valid MongoDB query JSON (as a string). Only supports basic operators (`eq`,`lt`,`lte`,`gt`,`gte`,`in`) on root fields. They apply to both bulk copy and change stream.
@@ -615,7 +610,7 @@ Notes:
 - RU-optimized copy does not support filters or DataTypeFor_Id ; provide only DatabaseName and CollectionName.
 - System collections are not supported.
 
-### CollectionInfoFormat Format
+### CollectionInfoFormat JSON Format
 
  ```JSON
 [
