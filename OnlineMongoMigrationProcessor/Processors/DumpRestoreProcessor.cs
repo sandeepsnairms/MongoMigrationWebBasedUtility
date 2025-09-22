@@ -24,7 +24,7 @@ namespace OnlineMongoMigrationProcessor
         private ProcessExecutor? _processExecutor = null;
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
 
-        private SafeDictionary<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeDictionary<string, MigrationUnit>();
+        private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
 
         // Attempts to enter the upload semaphore without waiting
         private bool TryEnterUploadLock()
