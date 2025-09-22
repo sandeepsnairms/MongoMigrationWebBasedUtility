@@ -7,6 +7,7 @@ using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -161,39 +162,7 @@ namespace OnlineMongoMigrationProcessor
 
             return (lsn, rid, min, max);
         }
-        //public static FilterDefinition<BsonDocument> GenerateQueryFilter(BsonValue? gte, BsonValue? lte, DataType dataType)
-        //{
-        //    var filterBuilder = Builders<BsonDocument>.Filter;
-
-        //    // Initialize an empty filter
-        //    FilterDefinition<BsonDocument> filter = FilterDefinition<BsonDocument>.Empty;
-
-        //    // Create the $type filter
-        //    var typeFilter = filterBuilder.Eq("_id", new BsonDocument("$type", DataTypeToBsonType(dataType)));
-
-        //    // Add conditions based on gte and lt values
-        //    if (!(gte == null || gte.IsBsonNull) && !(lte == null || lte.IsBsonNull) && (gte is not BsonMaxKey && lte is not BsonMaxKey))
-        //    {
-        //        filter = filterBuilder.And(
-        //            typeFilter,
-        //            BuildFilterGte("_id", gte, dataType),
-        //            BuildFilterLt("_id", lte, dataType)
-        //        );
-        //    }
-        //    else if (!(gte == null || gte.IsBsonNull) && gte is not BsonMaxKey)
-        //    {
-        //        filter = filterBuilder.And(typeFilter, BuildFilterGte("_id", gte, dataType));
-        //    }
-        //    else if (!(lte == null || lte.IsBsonNull) && lte is not BsonMaxKey)
-        //    {
-        //        filter = filterBuilder.And(typeFilter, BuildFilterLt("_id", lte, dataType));
-        //    }
-        //    else
-        //    {
-        //        filter = typeFilter;
-        //    }
-        //    return filter;
-        //}
+        
 
         public static FilterDefinition<BsonDocument> GenerateQueryFilter(
             BsonValue? gte,
@@ -638,10 +607,12 @@ namespace OnlineMongoMigrationProcessor
             cursor = await collection.WatchAsync<ChangeStreamDocument<BsonDocument>>(pipeline, options, linkedCts.Token);
         }
 
+
         using (cursor)
         {
             try
             {
+
                 if (job.JobType == JobType.RUOptimizedCopy)
                 {
                     if (await cursor.MoveNextAsync(cts.Token))
@@ -649,14 +620,15 @@ namespace OnlineMongoMigrationProcessor
                         if (!resetCS && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(unit.OriginalResumeToken)))
                         {
                             var resumeTokenJson = cursor.GetResumeToken().ToJson();
-                                                       
+
                             unit.ResumeToken = resumeTokenJson;
                             unit.OriginalResumeToken = resumeTokenJson;
-                            
+
                         }
                         return;
                     }
-                }
+                    return;
+                }                   
 
                 // Iterate until cancellation or first change detected
                 while (!cts.Token.IsCancellationRequested)
@@ -673,67 +645,43 @@ namespace OnlineMongoMigrationProcessor
                         if ((unit.RestoreComplete || job.IsSimulatedRun) && unit.DumpComplete && !unit.ResetChangeStream)
                             return;
 
+
                         // Handle server-level vs collection-level resume token storage
                         if (useServerLevel)
-                        {
-                            // Store server-level resume tokens in MigrationJob
-                            job.ResumeToken = change.ResumeToken.ToJson();
+                        {                                    
+                            var databaseName = change.CollectionNamespace.DatabaseNamespace.DatabaseName;
+                            var collectionName = change.CollectionNamespace.CollectionName;
+                            var collectionKey = $"{databaseName}.{collectionName}";
 
-                            if (!resetCS && string.IsNullOrEmpty(job.OriginalResumeToken))
-                                job.OriginalResumeToken = change.ResumeToken.ToJson();
+                            //checking if change is in collections to be migrated.
+                            var migrationUnit = job.MigrationUnits?.FirstOrDefault(mu =>
+                                string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
+                                string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
 
-                            if (change.ClusterTime != null)
+                            if (migrationUnit != null && migrationUnit.SourceStatus == CollectionStatus.OK)
                             {
-                                // For server-level, we update the job timestamp for individual collection tracking
-                                job.CursorUtcTimestamp = BsonTimestampToUtcDateTime(change.ClusterTime);
-                            }
-                            else if (change.WallTime.HasValue)
-                            {
-                                job.CursorUtcTimestamp = change.WallTime.Value.ToUniversalTime();
-                            }
+                                // Use common function for server-level resume token setting
+                                SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
 
-                            job.ResumeTokenOperation = (ChangeStreamOperationType)change.OperationType;
-                            string json = change.DocumentKey.ToJson();
-                            job.ResumeDocumentId = json;
-                            
-                            // Store collection key for server-level auto replay
-                            if (change.CollectionNamespace != null)
-                            {
-                                var databaseName = change.CollectionNamespace.DatabaseNamespace.DatabaseName;
-                                var collectionName = change.CollectionNamespace.CollectionName;
-                                job.ResumeCollectionKey = $"{databaseName}.{collectionName}";
+                                log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
+                                // Exit immediately after first change detected
+                                return;
                             }
-
-                            log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
                         }
                         else
                         {
-                            // Store collection-level resume tokens in MigrationUnit (original behavior)
-                            unit.ResumeToken = change.ResumeToken.ToJson();
-
-                            if (!resetCS && string.IsNullOrEmpty(unit.OriginalResumeToken))
-                                unit.OriginalResumeToken = change.ResumeToken.ToJson();
-
-                            if (change.ClusterTime != null)
-                            {
-                                unit.CursorUtcTimestamp = BsonTimestampToUtcDateTime(change.ClusterTime);
-                            }
-                            else if (change.WallTime.HasValue)
-                            {
-                                unit.CursorUtcTimestamp = change.WallTime.Value.ToUniversalTime();
-                            }
-
-                            unit.ResumeTokenOperation = (ChangeStreamOperationType)change.OperationType;
-                            string json = change.DocumentKey.ToJson();
-                            unit.ResumeDocumentId = json;
+                            // Use common function for collection-level resume token setting
+                            SetResumeTokenProperties(unit, change, resetCS);
 
                             log.WriteLine($"Collection-level resume token set for {unit.DatabaseName}.{unit.CollectionName}");
-                        }
 
-                        // Exit immediately after first change detected
-                        return;
+                            // Exit immediately after first change detected
+                            return;
+                        }
+                                
                     }
                 }
+                   
             }
             catch (OperationCanceledException)
             {
@@ -1129,21 +1077,6 @@ namespace OnlineMongoMigrationProcessor
             return DateTimeOffset.FromUnixTimeSeconds(secondsSinceEpoch).UtcDateTime;
         }
 
-        //public static FilterDefinition<BsonDocument> BuildFilterFromDocumentKey(BsonDocument documentKey)
-        //{
-        //    if (documentKey == null || !documentKey.Elements.Any())
-        //        throw new ArgumentException("documentKey cannot be null or empty", nameof(documentKey));
-
-        //    var builder = Builders<BsonDocument>.Filter;
-        //    FilterDefinition<BsonDocument> filter = builder.Empty;
-
-        //    foreach (var element in documentKey.Elements)
-        //    {
-        //        filter &= builder.Eq(element.Name, element.Value);
-        //    }
-
-        //    return filter;
-        //}
 
         public static FilterDefinition<BsonDocument> BuildFilterFromDocumentKey(BsonDocument documentKey)
         {
@@ -1160,6 +1093,68 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
+
+        /// <summary>
+        /// Common function to set resume token properties on either MigrationJob or MigrationUnit
+        /// </summary>
+        /// <param name="target">The target object (MigrationJob or MigrationUnit) to set properties on</param>
+        /// <param name="change">The change stream document containing the resume token information</param>
+        /// <param name="resetCS">Whether this is a change stream reset operation</param>
+        /// <param name="databaseName">Database name for server-level operations</param>
+        /// <param name="collectionName">Collection name for server-level operations</param>
+        private static void SetResumeTokenProperties(object target, ChangeStreamDocument<BsonDocument> change, bool resetCS, string? databaseName = null, string? collectionName = null)
+        {
+            string resumeTokenJson = change.ResumeToken.ToJson();
+            string documentKeyJson = change.DocumentKey.ToJson();
+            var operationType = (ChangeStreamOperationType)change.OperationType;
+
+            // Determine timestamp
+            DateTime timestamp;
+            if (change.ClusterTime != null)
+            {
+                timestamp = BsonTimestampToUtcDateTime(change.ClusterTime);
+            }
+            else if (change.WallTime.HasValue)
+            {
+                timestamp = change.WallTime.Value.ToUniversalTime();
+            }
+            else
+            {
+                timestamp = DateTime.UtcNow;
+            }
+
+            // Set properties based on target type
+            if (target is MigrationJob job)
+            {
+                // Server-level resume token setting
+                job.ResumeToken = resumeTokenJson;
+                
+                if (!resetCS && string.IsNullOrEmpty(job.OriginalResumeToken))
+                    job.OriginalResumeToken = resumeTokenJson;
+
+                job.CursorUtcTimestamp = timestamp;
+                job.ResumeTokenOperation = operationType;
+                job.ResumeDocumentId = documentKeyJson;
+
+                // Store collection key for server-level auto replay
+                if (change.CollectionNamespace != null && !string.IsNullOrEmpty(databaseName) && !string.IsNullOrEmpty(collectionName))
+                {
+                    job.ResumeCollectionKey = $"{databaseName}.{collectionName}";
+                }
+            }
+            else if (target is MigrationUnit unit)
+            {
+                // Collection-level resume token setting
+                unit.ResumeToken = resumeTokenJson;
+                
+                if (!resetCS && string.IsNullOrEmpty(unit.OriginalResumeToken))
+                    unit.OriginalResumeToken = resumeTokenJson;
+
+                unit.CursorUtcTimestamp = timestamp;
+                unit.ResumeTokenOperation = operationType;
+                unit.ResumeDocumentId = documentKeyJson;
+            }
+        }
 
         public static BsonTimestamp ConvertToBsonTimestamp(DateTime dateTime)
         {

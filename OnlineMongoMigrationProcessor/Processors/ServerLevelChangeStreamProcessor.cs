@@ -4,6 +4,7 @@ using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -87,6 +88,11 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task WatchServerLevelChangeStream(CancellationToken cancellationToken)
         {
+
+            long counter = 0;
+            var changeStreamDocuments = new Dictionary<string, ChangeStreamDocuments>();
+            string collectionKey = string.Empty;
+
             try
             {
                 // Create pipeline for server-level change stream
@@ -153,8 +159,6 @@ namespace OnlineMongoMigrationProcessor
                 // Watch at client level (server-level)
                 using var cursor = _sourceClient.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
 
-                long counter = 0;
-                var changeStreamDocuments = new Dictionary<string, ChangeStreamDocuments>();
 
                 // Initialize change stream documents for each collection
                 foreach (var kvp in _migrationUnitsToProcess)
@@ -184,6 +188,9 @@ namespace OnlineMongoMigrationProcessor
 
                         foreach (var change in cursor.Current)
                         {
+
+                            collectionKey = change.CollectionNamespace.ToString();
+
                             cancellationToken.ThrowIfCancellationRequested();
                             if (ExecutionCancelled) return;
 
@@ -197,9 +204,6 @@ namespace OnlineMongoMigrationProcessor
                             return;
                     }
                 }
-
-                // Process remaining changes for all collections
-                await BulkProcessAllChangesAsync(changeStreamDocuments);
             }
             catch (OperationCanceledException)
             {
@@ -209,6 +213,18 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{_syncBackPrefix}Error watching server-level change stream: {ex}", LogType.Error);
                 throw;
+            }
+            finally
+            {
+                try
+                {
+                    if(changeStreamDocuments != null)
+                        await BulkProcessAllChangesAsync(changeStreamDocuments);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {collectionKey}. Details: {ex}", LogType.Error);
+                }
             }
         }
 
