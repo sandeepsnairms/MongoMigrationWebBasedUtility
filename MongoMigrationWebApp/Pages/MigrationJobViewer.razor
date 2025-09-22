@@ -123,7 +123,7 @@
             <div class="col-md-8">
                 <div class="input-group filter-input-group">
                     <span class="input-group-text"><i class="bi bi-search"></i></span>
-                    <input type="text" class="form-control" placeholder="Filter collections (database.collection)" 
+                    <input type="text" class="form-control" placeholder="Filter collections by any column (database, collection, status, etc.)" 
                            @bind="_filterText" @bind:event="oninput" @onkeyup="OnFilterChanged" />
                     @if (!string.IsNullOrWhiteSpace(_filterText))
                     {
@@ -438,11 +438,87 @@ else if (@_showLogBackupFile)
     // Pagination helper
     private PaginationHelper<MigrationUnit> _paginationHelper = new PaginationHelper<MigrationUnit>(
         new List<MigrationUnit>(),
-        (unit, filterText) =>
-            $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-            unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-            unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+        (unit, filterText) => true // Simple predicate, will be updated in UpdatePaginationHelper
     );
+
+    private Func<MigrationUnit, string, bool> GetFilterPredicate()
+    {
+        return (unit, filterText) =>
+        {
+            // Return true if any of the column values match the filter text
+            if (string.IsNullOrWhiteSpace(filterText))
+                return true;
+
+            var searchText = filterText.ToLower();
+
+            // Database Name
+            if (unit.DatabaseName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Collection Name
+            if (unit.CollectionName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Database.Collection combined
+            if ($"{unit.DatabaseName}.{unit.CollectionName}".Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Source Status / Download Status
+            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
+                              (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
+            if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Upload/Restore Status (for DumpAndRestore jobs)
+            if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
+            {
+                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
+                                  (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
+                if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            // Change Stream Lag (Time Since Last Change/Sync Back)
+            if (MigrationJob?.IsOnline == true)
+            {
+                var lagText = Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack);
+                if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            // Last Batch Changes Count
+            if (MigrationJob?.IsOnline == true)
+            {
+                var batchCount = unit.CSUpdatesInLastBatch.ToString();
+                if (batchCount.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            // Collection Status text variants
+            if (unit.SourceStatus == CollectionStatus.NotFound && 
+                ("missing".Contains(searchText) || "empty".Contains(searchText) || "notfound".Contains(searchText)))
+                return true;
+
+            if ((unit.DumpComplete && "success".Contains(searchText)) || 
+                (unit.RestoreComplete && "success".Contains(searchText)))
+                return true;
+
+            // Percentage values
+            if (searchText.Contains("%"))
+            {
+                var percentText = searchText.Replace("%", "").Trim();
+                if (double.TryParse(percentText, out var searchPercent))
+                {
+                    if (Math.Abs(unit.DumpPercent - searchPercent) < 0.1)
+                        return true;
+                    if (Math.Abs(unit.RestorePercent - searchPercent) < 0.1)
+                        return true;
+                }
+            }
+
+            return false;
+        };
+    }
 
     #region Pagination and Filtering Methods
 
@@ -455,10 +531,7 @@ else if (@_showLogBackupFile)
         {
             _paginationHelper = new PaginationHelper<MigrationUnit>(
                 currentUnits,
-                (unit, filterText) =>
-                    $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                    unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                    unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+                GetFilterPredicate()
             );
         }
         

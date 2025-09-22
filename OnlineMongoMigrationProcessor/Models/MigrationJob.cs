@@ -1,5 +1,6 @@
 using Newtonsoft.Json;
 using OnlineMongoMigrationProcessor.Models;
+using MongoDB.Driver;
 using System;
 using System.Collections.Generic;
 
@@ -28,7 +29,7 @@ namespace OnlineMongoMigrationProcessor
         
         // Legacy property for backward compatibility - will be removed in future versions
         // This will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("UseMongoDump", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        [JsonProperty("UseMongeDump", DefaultValueHandling = DefaultValueHandling.Ignore)]
         private bool? _useMongoDumpLegacy
         {
             get => null; // Never serialize this
@@ -42,7 +43,6 @@ namespace OnlineMongoMigrationProcessor
             }
         }
         
-
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
@@ -52,6 +52,28 @@ namespace OnlineMongoMigrationProcessor
         public bool AggresiveChangeStream { get; set; }
         public bool CSStartsAfterAllUploads { get; set; }
         public bool CSPostProcessingStarted { get; set; }
+        public ChangeStreamLevel ChangeStreamLevel { get; set; }
+        
+        // Global resume token properties for server-level change streams (Forward sync)
+        public string? ResumeToken { get; set; }
+        public string? OriginalResumeToken { get; set; }
+        public bool InitialDocumenReplayed { get; set; } = false;
+        public ChangeStreamOperationType ResumeTokenOperation { get; set; }
+        public string? ResumeDocumentId { get; set; }
+        public string? ResumeCollectionKey { get; set; } // CollectionKey (database.collection) for auto replay
+        public DateTime? ChangeStreamStartedOn { get; set; }
+        public DateTime CursorUtcTimestamp { get; set; }
+
+        // Global resume token properties for server-level change streams (Sync back)
+        public string? SyncBackResumeToken { get; set; }
+        public string? SyncBackOriginalResumeToken { get; set; }
+        public bool SyncBackInitialDocumenReplayed { get; set; } = false;
+        public ChangeStreamOperationType SyncBackResumeTokenOperation { get; set; }
+        public string? SyncBackResumeDocumentId { get; set; }
+        public string? SyncBackResumeCollectionKey { get; set; } // CollectionKey (database.collection) for sync back auto replay
+        public DateTime? SyncBackChangeStreamStartedOn { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
+
         public List<MigrationUnit>? MigrationUnits { get; set; }
     }
 }

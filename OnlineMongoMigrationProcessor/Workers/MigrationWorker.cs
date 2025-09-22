@@ -221,8 +221,13 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> PreparePartitions(CancellationToken _cts)
         {
             bool checkedCS = false;
+            bool serverLevelResumeTokenSet = false; // Track if server-level resume token has been set
+            
             if (_job == null || _sourceClient == null)
                 return TaskResult.FailedAfterRetries;
+
+            // Determine if we should use server-level processing
+            bool useServerLevel = _job.ChangeStreamLevel == ChangeStreamLevel.Server && _job.JobType != JobType.RUOptimizedCopy;
 
             var unitsForPrep = _job.MigrationUnits ?? new List<MigrationUnit>();
             foreach (var unit in unitsForPrep)
@@ -249,19 +254,43 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                     if (_job.IsOnline)
                     {
-                        if (unit.ResetChangeStream)
-                        { 
-                            //if  reset CS needto get the latest CS resume token synchronously
-                            _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
+                        // Handle server-level vs collection-level change stream resume token setup
+                        if (useServerLevel)
+                        {
+                            // For server-level, only set up resume token once per job
+                            if (!serverLevelResumeTokenSet)
+                            {
+                                // For server-level streams, Currently not supported reset of server-level streams
+                                
+                                // Run server-level resume token setup async, but only once
+                                _log.WriteLine($"Setting up server-level change stream resume token for job {_job.Id}.");
+                                _ = Task.Run(async () =>
+                                {
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
+                                });
+                                
+                                serverLevelResumeTokenSet = true;
+                                
+                            }
+                            
                         }
                         else
                         {
-                            //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
-                            _ = Task.Run(async () =>
+                            // For collection-level, set up resume token for each collection (original behavior)
+                            if (unit.ResetChangeStream)
+                            { 
+                                //if  reset CS needto get the latest CS resume token synchronously
+                                _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
+                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
+                            }
+                            else
                             {
-                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
-                            });
+                                //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
+                                _ = Task.Run(async () =>
+                                {
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
+                                });
+                            }
                         }
                     }
 
