@@ -761,10 +761,10 @@ namespace OnlineMongoMigrationProcessor
 
             var database = client.GetDatabase(databaseName);
 
-            var collection = database.GetCollection<BsonDocument>(collectionName);
+            var collection = database.GetCollection<RawBsonDocument>(collectionName);
 
             // Try to find one document (limit query to 1 for efficiency)
-            var document = await collection.Find(FilterDefinition<BsonDocument>.Empty)
+            var document = await collection.Find(FilterDefinition<RawBsonDocument>.Empty)
                                            .Limit(1)
                                            .FirstOrDefaultAsync();
 
