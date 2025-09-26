@@ -92,7 +92,7 @@
 
 @if (_resetChangeStreamDialogOpen && MigrationJob != null)
 {
-    <ResetChangeStream MigrationUnits="@((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Where(mu => mu.SourceStatus == CollectionStatus.OK).ToList())" OnCollectionsUpdated="@OnCSReset" />
+    <ResetChangeStream MigrationUnits="@((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Where(mu => Helper.IsMigrationUnitValid(mu)).ToList())" OnCollectionsUpdated="@OnCSReset" />
 }
 @if (_collectionDetailsDialogOpen && _selectedMigrationUnit != null)
 {
@@ -198,13 +198,19 @@
                         </td>
                         <td>@unit.CollectionName</td>
                         <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+
                         </td>
 
                         @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                         {
                             <td>
-                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+
                             </td>
                         }
                         @if (MigrationJob != null && MigrationJob.IsOnline)
@@ -464,16 +470,18 @@ else if (@_showLogBackupFile)
                 return true;
 
             // Source Status / Download Status
-            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
-                              (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
+            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
             if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Upload/Restore Status (for DumpAndRestore jobs)
             if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
             {
-                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
-                                  (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
+                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }

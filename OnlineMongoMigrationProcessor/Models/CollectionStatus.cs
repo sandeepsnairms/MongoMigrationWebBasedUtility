@@ -4,6 +4,7 @@ namespace OnlineMongoMigrationProcessor
     {
         Unknown,
         OK,
-        NotFound        
+        NotFound,
+        IsView
     }
 }

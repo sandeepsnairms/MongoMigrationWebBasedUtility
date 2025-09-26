@@ -248,7 +248,7 @@ namespace OnlineMongoMigrationProcessor
                     return (true, counter); // Skip changes for collections not in our job
                 }
 
-                if (migrationUnit.SourceStatus != CollectionStatus.OK)
+                if (!Helper.IsMigrationUnitValid(migrationUnit))
                 {
                     return (true, counter); // Skip changes for collections with errors
                 }

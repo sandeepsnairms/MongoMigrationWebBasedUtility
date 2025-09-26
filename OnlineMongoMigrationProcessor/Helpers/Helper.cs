@@ -52,6 +52,13 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        
+
+        public static bool IsMigrationUnitValid(MigrationUnit mu)
+        {
+            return mu.SourceStatus == CollectionStatus.OK;
+        }
+
         public static bool CanProceedWithDownloads(string directoryPath,long spaceRequiredInMb, out double folderSizeInGB, out double freeSpaceGB)
         {
             freeSpaceGB = 0;
@@ -556,7 +563,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var mu in migrationJob.MigrationUnits)
                 {
-                    if (mu.SourceStatus == CollectionStatus.OK)
+                    if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.DumpComplete)
                             return false;
@@ -570,7 +577,7 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var mu in migrationJob.MigrationUnits)
                 {
-                    if (mu.SourceStatus == CollectionStatus.OK)
+                    if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.RestoreComplete || !mu.DumpComplete)
                             return false;
