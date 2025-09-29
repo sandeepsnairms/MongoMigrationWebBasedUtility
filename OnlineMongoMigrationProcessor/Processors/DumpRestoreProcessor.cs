@@ -106,7 +106,9 @@ namespace OnlineMongoMigrationProcessor
                 docCount = MongoHelper.GetDocumentCount(collection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu.DataTypeFor_Id.HasValue);
                 mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
                 _log.WriteLine($"Count for {dbName}.{colName}[{chunkIndex}] is {docCount}");
-                args = $"{args} --query=\"{query}\"";
+
+                string extendedQuery= MongoQueryConverter.ConvertMondumpFilter(query, gte, lt, mu.MigrationChunks[chunkIndex].DataType);
+                args = $"{args} --query=\"{extendedQuery}\"";
             }
             else if (mu.MigrationChunks.Count == 1 && !string.IsNullOrEmpty(mu.UserFilter))
             {
@@ -452,7 +454,7 @@ namespace OnlineMongoMigrationProcessor
             while (ShouldContinueUploadLoop(mu, folder))
             {
                 // MongoRestore
-                if (!mu.RestoreComplete && !_cts.Token.IsCancellationRequested && mu.SourceStatus == CollectionStatus.OK)
+                if (!mu.RestoreComplete && !_cts.Token.IsCancellationRequested && Helper.IsMigrationUnitValid(mu))
                 {
                     int restoredChunks;
                     long restoredDocs;

@@ -59,6 +59,7 @@ namespace OnlineMongoMigrationProcessor
 
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
+        public bool TargetCreated { get; set; }
         public int IndexesMigrated { get; set; }
 
         public DateTime? ComparedOn { get; set; }

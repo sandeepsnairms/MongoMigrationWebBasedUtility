@@ -232,23 +232,55 @@ namespace OnlineMongoMigrationProcessor.Workers
             var unitsForPrep = _job.MigrationUnits ?? new List<MigrationUnit>();
             foreach (var unit in unitsForPrep)
             {
-                if (_migrationCancelled) return TaskResult.Abort;
+                if (unit.SourceStatus == CollectionStatus.IsView)
+                    continue;
 
-                if (await MongoHelper.CheckCollectionExists(_sourceClient!, unit.DatabaseName, unit.CollectionName))
+                bool checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, unit.DatabaseName, unit.CollectionName);
+                bool isCollection = true;
+                if (checkExist)
+                {
+                    (bool Exits, bool IsCollection) ret;
+                    try
+                    {
+                        ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient, unit.DatabaseName, unit.CollectionName); //fails if connnected to secondary
+                        isCollection = checkExist && ret.Item2;
+                    }
+                    catch
+                    {
+                        isCollection=true;
+                    }                   
+
+                    if (isCollection == false)
+                    {
+                        unit.SourceStatus = CollectionStatus.IsView;
+                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Error);
+                        continue;
+                    }
+                }
+                else
+                    unit.SourceStatus = CollectionStatus.Unknown;
+
+
+                if (checkExist && isCollection)
                 {
                     unit.SourceStatus = CollectionStatus.OK;
 
-                    var db = _sourceClient!.GetDatabase(unit.DatabaseName);
-                    var coll = db.GetCollection<BsonDocument>(unit.CollectionName);
-
-                    unit.EstimatedDocCount = coll.EstimatedDocumentCount();
-
-                    _ = Task.Run(() =>
+                    if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
                     {
-                        long count = MongoHelper.GetActualDocumentCount(coll, unit);
-                        unit.ActualDocCount = count;
-                        _jobList?.Save();
-                    }, _cts);
+
+                        var db = _sourceClient!.GetDatabase(unit.DatabaseName);
+                        var coll = db.GetCollection<BsonDocument>(unit.CollectionName);
+
+                        unit.EstimatedDocCount = coll.EstimatedDocumentCount();
+
+                        _ = Task.Run(() =>
+                        {
+                            long count = MongoHelper.GetActualDocumentCount(coll, unit);
+                            unit.ActualDocCount = count;
+                            _jobList?.Save();
+                        }, _cts);
+
+                    }
 
                     DateTime currrentTime = DateTime.UtcNow;
 
@@ -261,24 +293,24 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (!serverLevelResumeTokenSet)
                             {
                                 // For server-level streams, Currently not supported reset of server-level streams
-                                
+
                                 // Run server-level resume token setup async, but only once
                                 _log.WriteLine($"Setting up server-level change stream resume token for job {_job.Id}.");
                                 _ = Task.Run(async () =>
                                 {
                                     await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
                                 });
-                                
+
                                 serverLevelResumeTokenSet = true;
-                                
+
                             }
-                            
+
                         }
                         else
                         {
                             // For collection-level, set up resume token for each collection (original behavior)
                             if (unit.ResetChangeStream)
-                            { 
+                            {
                                 //if  reset CS needto get the latest CS resume token synchronously
                                 _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
                                 await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
@@ -296,14 +328,14 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                     if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
                     {
-                        List<MigrationChunk>? chunks=null;
+                        List<MigrationChunk>? chunks = null;
 
                         if (_job.JobType == JobType.RUOptimizedCopy)
                         {
-                            chunks= new RUPartitioner().CreatePartitions(_log, _sourceClient! , unit.DatabaseName, unit.CollectionName,_cts);
+                            chunks = new RUPartitioner().CreatePartitions(_log, _sourceClient!, unit.DatabaseName, unit.CollectionName, _cts);
                         }
                         else
-                        { 
+                        {
                             chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts, unit);
                             if (_cts.IsCancellationRequested)
                                 return TaskResult.Canceled;
@@ -317,13 +349,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
 
 
-                        if (!_job.IsSimulatedRun && !_job.AppendMode)
+                        if (!_job.IsSimulatedRun && !_job.AppendMode && !unit.TargetCreated)
                         {
                             var database = _sourceClient!.GetDatabase(unit.DatabaseName);
                             var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
                             if (string.IsNullOrWhiteSpace(_job.TargetConnectionString))
                                 return TaskResult.FailedAfterRetries;
-                            var result=await MongoHelper.DeleteAndCopyIndexesAsync(_log,unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+                            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
 
                             if (_cts.IsCancellationRequested)
                                 return TaskResult.Canceled;
@@ -343,29 +375,29 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 {
                                     return TaskResult.Abort;
                                 }
-                            }                            
+                            }
 
-                        }                                               
-                       
-                        
-                        if(unit.UserFilter!= null && unit.UserFilter.Any())
+                        }
+
+
+                        if (unit.UserFilter != null && unit.UserFilter.Any())
                         {
-                            _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks!.Count} chunk(s) with user filter : { unit.UserFilter}");
+                            _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks!.Count} chunk(s) with user filter : {unit.UserFilter}");
                         }
                         else
                             _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks!.Count} chunk(s)");
 
-                        unit.MigrationChunks = chunks!;                       
+                        unit.MigrationChunks = chunks!;
                         unit.ChangeStreamStartedOn = currrentTime;
 
-                    }                    
+                    }
 
                 }
                 else
                 {
                     if (!_cts.IsCancellationRequested)
                     {
-                        if (!_job.IsSimulatedRun && !_job.AppendMode)
+                        if (!_job.IsSimulatedRun && !_job.AppendMode && !unit.TargetCreated)
                         {
                             try
                             {
@@ -403,9 +435,29 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (_migrationCancelled) 
                     return TaskResult.Canceled;
 
-                if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                if (Helper.IsMigrationUnitValid(migrationUnit))
                 {
-                    if (await MongoHelper.CheckCollectionExists(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                    if (migrationUnit.SourceStatus == CollectionStatus.IsView)
+                        continue;
+
+                    bool checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
+                    bool isCollection = true;
+                    if (checkExist)
+                    {
+                        var ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
+                        isCollection = checkExist && ret.IsCollection;
+
+                        if (isCollection == false)
+                        {
+                            migrationUnit.SourceStatus = CollectionStatus.IsView;
+                            _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Error);
+                            continue;
+                        }
+                    }
+                    else
+                        migrationUnit.SourceStatus = CollectionStatus.Unknown;
+
+                    if (checkExist && isCollection)
                     {
                         MongoClient? targetClient = null;
                         if (!_job.IsSimulatedRun)
@@ -415,7 +467,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                             targetClient = MongoClientFactory.Create(_log, _job.TargetConnectionString!);
 
-                            if (await MongoHelper.CheckCollectionExists(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                            if (await MongoHelper.CheckCollectionExistsAsync(targetClient, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                             {
                                 if (!_job.CSPostProcessingStarted)
                                     _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on the target and is ready.");
@@ -474,9 +526,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (_migrationCancelled)
                         return TaskResult.Canceled;
 
-                    if (migrationUnit.SourceStatus == CollectionStatus.OK)
+                    if (Helper.IsMigrationUnitValid(migrationUnit))
                     {
-                        if (await MongoHelper.CheckCollectionExists(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                        if (await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                         {
                             processor.AddCollectionToChangeStreamQueue(migrationUnit, _job.TargetConnectionString!);
                             _log.WriteLine($"Change stream processor added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to the monitoring queue.");

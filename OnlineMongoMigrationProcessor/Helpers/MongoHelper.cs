@@ -71,7 +71,7 @@ namespace OnlineMongoMigrationProcessor
 		/// </summary>
 		/// <param name="connectionString">MongoDB connection string</param>
 		/// <param name="databaseName">Database name</param>
-		/// <returns>List of collection names, excluding system collections</returns>
+		/// <returns>List of collection names, excluding system collections, views, and other non-collection types</returns>
 		public static async Task<List<string>> ListCollectionsAsync(string connectionString, string databaseName)
 		{
 			var collections = new List<string>();
@@ -79,13 +79,25 @@ namespace OnlineMongoMigrationProcessor
 			{
 				var client = new MongoClient(connectionString);
 				var database = client.GetDatabase(databaseName);
-				var collectionsCursor = await database.ListCollectionNamesAsync();
+				
+				// Get collection information with filter to exclude system collections
+				var filter = new BsonDocument("name", new BsonDocument("$not", new BsonRegularExpression("^system\\.")));
+				var options = new ListCollectionsOptions { Filter = filter };
+				
+				var collectionsCursor = await database.ListCollectionsAsync(options);
 				var allCollections = await collectionsCursor.ToListAsync();
 
-				foreach (var collectionName in allCollections)
+				foreach (var collectionInfo in allCollections)
 				{
-					// Skip system collections
-					if (!IsSystemCollection(collectionName))
+					var collectionName = collectionInfo["name"].AsString;
+					
+					// Skip system collections (additional check)
+					if (IsSystemCollection(collectionName))
+						continue;
+					
+					// Check if it's a collection (not a view or other type)
+					var type = collectionInfo.GetValue("type", "collection").AsString;
+					if (type == "collection")
 					{
 						collections.Add(collectionName);
 					}
@@ -315,9 +327,9 @@ namespace OnlineMongoMigrationProcessor
                 log.WriteLine($"Approximate pending oplog entries for  {collectionNameNamespace} is {count}");
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
-                log.WriteLine($"Could not calculate pending oplog entries. Reason: {ex.Message}");
+                //log.WriteLine($"Could not calculate pending oplog entries. Reason: {ex.Message}");
                 //do nothing
                 return false;
             }
@@ -658,7 +670,7 @@ namespace OnlineMongoMigrationProcessor
                                 string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
                                 string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
 
-                            if (migrationUnit != null && migrationUnit.SourceStatus == CollectionStatus.OK)
+                            if (migrationUnit != null && Helper.IsMigrationUnitValid(migrationUnit))
                             {
                                 // Use common function for server-level resume token setting
                                 SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
@@ -755,8 +767,29 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        public static async Task<(bool Exits,bool IsCollection)> CheckIsCollectionAsync(MongoClient client, string databaseName, string collectionName)
+        {
 
-        public static async Task<bool> CheckCollectionExists(MongoClient client, string databaseName, string collectionName)
+            var database = client.GetDatabase(databaseName);
+
+            // Filter by collection name
+            var filter = new BsonDocument("name", collectionName);
+
+            using var cursor = await database.ListCollectionsAsync(new ListCollectionsOptions { Filter = filter });
+            var collectionInfo = await cursor.FirstOrDefaultAsync();
+
+            if (collectionInfo == null)
+            {
+                return new(false, false);
+            }
+
+            // Check the "type" field returned in listCollections
+            var type = collectionInfo.GetValue("type", "collection").AsString;
+            return new(true, type == "collection");
+
+        }
+
+        public static async Task<bool> CheckCollectionExistsAsync(MongoClient client, string databaseName, string collectionName)
         {
 
             var database = client.GetDatabase(databaseName);
@@ -769,6 +802,32 @@ namespace OnlineMongoMigrationProcessor
                                            .FirstOrDefaultAsync();
 
             return document != null; // If a document is found, collection exists
+        }
+
+        public static async Task<bool> CheckCollectionValidAsync(MongoClient client, string databaseName, string collectionName)
+        {
+            if(await CheckCollectionExistsAsync(client, databaseName, collectionName))
+            {
+                (bool Exits, bool IsCollection) ret;
+                try
+                {
+                    ret = await CheckIsCollectionAsync(client, databaseName, collectionName); //fails if connnected to secondary
+                }
+                catch
+                {
+                    return true;
+                }                
+                if(ret.Exits)
+                {
+                    return ret.IsCollection;
+                }
+                else
+                    return false;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         public static async Task<(long CollectionSizeBytes, long DocumentCount)> GetCollectionStatsAsync(MongoClient client, string databaseName, string collectionName)
@@ -836,6 +895,8 @@ namespace OnlineMongoMigrationProcessor
 
                 // Create the target collection
                 await targetDatabase.CreateCollectionAsync(targetCollectionName);
+                mu.TargetCreated = true;
+
                 var targetCollection = targetDatabase.GetCollection<BsonDocument>(targetCollectionName);
 
                 IndexCopier indexCopier = new IndexCopier();

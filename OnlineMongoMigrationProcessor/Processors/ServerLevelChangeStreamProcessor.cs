@@ -163,6 +163,7 @@ namespace OnlineMongoMigrationProcessor
                 // Initialize change stream documents for each collection
                 foreach (var kvp in _migrationUnitsToProcess)
                 {
+                    kvp.Value.CSUpdatesInLastBatch = 0;
                     changeStreamDocuments[kvp.Key] = new ChangeStreamDocuments();
                 }
 
@@ -220,6 +221,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if(changeStreamDocuments != null)
                         await BulkProcessAllChangesAsync(changeStreamDocuments);
+                    
                 }
                 catch (Exception ex)
                 {
@@ -248,7 +250,7 @@ namespace OnlineMongoMigrationProcessor
                     return (true, counter); // Skip changes for collections not in our job
                 }
 
-                if (migrationUnit.SourceStatus != CollectionStatus.OK)
+                if (!Helper.IsMigrationUnitValid(migrationUnit))
                 {
                     return (true, counter); // Skip changes for collections with errors
                 }
@@ -292,17 +294,20 @@ namespace OnlineMongoMigrationProcessor
                 // Process the change
                 ProcessChangeEvent(change, targetCollection, collectionKey, changeStreamDocuments[collectionKey], _job.IsSimulatedRun, migrationUnit);
 
+                migrationUnit.CSUpdatesInLastBatch++;
                 // Update timestamps
                 if (!_syncBack)
                 {
-                    migrationUnit.CursorUtcTimestamp = timeStamp;
+                    migrationUnit.CursorUtcTimestamp = timeStamp;                    
+                    _job.CursorUtcTimestamp=timeStamp;
                 }
                 else
                 {
                     migrationUnit.SyncBackCursorUtcTimestamp = timeStamp;
+                    _job.SyncBackCursorUtcTimestamp = timeStamp;
                 }
 
-                // Update resume tokens - server-level only (no collection-level cache needed)
+                // Update resume tokens - server-level only
                 if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
                 {
                     var resumeTokenJson = change.ResumeToken.ToJson();
