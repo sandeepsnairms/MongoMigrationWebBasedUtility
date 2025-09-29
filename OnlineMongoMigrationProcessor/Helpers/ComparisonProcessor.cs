@@ -42,7 +42,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    if (mu.SourceStatus != CollectionStatus.OK)
+                    if (!Helper.IsMigrationUnitValid(mu))
                     {
                         log.WriteLine($"Skipping {mu.DatabaseName}.{mu.CollectionName} as source collection status is empty.");
                         continue; //skip if collection is not OK

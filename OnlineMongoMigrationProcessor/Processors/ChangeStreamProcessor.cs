@@ -65,7 +65,7 @@ namespace OnlineMongoMigrationProcessor
         public bool AddCollectionsToProcess(MigrationUnit mu, CancellationTokenSource cts)
         {
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
-            if (mu.SourceStatus != CollectionStatus.OK || ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
+            if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
             {
                 _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
                 return false;
@@ -103,7 +103,7 @@ namespace OnlineMongoMigrationProcessor
                 _migrationUnitsToProcess.Clear();
                 foreach (var migrationUnit in _job.MigrationUnits)
                 {
-                    if (migrationUnit.SourceStatus == CollectionStatus.OK && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
+                    if (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
                     {
                         _migrationUnitsToProcess[$"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}"] = migrationUnit;
 
@@ -434,7 +434,7 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var migrationUnit in _job.MigrationUnits ?? new List<MigrationUnit>())
                 {
-                    if (migrationUnit.RestoreComplete && migrationUnit.SourceStatus == CollectionStatus.OK)
+                    if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
                     {
                         if (!migrationUnit.AggressiveCacheDeleted)
                         {

@@ -1,5 +1,4 @@
 ﻿@page "/migrationjobviewer/{jobId}"
-
 @using OnlineMongoMigrationProcessor;
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
@@ -8,6 +7,7 @@
 @inject IJSRuntime JS
 @inject Service.FileService FileService
 @inject HttpClient HttpClient
+
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>
@@ -92,7 +92,7 @@
 
 @if (_resetChangeStreamDialogOpen && MigrationJob != null)
 {
-    <ResetChangeStream MigrationUnits="@((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Where(mu => mu.SourceStatus == CollectionStatus.OK).ToList())" OnCollectionsUpdated="@OnCSReset" />
+    <ResetChangeStream MigrationUnits="@((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Where(mu => Helper.IsMigrationUnitValid(mu)).ToList())" OnCollectionsUpdated="@OnCSReset" />
 }
 @if (_collectionDetailsDialogOpen && _selectedMigrationUnit != null)
 {
@@ -198,13 +198,19 @@
                         </td>
                         <td>@unit.CollectionName</td>
                         <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+
                         </td>
 
                         @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                         {
                             <td>
-                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+
                             </td>
                         }
                         @if (MigrationJob != null && MigrationJob.IsOnline)
@@ -464,16 +470,18 @@ else if (@_showLogBackupFile)
                 return true;
 
             // Source Status / Download Status
-            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
-                              (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
+            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
             if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Upload/Restore Status (for DumpAndRestore jobs)
             if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
             {
-                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY" : 
-                                  (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
+                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
@@ -701,7 +709,11 @@ else if (@_showLogBackupFile)
 
     private async Task Downloader(string fileName, string displayName)
     {
-        var url = $"/api/File/download/log/{fileName}"; 
+
+        var url = $"/api/File/download/log/{fileName}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);      
+               
         var response = await HttpClient.GetAsync(url);
 
         if (response.IsSuccessStatusCode)
@@ -714,7 +726,7 @@ else if (@_showLogBackupFile)
         }
         else
         {
-            Console.Error.WriteLine($"Failed to download log file: {displayName}.json");
+            await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
         }
     }
 

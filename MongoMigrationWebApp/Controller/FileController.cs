@@ -36,14 +36,14 @@ public class FileController : ControllerBase
         {
             var fileBytes = System.IO.File.ReadAllBytes(filePath);
             var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, fileName);
+            return File(fileBytes, contentType, $"{fileName}.txt");
         }
         else
         {
 
             var fileBytes = new Log().DownloadLogsAsJsonBytes(filePath, 0, 0);
             var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, fileName);
+            return File(fileBytes, contentType, $"{fileName}.txt");
         }
     }
 

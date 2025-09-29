@@ -21,9 +21,9 @@ Streamline your migration to Azure Cosmos DB for MongoDB (vCore‑based) with a 
   - [Prerequisites](#prerequisites)
   - [Deploy on Azure using Source Files (option 1)](#deploy-on-azure-using-source-files-option-1)
   - [Deploy on Azure using precompiled binaries (option 2)](#deploy-on-azure-using-precompiled-binaries-option-2)
-  - [VNet Integration for MongoDB servers within a private Virtual Network (VNet)](#vnet-integration-for-mongodb-servers-within-a-private-virtual-network-vnet)
+  - [Enable App Authentication](#enable-app-authentication-optional-but-recommended)
   - [Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional)
-  - [Steps to Enable Private Endpoint on the Azure Web App (Optional)](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional)
+  - [Enable Private Endpoint on the Azure Web App (Optional)](#1-enable-vnet-integration-for-the-web-appenable-private-endpoint-on-the-azure-web-app-optional)
 - [On-Premises Deployment](#on-premises-deployment)
   - [Steps to Deploy on a Windows Server](#steps-to-deploy-on-a-windows-server)
 - [How to Use](#how-to-use)
@@ -185,14 +185,20 @@ This option involves cloning the repository and building the C# project source f
 4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
 5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
 
-### VNet Integration for MongoDB servers within a private Virtual Network (VNet)
+## Enable App Authentication (Optional but Recommended)
 
-Accessing MongoDB servers within a VNet requires VNet injection. To enable connectivity to MongoDB servers located within a private VNet, ensure that [VNet integration](#1-enable-vnet-integration-for-the-web-app) is configured for your application.
+The WebApp deployed using the above steps will be publicly accessible to anyone with the URL. To secure the application, it is recommended to enable App Service Authentication.  
+
+For more details, see [Add app authentication to your web app](https://learn.microsoft.com/en-us/azure/app-service/scenario-secure-app-authentication-app-service?tabs=workforce-configuration).
+
 
 
 ## Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)
 
-### Steps
+### VNet Integration for MongoDB servers within a private Virtual Network (VNet)
+
+Accessing MongoDB servers within a VNet requires VNet injection. To enable connectivity to MongoDB servers located within a private VNet, ensure that [VNet integration](#1-enable-vnet-integration-for-the-web-app) is configured for your application.
+
 
 #### 1. Create a VNet (If Not Already Existing)
 
@@ -245,7 +251,7 @@ Accessing MongoDB servers within a VNet requires VNet injection. To enable conne
 
 
 
-## Steps to Enable Private Endpoint on the Azure Web App (Optional)
+## Enable Private Endpoint on the Azure Web App (Optional)
 
 ### Prerequisites
 

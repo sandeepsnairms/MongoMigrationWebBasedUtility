@@ -175,7 +175,7 @@
         }
         else
         {
-            Console.Error.WriteLine($"Failed to download log file: Jobs.json");
+            await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
         }
     }
 
