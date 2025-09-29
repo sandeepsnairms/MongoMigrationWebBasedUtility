@@ -767,8 +767,9 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public static async Task<Tuple<bool,bool>> CheckIsCollectionAsync(MongoClient client, string databaseName, string collectionName)
+        public static async Task<(bool Exits,bool IsCollection)> CheckIsCollectionAsync(MongoClient client, string databaseName, string collectionName)
         {
+
             var database = client.GetDatabase(databaseName);
 
             // Filter by collection name
@@ -779,12 +780,13 @@ namespace OnlineMongoMigrationProcessor
 
             if (collectionInfo == null)
             {
-                return new Tuple<bool, bool>(false, false);
-             }
+                return new(false, false);
+            }
 
             // Check the "type" field returned in listCollections
             var type = collectionInfo.GetValue("type", "collection").AsString;
-            return new Tuple<bool, bool>(true, type == "collection");
+            return new(true, type == "collection");
+
         }
 
         public static async Task<bool> CheckCollectionExistsAsync(MongoClient client, string databaseName, string collectionName)
@@ -806,11 +808,18 @@ namespace OnlineMongoMigrationProcessor
         {
             if(await CheckCollectionExistsAsync(client, databaseName, collectionName))
             {
-                var ret = await CheckIsCollectionAsync(client, databaseName, collectionName);
-                
-                if(ret.Item1)
+                (bool Exits, bool IsCollection) ret;
+                try
                 {
-                    return ret.Item2;
+                    ret = await CheckIsCollectionAsync(client, databaseName, collectionName); //fails if connnected to secondary
+                }
+                catch
+                {
+                    return true;
+                }                
+                if(ret.Exits)
+                {
+                    return ret.IsCollection;
                 }
                 else
                     return false;

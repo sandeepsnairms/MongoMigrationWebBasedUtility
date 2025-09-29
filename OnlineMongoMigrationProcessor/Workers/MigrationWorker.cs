@@ -239,8 +239,16 @@ namespace OnlineMongoMigrationProcessor.Workers
                 bool isCollection = true;
                 if (checkExist)
                 {
-                    var ret= await MongoHelper.CheckIsCollectionAsync(_sourceClient!, unit.DatabaseName, unit.CollectionName);
-                    isCollection = checkExist && ret.Item2;
+                    (bool Exits, bool IsCollection) ret;
+                    try
+                    {
+                        ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient, unit.DatabaseName, unit.CollectionName); //fails if connnected to secondary
+                        isCollection = checkExist && ret.Item2;
+                    }
+                    catch
+                    {
+                        isCollection=true;
+                    }                   
 
                     if (isCollection == false)
                     {
@@ -437,7 +445,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (checkExist)
                     {
                         var ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
-                        isCollection = checkExist && ret.Item2;
+                        isCollection = checkExist && ret.IsCollection;
 
                         if (isCollection == false)
                         {
