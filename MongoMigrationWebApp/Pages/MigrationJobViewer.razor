@@ -1,5 +1,4 @@
 ﻿@page "/migrationjobviewer/{jobId}"
-
 @using OnlineMongoMigrationProcessor;
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
@@ -8,6 +7,7 @@
 @inject IJSRuntime JS
 @inject Service.FileService FileService
 @inject HttpClient HttpClient
+
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>
@@ -709,7 +709,11 @@ else if (@_showLogBackupFile)
 
     private async Task Downloader(string fileName, string displayName)
     {
-        var url = $"/api/File/download/log/{fileName}"; 
+
+        var url = $"/api/File/download/log/{fileName}";
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);      
+               
         var response = await HttpClient.GetAsync(url);
 
         if (response.IsSuccessStatusCode)
@@ -722,7 +726,7 @@ else if (@_showLogBackupFile)
         }
         else
         {
-            Console.Error.WriteLine($"Failed to download log file: {displayName}.json");
+            await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
         }
     }
 
