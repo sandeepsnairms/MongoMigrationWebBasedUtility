@@ -791,6 +791,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<bool> CheckCollectionExistsAsync(MongoClient client, string databaseName, string collectionName)
         {
+            /*
 
             var database = client.GetDatabase(databaseName);
 
@@ -801,7 +802,27 @@ namespace OnlineMongoMigrationProcessor
                                            .Limit(1)
                                            .FirstOrDefaultAsync();
 
-            return document != null; // If a document is found, collection exists
+            return document != null; // If a document is found, collection exists*/
+
+            try
+            {
+                var db = client.GetDatabase(databaseName);
+                var coll = db.GetCollection<RawBsonDocument>(collectionName);
+
+                var result = await coll.Aggregate()
+                    .AppendStage<RawBsonDocument>(@"{ $collStats: { count: {} } }")
+                    .FirstOrDefaultAsync();
+
+                if (result == null)
+                    return false;
+                else
+                    return true;
+            }
+            catch (MongoCommandException ex) when (ex.CodeName == "NamespaceNotFound")
+            {
+                return false;
+            }
+
         }
 
         public static async Task<bool> CheckCollectionValidAsync(MongoClient client, string databaseName, string collectionName)
