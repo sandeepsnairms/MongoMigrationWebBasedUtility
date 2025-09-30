@@ -198,7 +198,7 @@
                         </td>
                         <td>@unit.CollectionName</td>
                         <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                            @(unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
                                                 : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                 : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
 
@@ -207,7 +207,7 @@
                         @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                         {
                             <td>
-                                @(unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                                @(unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
                                                     : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                     : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
 
@@ -470,7 +470,7 @@ else if (@_showLogBackupFile)
                 return true;
 
             // Source Status / Download Status
-            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
                                                 : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                 : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
             if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -479,7 +479,7 @@ else if (@_showLogBackupFile)
             // Upload/Restore Status (for DumpAndRestore jobs)
             if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
             {
-                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "MISSING or EMPTY"
+                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
                                                     : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                     : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))

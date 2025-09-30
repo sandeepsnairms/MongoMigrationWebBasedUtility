@@ -412,7 +412,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             }
                         }
                         unit.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
+                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
                         _jobList.Save();
                         //return TaskResult.Success;
                     }
@@ -495,7 +495,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     else
                     {
                         migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source or has zero records. Created empty collection.", LogType.Error);
+                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source. Created empty collection.", LogType.Error);
                         return TaskResult.Abort;
                     }
                 }               
