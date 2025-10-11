@@ -313,18 +313,34 @@ namespace OnlineMongoMigrationProcessor
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
 
-                // Use unified methods that handle both normal and aggressive scenarios
-                int insertFailures = await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
-                    mu, collection, insertEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
+                // Clone the event collections to allow original collections to be cleared immediately
+                var insertEventsClone = new List<ChangeStreamDocument<BsonDocument>>(insertEvents);
+                var updateEventsClone = new List<ChangeStreamDocument<BsonDocument>>(updateEvents);
+                var deleteEventsClone = new List<ChangeStreamDocument<BsonDocument>>(deleteEvents);
 
-                int updateFailures = await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
-                    mu, collection, updateEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
 
-                int deleteFailures = await MongoHelper.ProcessDeletesAsync<MigrationUnit>(
-                    mu, collection, deleteEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
+                // Start all processing operations asynchronously on separate threads
+                var insertTask = Task.Run(async () =>
+                    await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
+                        mu, collection, insertEventsClone, counterDelegate, _log, _syncBackPrefix,
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+
+                var updateTask = Task.Run(async () =>
+                    await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
+                        mu, collection, updateEventsClone, counterDelegate, _log, _syncBackPrefix,
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+
+                var deleteTask = Task.Run(async () =>
+                    await MongoHelper.ProcessDeletesAsync<MigrationUnit>(
+                        mu, collection, deleteEventsClone, counterDelegate, _log, _syncBackPrefix,
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+
+                // Wait for all tasks to complete and get their results
+                var results = await Task.WhenAll(insertTask, updateTask, deleteTask);
+                
+                var insertFailures = results[0];
+                var updateFailures = results[1];
+                var deleteFailures = results[2];
 
                 var totalFailures = insertFailures + updateFailures + deleteFailures;
                 if (totalFailures > 0)

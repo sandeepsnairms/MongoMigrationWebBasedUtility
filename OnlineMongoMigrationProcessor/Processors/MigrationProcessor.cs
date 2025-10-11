@@ -96,8 +96,10 @@ namespace OnlineMongoMigrationProcessor.Processors
                     _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
                 // Ensure _sourceClient is not null before using it
-                if (_changeStreamProcessor == null && _targetClient != null && _sourceClient != null)
+                if (_changeStreamProcessor == null && _sourceClient != null)
+#pragma warning disable CS8604 // Possible null reference argument.
                     _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
+#pragma warning restore CS8604 // Possible null reference argument.
 
                 if (_changeStreamProcessor != null)
                 {

@@ -153,35 +153,65 @@
     <table class="table collections-table">
         <thead>
             <tr>
-                <th>Database Name</th>
-                <th>Collection Name</th>
+                <th class="sortable-header @GetSortClass("DatabaseName")" @onclick='() => SortBy("DatabaseName")' style="cursor: pointer;">
+                    Database Name
+                    <i class="bi @GetSortIcon("DatabaseName") ms-1"></i>
+                </th>
+                <th class="sortable-header @GetSortClass("CollectionName")" @onclick='() => SortBy("CollectionName")' style="cursor: pointer;">
+                    Collection Name
+                    <i class="bi @GetSortIcon("CollectionName") ms-1"></i>
+                </th>
                 @if (MigrationJob != null && MigrationJob.JobType==OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                 {
-                    <th>Download Status</th>
-                    <th>Upload Status</th>
+                    <th class="sortable-header @GetSortClass("DownloadStatus")" @onclick='() => SortBy("DownloadStatus")' style="cursor: pointer;">
+                        Download Status
+                        <i class="bi @GetSortIcon("DownloadStatus") ms-1"></i>
+                    </th>
+                    <th class="sortable-header @GetSortClass("UploadStatus")" @onclick='() => SortBy("UploadStatus")' style="cursor: pointer;">
+                        Upload Status
+                        <i class="bi @GetSortIcon("UploadStatus") ms-1"></i>
+                    </th>
                 }
                 else
                 {
-                    <th>Copy Status</th>
+                    <th class="sortable-header @GetSortClass("CopyStatus")" @onclick='() => SortBy("CopyStatus")' style="cursor: pointer;">
+                        Copy Status
+                        <i class="bi @GetSortIcon("CopyStatus") ms-1"></i>
+                    </th>
                 }
                 @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
                 {
                     @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
                     {
-                        <th>Time Since Last Change</th>
-                        <th>Last Batch – Total Changes</th>
+                        <th class="sortable-header @GetSortClass("TimeSinceLastChange")" @onclick='() => SortBy("TimeSinceLastChange")' style="cursor: pointer;">
+                            Time Since Last Change
+                            <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
+                        </th>
+                        <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                            Last Batch – Total Changes
+                            <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                        </th>
                     }
                     else
                     {
-                        <th>Change Stream Last Batch – Total Changes</th>
+                        <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                            Change Stream Last Batch – Total Changes
+                            <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                        </th>
                     }
 
                 }
                 @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
                 {
 
-                     <th>Time Since Last Sync Back</th>
-                    <th>Last Batch – Total Changes</th>
+                     <th class="sortable-header @GetSortClass("TimeSinceLastChange")" @onclick='() => SortBy("TimeSinceLastChange")' style="cursor: pointer;">
+                        Time Since Last Sync Back
+                        <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
+                    </th>
+                    <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                        Last Batch – Total Changes
+                        <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                    </th>
                 }
             </tr>
         </thead>
@@ -441,6 +471,10 @@ else if (@_showLogBackupFile)
     private int _currentPage = 1;
     private int _pageSize = 25;
 
+    // Sorting properties
+    private string _sortColumn = "DatabaseName";
+    private bool _sortAscending = true;
+
     // Pagination helper
     private PaginationHelper<MigrationUnit> _paginationHelper = new PaginationHelper<MigrationUnit>(
         new List<MigrationUnit>(),
@@ -528,20 +562,118 @@ else if (@_showLogBackupFile)
         };
     }
 
+    #region Sorting Methods
+
+    private void SortBy(string columnName)
+    {
+        if (_sortColumn == columnName)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = columnName;
+            _sortAscending = true;
+        }
+        
+        _currentPage = 1; // Reset to first page when sorting changes
+        StateHasChanged();
+    }
+
+    private string GetSortIcon(string columnName)
+    {
+        if (_sortColumn != columnName)
+            return "bi-arrow-down-up"; // Neutral sort icon
+        
+        return _sortAscending ? "bi-arrow-up" : "bi-arrow-down";
+    }
+
+    private string GetSortClass(string columnName)
+    {
+        return _sortColumn == columnName ? "sorted-column" : "";
+    }
+
+    private List<MigrationUnit> ApplySorting(List<MigrationUnit> units)
+    {
+        if (units == null || !units.Any())
+            return units ?? new List<MigrationUnit>();
+
+        return _sortColumn switch
+        {
+            "DatabaseName" => _sortAscending 
+                ? units.OrderBy(u => u.DatabaseName).ToList()
+                : units.OrderByDescending(u => u.DatabaseName).ToList(),
+            
+            "CollectionName" => _sortAscending
+                ? units.OrderBy(u => u.CollectionName).ToList()
+                : units.OrderByDescending(u => u.CollectionName).ToList(),
+            
+            "DownloadStatus" or "CopyStatus" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForStatus(u, false)).ToList()
+                : units.OrderByDescending(u => GetSortValueForStatus(u, false)).ToList(),
+            
+            "UploadStatus" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForStatus(u, true)).ToList()
+                : units.OrderByDescending(u => GetSortValueForStatus(u, true)).ToList(),
+            
+            "TimeSinceLastChange" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForTimestamp(u)).ToList()
+                : units.OrderByDescending(u => GetSortValueForTimestamp(u)).ToList(),
+            
+            "LastBatchChanges" => _sortAscending
+                ? units.OrderBy(u => u.CSUpdatesInLastBatch).ToList()
+                : units.OrderByDescending(u => u.CSUpdatesInLastBatch).ToList(),
+            
+            _ => units
+        };
+    }
+
+    private object GetSortValueForStatus(MigrationUnit unit, bool isUploadStatus)
+    {
+        if (unit.SourceStatus == CollectionStatus.NotFound)
+            return "0_Skipped (404)"; // Sort skipped items first
+        
+        if (unit.SourceStatus == CollectionStatus.IsView)
+            return "0_Skipped (VIEW)"; // Sort skipped items first
+
+        if (isUploadStatus)
+        {
+            if (unit.RestoreComplete || unit.RestorePercent == 100)
+                return "2_Success"; // Sort completed items last
+            return $"1_{unit.RestorePercent:000.0}%"; // Sort by percentage in middle
+        }
+        else
+        {
+            if (unit.DumpComplete)
+                return "2_Success"; // Sort completed items last
+            return $"1_{unit.DumpPercent:000.0}%"; // Sort by percentage in middle
+        }
+    }
+
+    private DateTime GetSortValueForTimestamp(MigrationUnit unit)
+    {
+        if (MigrationJob?.ProcessingSyncBack == true)
+            return unit.SyncBackCursorUtcTimestamp;
+        else
+            return unit.CursorUtcTimestamp;
+    }
+
+    #endregion
+
     #region Pagination and Filtering Methods
 
     private void UpdatePaginationHelper()
     {
         var currentUnits = MigrationJob?.MigrationUnits ?? new List<MigrationUnit>();
         
-        // Only recreate if the collection has changed
-        if (_paginationHelper.TotalItemsCount != currentUnits.Count)
-        {
-            _paginationHelper = new PaginationHelper<MigrationUnit>(
-                currentUnits,
-                GetFilterPredicate()
-            );
-        }
+        // Apply sorting before pagination
+        currentUnits = ApplySorting(currentUnits);
+        
+        // Always recreate the pagination helper with sorted data
+        _paginationHelper = new PaginationHelper<MigrationUnit>(
+            currentUnits,
+            GetFilterPredicate()
+        );
         
         // Always update the helper with current component state
         _paginationHelper.FilterText = _filterText;

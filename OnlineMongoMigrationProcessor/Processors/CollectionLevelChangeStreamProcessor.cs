@@ -244,7 +244,10 @@ namespace OnlineMongoMigrationProcessor
                         targetCollection = sourceCollection;
                     }
 
-                    WatchCollection(mu, options, sourceCollection!, targetCollection!, cancellationToken);
+                    // adding max await time to avoid long running cursors
+                    options.MaxAwaitTime ??= TimeSpan.FromSeconds(seconds);
+
+                    WatchCollectionAsync(mu, options, sourceCollection!, targetCollection!, cancellationToken,seconds).GetAwaiter().GetResult();
                 }
                 catch (OperationCanceledException)
                 {
@@ -268,133 +271,145 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private void WatchCollection(MigrationUnit mu, ChangeStreamOptions options, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken)
+        private async Task WatchCollectionAsync(
+             MigrationUnit mu,
+             ChangeStreamOptions options,
+             IMongoCollection<BsonDocument> sourceCollection,
+             IMongoCollection<BsonDocument> targetCollection,
+             CancellationToken cancellationToken,
+             int timeoutInSec)
         {
-            bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
-                .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
-
             long counter = 0;
-            BsonDocument userFilterDoc = new BsonDocument();
+            BsonDocument userFilterDoc = string.IsNullOrWhiteSpace(mu.UserFilter)
+                ? new BsonDocument()
+                : BsonDocument.Parse(mu.UserFilter);
 
-            if (!string.IsNullOrWhiteSpace(mu.UserFilter))
+            ChangeStreamDocuments changeStreamDocuments = new();
+
+            async Task FinalizeBatchAsync()
             {
-                userFilterDoc = BsonDocument.Parse(mu.UserFilter);
-                userFilterDoc ??= new BsonDocument(); // Ensure it's not null
-            }
+                try
+                {
+                    await BulkProcessChangesAsync(
+                        mu,
+                        targetCollection,
+                        insertEvents: changeStreamDocuments.DocsToBeInserted,
+                        updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                        deleteEvents: changeStreamDocuments.DocsToBeDeleted);
 
-            ChangeStreamDocuments changeStreamDocuments = new ChangeStreamDocuments();
+                    mu.CSUpdatesInLastBatch = counter;
+                    mu.CSNormalizedUpdatesInLastBatch =
+                        (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
+
+                    _jobList?.Save();
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Error processing batch for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
+                }
+            }
 
             try
             {
-                List<BsonDocument> pipeline;
-                if (_job.JobType == JobType.RUOptimizedCopy)
+
+                var pipeline = (_job.JobType == JobType.RUOptimizedCopy)
+                    ? new List<BsonDocument>
+                      {
+                  new("$match", new BsonDocument("operationType",
+                      new BsonDocument("$in", new BsonArray { "insert", "update", "replace", "delete" }))),
+                  new("$project", new BsonDocument
+                  {
+                      { "operationType", 1 },
+                      { "_id", 1 },
+                      { "fullDocument", 1 },
+                      { "ns", 1 },
+                      { "documentKey", 1 }
+                  })
+                      }
+                    : new List<BsonDocument>();
+
+                using var cursor = await sourceCollection.WatchAsync<ChangeStreamDocument<BsonDocument>>(pipeline, options, cancellationToken);
+
+                DateTime lastActivity = DateTime.UtcNow;
+                TimeSpan idleTimeout = TimeSpan.FromSeconds(timeoutInSec);
+
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    pipeline = new List<BsonDocument>()
+                    // Force unblocking: return control every 10 seconds max
+                    var moveNextTask = cursor.MoveNextAsync(cancellationToken);
+                    var completedTask = await Task.WhenAny(moveNextTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+
+                    if (completedTask != moveNextTask)
                     {
-                        new BsonDocument("$match", new BsonDocument("operationType",
-                            new BsonDocument("$in", new BsonArray { "insert", "update", "replace", "delete" }))),
-                        new BsonDocument("$project", new BsonDocument
+                        await FinalizeBatchAsync();
+                        return;
+                    }
+
+                    if (!await moveNextTask)
+                    {
+                        await FinalizeBatchAsync();
+                        return;
+                    }
+
+                    if (!cursor.Current.Any())
+                    {
+                        if (DateTime.UtcNow - lastActivity > idleTimeout)
                         {
-                            { "operationType", 1 },
-                            { "_id", 1 },
-                            { "fullDocument", 1 },
-                            { "ns", 1 },
-                            { "documentKey", 1 }
-                        })
-                    };
-                }
-                else
-                {
-                    pipeline = new List<BsonDocument>();
-                }
+                            await FinalizeBatchAsync();
+                            return;
+                        }
+                        continue;
+                    }
 
-                var pipelineArray = pipeline.ToArray();
-                using var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
-                string lastProcessedToken = string.Empty;
+                    lastActivity = DateTime.UtcNow;
 
-                if (_job.SourceServerVersion.StartsWith("3"))
-                {
-                    foreach (var change in cursor.ToEnumerable(cancellationToken))
+                    foreach (var change in cursor.Current)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (ExecutionCancelled)
+                        {
+                            await FinalizeBatchAsync();
+                            return;
+                        }
 
-                        lastProcessedToken = string.Empty;
-                        _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token1);
-                        lastProcessedToken = token1 ?? string.Empty;
+                        _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token);
+                        var lastProcessedToken = token ?? string.Empty;
 
-                        if (lastProcessedToken == change.ResumeToken.ToJson())
+                        if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
                         {
                             mu.CSUpdatesInLastBatch = 0;
                             mu.CSNormalizedUpdatesInLastBatch = 0;
-                            return; // Skip processing if the event has already been processed
+                            await FinalizeBatchAsync();
+                            return;
                         }
 
-                        if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, changeStreamDocuments, ref counter, userFilterDoc))
-                            return;
-                    }
-                }
-                else
-                {
-                    while (cursor.MoveNext(cancellationToken))
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
-
-                        foreach (var change in cursor.Current)
+                        if (!ProcessCursor(change, cursor, targetCollection,
+                            sourceCollection.CollectionNamespace.ToString(),
+                            mu, changeStreamDocuments, ref counter, userFilterDoc))
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            if (ExecutionCancelled) return;
-
-                            lastProcessedToken = string.Empty;
-                            _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
-                            lastProcessedToken = token2 ?? string.Empty;
-
-                            if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
-                            {
-                                mu.CSUpdatesInLastBatch = 0;
-                                mu.CSNormalizedUpdatesInLastBatch = 0;
-                                return; // Skip processing if the event has already been processed
-                            }
-
-                            if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, changeStreamDocuments, ref counter, userFilterDoc))
-                                return;
-                        }
-
-                        if (ExecutionCancelled)
+                            await FinalizeBatchAsync();
                             return;
+                        }
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                // A new batch will be started. do nothing
+                await FinalizeBatchAsync();
             }
             catch (Exception)
             {
+                await FinalizeBatchAsync();
                 throw;
             }
             finally
             {
-                try
-                {
-                    BulkProcessChangesAsync(
-                        mu,
-                        targetCollection,
-                        insertEvents: changeStreamDocuments.DocsToBeInserted,
-                        updateEvents: changeStreamDocuments.DocsToBeUpdated,
-                        deleteEvents: changeStreamDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
-
-                    mu.CSUpdatesInLastBatch = counter;
-                    mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
-                    _jobList?.Save();
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
-                }
+                await FinalizeBatchAsync();
             }
         }
+
+
+
 
         // This method retrieves the event associated with the ResumeToken
         private bool AutoReplayFirstChangeInResumeToken(string? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, MigrationUnit mu)

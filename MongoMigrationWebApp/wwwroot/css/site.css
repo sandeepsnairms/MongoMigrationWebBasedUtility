@@ -81,6 +81,38 @@ a, .btn-link {
     border-left: none !important;
 }
 
+/* Sortable table header styles */
+.sortable-header {
+    user-select: none;
+    transition: background-color 0.15s ease-in-out;
+    position: relative;
+}
+
+.sortable-header:hover {
+    background-color: #e9ecef !important;
+}
+
+.sortable-header.sorted-column {
+    background-color: #e3f2fd !important;
+    color: #1976d2;
+    font-weight: 700;
+}
+
+.sortable-header i {
+    opacity: 0.6;
+    transition: opacity 0.15s ease-in-out;
+    font-size: 0.75rem;
+}
+
+.sortable-header:hover i {
+    opacity: 1;
+}
+
+.sortable-header.sorted-column i {
+    opacity: 1;
+    color: #1976d2;
+}
+
 .page-size-selector-top {
     display: flex;
     align-items: center;

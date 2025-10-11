@@ -307,7 +307,7 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-            ProcessRunning = true;
+             ProcessRunning = true;
 
             // Initialize processor context (parity with CopyProcessor)
             ProcessorContext ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
