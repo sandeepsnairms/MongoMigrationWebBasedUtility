@@ -14,7 +14,7 @@ using static OnlineMongoMigrationProcessor.MongoHelper;
 
 namespace OnlineMongoMigrationProcessor
 {
-    public abstract class ChangeStreamProcessor
+    public abstract class ChangeStreamProcessor : IDisposable
     {
         protected int _concurrentProcessors;
         protected int _processorRunMaxDurationInSec;
@@ -42,6 +42,8 @@ namespace OnlineMongoMigrationProcessor
 
         protected static readonly object _processingLock = new object();
         protected static readonly object _cleanupLock = new object();
+
+        private bool _disposed = false;
 
         public bool ExecutionCancelled { get; set; }
 
@@ -73,7 +75,7 @@ namespace OnlineMongoMigrationProcessor
             if (!_migrationUnitsToProcess.ContainsKey(key))
             {
                 _migrationUnitsToProcess.TryAdd(key, mu);
-                _log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.");
+                _log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.", LogType.Debug);
 
                 _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
                 return true;
@@ -284,12 +286,6 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
             int batchSize = 50)
         {
-            if (_job.IsSimulatedRun)
-            {
-                _log.WriteLine($"{_syncBackPrefix}Skipping bulk processing for {collection.CollectionNamespace.FullName} in simulated run.");
-                return;
-            }
-
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
                 switch (counterType)
@@ -312,7 +308,9 @@ namespace OnlineMongoMigrationProcessor
                 bool isAggressive = _job.AggresiveChangeStream;
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
+                bool isSimulatedRun = _job.IsSimulatedRun;
 
+               
                 // Clone the event collections to allow original collections to be cleared immediately
                 var insertEventsClone = new List<ChangeStreamDocument<BsonDocument>>(insertEvents);
                 var updateEventsClone = new List<ChangeStreamDocument<BsonDocument>>(updateEvents);
@@ -323,17 +321,17 @@ namespace OnlineMongoMigrationProcessor
                 var insertTask = Task.Run(async () =>
                     await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
                         mu, collection, insertEventsClone, counterDelegate, _log, _syncBackPrefix,
-                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient, isSimulatedRun));
 
                 var updateTask = Task.Run(async () =>
                     await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
                         mu, collection, updateEventsClone, counterDelegate, _log, _syncBackPrefix,
-                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient, isSimulatedRun));
 
                 var deleteTask = Task.Run(async () =>
                     await MongoHelper.ProcessDeletesAsync<MigrationUnit>(
                         mu, collection, deleteEventsClone, counterDelegate, _log, _syncBackPrefix,
-                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient));
+                        batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient, isSimulatedRun));
 
                 // Wait for all tasks to complete and get their results
                 var results = await Task.WhenAll(insertTask, updateTask, deleteTask);
@@ -368,7 +366,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (mu.AggressiveCacheDeleted || _aggressiveCleanupProcessed.ContainsKey(collectionKey))
                 {
-                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}");
+                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}", LogType.Debug);
                     return;
                 }
 
@@ -435,7 +433,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (_finalCleanupExecuted)
                 {
-                    _log.WriteLine("Aggressive change stream final cleanup already executed");
+                    _log.WriteLine("Aggressive change stream final cleanup already executed", LogType.Debug);
                     return;
                 }
                 _finalCleanupExecuted = true;
@@ -460,7 +458,7 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             skippedCount++;
-                            _log.AddVerboseMessage($"Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - already processed");
+                            _log.ShowInMonitor($"Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - already processed");
                         }
                     }
                 }
@@ -489,5 +487,30 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
         }
+
+        #region IDisposable Implementation
+        
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed && disposing)
+            {
+                // Dispose managed resources - override in derived classes if needed
+                ExecutionCancelled = true;
+                _disposed = true;
+            }
+        }
+
+        ~ChangeStreamProcessor()
+        {
+            Dispose(false);
+        }
+
+        #endregion
     }
 }

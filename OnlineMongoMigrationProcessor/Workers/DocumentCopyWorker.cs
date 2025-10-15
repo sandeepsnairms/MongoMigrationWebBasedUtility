@@ -46,7 +46,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (percent > 0)
             {
-               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+               _log.ShowInMonitor($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
 
                 mu.DumpPercent = basePercent + percent * contribFactor;
                 mu.RestorePercent = mu.DumpPercent;
@@ -178,7 +178,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (!errors.IsEmpty)
             {
-               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process");                
+               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process", LogType.Warning);                
             }
 
             if (mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0 || errors.Count>0)
@@ -198,7 +198,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Error);
+                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Warning);
                     
                     ResetSegmentsInChunk(mu.MigrationChunks[migrationChunkIndex]);
                     return TaskResult.Retry;
@@ -210,7 +210,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 else
                 {
-                   _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Error);
+                   _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Warning);
 					return TaskResult.Retry;
 				}
                 jobList?.Save(); //persists state
@@ -243,12 +243,12 @@ namespace OnlineMongoMigrationProcessor.Workers
             string segmentId = segment.Id;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
-           _log.WriteLine($"Document copy started for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]");
+           _log.WriteLine($"Document copy started for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]", LogType.Debug);
             
 
             if (segment.IsProcessed == true)
             {
-               _log.WriteLine($"Skipping processed segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]");
+               _log.WriteLine($"Skipping processed segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]", LogType.Debug);
                 
 
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
@@ -324,7 +324,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             Interlocked.Add(ref _failureCount, otherErrors);
                             _log.WriteLine(
-                                $"Document copyencountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
+                                $"Document copy encountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
                                 LogType.Error);
                             LogErrors(
                                 ex.WriteErrors.Where(e => e.Code != 11000).ToList(),
@@ -367,7 +367,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if(failed)
                     {
-                        _log.WriteLine($"Document copy failed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}].");
+                        _log.WriteLine($"Document copy failed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}].", LogType.Warning);
                     }
                     else if(_failureCount > 0 || _skippedCount > 0)
 					{
@@ -375,7 +375,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 					}
                     else
                     {
-						_log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.");
+						_log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
 					}
                     segment.IsProcessed = !failed;
                     jobList.Save();
@@ -387,7 +387,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 errors.Add(ex);
-                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex}", LogType.Error);
+                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex}", LogType.Warning);
 				return TaskResult.Retry;
 			}
         }
@@ -451,7 +451,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex.Message}", LogType.Error);
+                _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex.Message}", LogType.Warning);
             }
 
             jobList.Save();
@@ -552,13 +552,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 // Log progress every 10 pages
                 if (pageIndex % 10 == 0)
                 {
-                    _log.AddVerboseMessage($"Processed {processedCount} documents, found {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+                    _log.ShowInMonitor($"Processed {processedCount} documents, found {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
                 }
 
                 // Limit the number of pages to prevent infinite loops
                 if (pageIndex > 10000)
                 {
-                    _log.WriteLine($"Reached maximum page limit while comparing chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]", LogType.Error);
+                    _log.WriteLine($"Reached maximum page limit while comparing chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]", LogType.Warning);
                     break;
                 }
             }

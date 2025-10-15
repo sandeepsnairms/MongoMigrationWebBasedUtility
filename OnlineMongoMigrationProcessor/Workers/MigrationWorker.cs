@@ -122,7 +122,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine("Source client created.");
             if (_job.IsSimulatedRun)
             {
-                _log.WriteLine("Simulated Run. No changes will be made to the target.");
+                _log.WriteLine("Simulated Run. No changes will be made to the target.", LogType.Warning);
             }
             else
             {
@@ -134,13 +134,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (_job.JobType == JobType.RUOptimizedCopy)
                     {
-                        _log.WriteLine("This migration job will not transfer the indexes to the target collections. Use the schema migration script at https://aka.ms/mongoruschemamigrationscript to create the indexes on the target collections.");
+                        _log.WriteLine("This migration job will not transfer the indexes to the target collections. Use the schema migration script at https://aka.ms/mongoruschemamigrationscript to create the indexes on the target collections.", LogType.Warning);
                     }
                     else
                     {
                         if (_job.SkipIndexes)
                         {
-                            _log.WriteLine("No indexes will be created.");
+                            _log.WriteLine("No indexes will be created.", LogType.Warning);
                         }
                     }
                 }
@@ -253,7 +253,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (isCollection == false)
                     {
                         unit.SourceStatus = CollectionStatus.IsView;
-                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Error);
+                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);
                         continue;
                     }
                 }
@@ -342,7 +342,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                             if (chunks.Count == 0)
                             {
-                                _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has no records to migrate", LogType.Error);
+                                _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has no records to migrate", LogType.Debug);
                                 unit.SourceStatus = CollectionStatus.NotFound;
                                 continue;
                             }
@@ -450,7 +450,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         if (isCollection == false)
                         {
                             migrationUnit.SourceStatus = CollectionStatus.IsView;
-                            _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Error);
+                            _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);
                             continue;
                         }
                     }
@@ -495,7 +495,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     else
                     {
                         migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source. Created empty collection.", LogType.Error);
+                        _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source. Created empty collection.", LogType.Warning);
                         return TaskResult.Abort;
                     }
                 }               
@@ -551,6 +551,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
             _job = job;
+            _log.SetJob(_job); // Set job reference for log level filtering
             StopMigration(); //stop any existing
             ProcessRunning = true;
 
@@ -573,7 +574,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             string logfile = _log.Init(_job.Id);
             if (logfile != _job.Id)
             {
-                _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}");
+                _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
             }
             _log.WriteLine($"Job {_job.Id} started on {_job.StartedOn} (UTC)");
 
@@ -700,6 +701,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
             _job = job;
+            _log.SetJob(_job); // Set job reference for log level filtering
 
             ProcessRunning = true;
 

@@ -44,11 +44,11 @@ namespace OnlineMongoMigrationProcessor
 
             if (skipDataTypeFilter)
             {
-                log.AddVerboseMessage($"Skipping DataType filtering for {collection.CollectionNamespace} as DataTypeFor_Id is specified: {migrationUnit!.DataTypeFor_Id!.Value}");
+                log.ShowInMonitor($"Skipping DataType filtering for {collection.CollectionNamespace} as DataTypeFor_Id is specified: {migrationUnit!.DataTypeFor_Id!.Value}");
             }
             else
             {
-                log.AddVerboseMessage($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
+                log.ShowInMonitor($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
             }
             try
             {

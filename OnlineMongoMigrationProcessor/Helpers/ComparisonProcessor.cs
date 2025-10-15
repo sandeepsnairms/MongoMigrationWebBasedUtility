@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                         if (targetDoc == null)
                         {
-                            log.WriteLine($"Error found in {mu.DatabaseName}.{mu.CollectionName}: Document with _id {id} missing in target.");
+                            log.WriteLine($"Error found in {mu.DatabaseName}.{mu.CollectionName}: Document with _id {id} missing in target.", LogType.Error);
                             mismatched++;
                             continue;
                         }

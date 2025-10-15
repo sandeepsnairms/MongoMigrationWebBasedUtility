@@ -70,7 +70,7 @@ namespace OnlineMongoMigrationProcessor.Tests
         }
 
         [Fact]
-        public void AddVerboseMessage_RingBuffer_Reversed_And_Padded()
+        public void ShowInMonitor_RingBuffer_Reversed_And_Padded()
         {
             var id = Guid.NewGuid().ToString("N");
             var log = new Log();
@@ -78,7 +78,7 @@ namespace OnlineMongoMigrationProcessor.Tests
 
             // 6 messages -> buffer should keep last 5
             for (int i = 0; i < 6; i++)
-                log.AddVerboseMessage($"m{i}");
+                log.ShowInMonitor($"m{i}");
 
             var last = log.GetVerboseMessages();
             last.Count.Should().Be(5);
@@ -118,7 +118,7 @@ namespace OnlineMongoMigrationProcessor.Tests
             var log = new Log();
             log.Init(id);
             log.WriteLine("hi");
-            log.AddVerboseMessage("v1");
+            log.ShowInMonitor("v1");
 
             log.Dispose();
 

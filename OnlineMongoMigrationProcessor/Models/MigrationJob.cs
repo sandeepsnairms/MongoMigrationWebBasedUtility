@@ -54,6 +54,11 @@ namespace OnlineMongoMigrationProcessor
         public bool CSPostProcessingStarted { get; set; }
         public ChangeStreamLevel ChangeStreamLevel { get; set; }
         
+        /// <summary>
+        /// Minimum log level to write to logs. Default is Info (Error=0, Info=1, Debug=2, Verbose=3)
+        /// </summary>
+        public LogType MinimumLogLevel { get; set; } = LogType.Info;
+        
         // Global resume token properties for server-level change streams (Forward sync)
         public string? ResumeToken { get; set; }
         public string? OriginalResumeToken { get; set; }

@@ -324,7 +324,7 @@ namespace OnlineMongoMigrationProcessor
                 );
 
                 var count = oplog.CountDocuments(filter);
-                log.WriteLine($"Approximate pending oplog entries for  {collectionNameNamespace} is {count}");
+                log.WriteLine($"Approximate pending oplog entries for  {collectionNameNamespace} is {count}", LogType.Debug);
                 return true;
             }
             catch
@@ -519,7 +519,7 @@ namespace OnlineMongoMigrationProcessor
                         existingResumeToken = job.ResumeToken ?? string.Empty;
                         if (!string.IsNullOrEmpty(existingResumeToken))
                         {
-                            log.WriteLine($"Server-level change stream resume token already set for job {job.Id}");
+                            log.WriteLine($"Server-level change stream resume token already set for job {job.Id}", LogType.Debug);
                             return;
                         }
                     }
@@ -529,7 +529,7 @@ namespace OnlineMongoMigrationProcessor
                         existingResumeToken = unit.ResumeToken ?? string.Empty;
                         if (!string.IsNullOrEmpty(existingResumeToken))
                         {
-                            log.WriteLine($"Collection-level change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set");
+                            log.WriteLine($"Collection-level change stream resume token for {unit.DatabaseName}.{unit.CollectionName} already set", LogType.Debug);
                             return;
                         }
                     }
@@ -1259,7 +1259,8 @@ namespace OnlineMongoMigrationProcessor
             bool isAggressive = false,
             bool isAggressiveComplete = true,
             string jobId = "",
-            MongoClient? targetClient = null)
+            MongoClient? targetClient = null,
+            bool isSimulatedRun = false)
         {
             int failures = 0;
             string databaseName = collection.Database.DatabaseNamespace.DatabaseName;
@@ -1320,8 +1321,16 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if (insertModels.Any())
                     {
-                        var result = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
-                        insertCount += result.InsertedCount;
+                        if (!isSimulatedRun)
+                        {
+                            var result = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                            insertCount += result.InsertedCount;
+                        }
+                        else
+                        {
+                            // In simulated run, count what would have been inserted
+                            insertCount += insertModels.Count;
+                        }
                     }
                 }
                 catch (MongoBulkWriteException<BsonDocument> ex)
@@ -1347,7 +1356,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     else if (duplicateKeyErrors.Count > 0)
                     {
-                        log.AddVerboseMessage($"{logPrefix} Skipped {duplicateKeyErrors.Count} duplicate key inserts in {collection.CollectionNamespace.FullName}");
+                        log.ShowInMonitor($"{logPrefix} Skipped {duplicateKeyErrors.Count} duplicate key inserts in {collection.CollectionNamespace.FullName}");
                     }
                 }
                 finally
@@ -1371,7 +1380,8 @@ namespace OnlineMongoMigrationProcessor
             bool isAggressive = false,
             bool isAggressiveComplete = true,
             string jobId = "",
-            MongoClient? targetClient = null)
+            MongoClient? targetClient = null,
+            bool isSimulatedRun = false)
         {
             int failures = 0;
             string databaseName = collection.Database.DatabaseNamespace.DatabaseName;
@@ -1426,19 +1436,53 @@ namespace OnlineMongoMigrationProcessor
                     .ToList();
 
                 long updateCount = 0;
-                try
+                long upsertCount = 0;
+                
+                // Retry logic for transient errors like deadlocks
+                int maxRetries = 3;
+                int retryDelayMs = 100;
+                
+                for (int attempt = 0; attempt <= maxRetries; attempt++)
                 {
-                    if (updateModels.Any())
+                    try
                     {
-
-                        var result = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
-
-                        updateCount += result.ModifiedCount + result.Upserts.Count;
+                        if (updateModels.Any())
+                        {
+                            if (!isSimulatedRun)
+                            {
+                                var result = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
+                                updateCount += result.ModifiedCount;
+                                upsertCount += result.Upserts.Count;
+                            }
+                            else
+                            {
+                                // In simulated run, count what would have been updated
+                                // Assume all are updates (not upserts) for simplicity in simulation
+                                updateCount += updateModels.Count;
+                            }
+                        }
+                        break; // Success - exit retry loop
                     }
-                }
-                catch (MongoBulkWriteException<BsonDocument> ex)
-                {
-                    updateCount += (ex.Result?.ModifiedCount ?? 0) + (ex.Result?.Upserts?.Count ?? 0);
+                    catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
+                    {
+                        if (attempt < maxRetries)
+                        {
+                            // Exponential backoff with jitter
+                            int delay = retryDelayMs * (int)Math.Pow(2, attempt) + new Random().Next(0, 50);
+                            log.ShowInMonitor($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...");
+                            await Task.Delay(delay);
+                        }
+                        else
+                        {
+                            // Max retries exceeded - log and continue (will be caught by outer catch)
+                            log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. Skipping batch.", LogType.Error);
+                            throw; // Re-throw to be handled by outer catch blocks
+                        }
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                    updateCount += (ex.Result?.ModifiedCount ?? 0);
+                    upsertCount += (ex.Result?.Upserts?.Count ?? 0);
 
                     var duplicateKeyErrors = ex.WriteErrors
                         .Where(err => err.Code == 11000)
@@ -1461,7 +1505,7 @@ namespace OnlineMongoMigrationProcessor
                     // Handle duplicate key errors by attempting individual operations
                     if (duplicateKeyErrors.Any())
                     {
-                        log.AddVerboseMessage($"{logPrefix} Handling {duplicateKeyErrors.Count} duplicate key errors for updates in {collection.CollectionNamespace.FullName}");
+                        log.ShowInMonitor($"{logPrefix} Handling {duplicateKeyErrors.Count} duplicate key errors for updates in {collection.CollectionNamespace.FullName}");
 
                         // Process failed operations individually
                         foreach (var error in duplicateKeyErrors)
@@ -1490,16 +1534,19 @@ namespace OnlineMongoMigrationProcessor
                             catch (Exception retryEx)
                             {
                                 failures++;
-                                log.AddVerboseMessage($"{logPrefix} Individual retry failed for update in {collection.CollectionNamespace.FullName}: {retryEx.Message}");
+                                log.ShowInMonitor($"{logPrefix} Individual retry failed for update in {collection.CollectionNamespace.FullName}: {retryEx.Message}");
                             }
                         }
                     }
+                    break; // Exit retry loop after handling BulkWriteException
                 }
                 finally
                 {
-
+                    // Upserts are inserts, not updates - count them separately
                     incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
+                    incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)upsertCount);
                 }
+                } // End of retry loop
             }
             return failures; // Return the count of failures encountered during processing
         }
@@ -1516,7 +1563,8 @@ namespace OnlineMongoMigrationProcessor
             bool isAggressive = false,
             bool isAggressiveComplete = true,
             string jobId = "",
-            MongoClient? targetClient = null)
+            MongoClient? targetClient = null,
+            bool isSimulatedRun = false)
         {
             int failures = 0;
             string databaseName = collection.Database.DatabaseNamespace.DatabaseName;
@@ -1610,9 +1658,16 @@ namespace OnlineMongoMigrationProcessor
                     {
                         try
                         {
-                            var result = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
-
-                            incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)result.DeletedCount);
+                            if (!isSimulatedRun)
+                            {
+                                var result = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
+                                incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)result.DeletedCount);
+                            }
+                            else
+                            {
+                                // In simulated run, count what would have been deleted
+                                incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, deleteModels.Count);
+                            }
                         }
                         catch (MongoBulkWriteException<BsonDocument> ex)
                         {

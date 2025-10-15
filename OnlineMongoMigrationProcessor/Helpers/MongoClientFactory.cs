@@ -102,7 +102,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 }
                 catch (Exception ex)
                 {
-                    log.WriteLine($"Certificate validation failed: { ex}");
+                    log.WriteLine($"Certificate validation failed: { ex}", LogType.Error);
                     
                     return false;
                 }

@@ -1641,7 +1641,8 @@
         "net9.0"
       ],
       "sources": {
-        "https://api.nuget.org/v3/index.json": {}
+        "https://api.nuget.org/v3/index.json": {},
+        "https://nuget.pkg.github.com/microsoft/index.json": {}
       },
       "frameworks": {
         "net9.0": {

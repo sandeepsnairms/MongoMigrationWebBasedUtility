@@ -259,7 +259,32 @@ namespace OnlineMongoMigrationProcessor
                 return "NA";
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
-            return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+            
+            // Enhanced lag reporting with more granular information
+            if (lag.TotalSeconds < 60)
+                return $"{(int)lag.TotalSeconds} sec";
+            else if (lag.TotalMinutes < 60)
+                return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+            else
+                return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
+        }
+
+        public static double GetChangeStreamLagSeconds(MigrationUnit unit, bool isSyncBack)
+        {
+            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+                return 0;
+            var lag = DateTime.UtcNow - timestamp;
+            return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
+        }
+
+        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit unit, bool isSyncBack, double maxAcceptableLagSeconds = 30)
+        {
+            var lagSeconds = GetChangeStreamLagSeconds(unit, isSyncBack);
+            var lagDisplay = GetChangeStreamLag(unit, isSyncBack);
+            var isHighLag = lagSeconds > maxAcceptableLagSeconds;
+            
+            return (lagDisplay, lagSeconds, isHighLag);
         }
 
         public static string GetChangeStreamMode(MigrationJob job)
@@ -618,6 +643,46 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
