@@ -497,6 +497,13 @@ namespace OnlineMongoMigrationProcessor
             if (_isProcessingQueue)
                 return;
 
+            // Check for critical failures from background tasks BEFORE starting new work
+            if (_criticalFailureDetected)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Critical failure detected in background processing. Halting queue processing. Error: {_criticalFailureException?.Message}", LogType.Error);
+                return; // Stop processing, let main loop detect and propagate the exception
+            }
+
             _isProcessingQueue = true;
 
             try
@@ -543,7 +550,8 @@ namespace OnlineMongoMigrationProcessor
                 if (processedCount > 0)
                 {
                     // Trigger bulk processing for collections that exceed thresholds or have high lag
-                    _ = Task.Run(ProcessAccumulatedChanges);
+                    // Use fire-and-forget for performance BUT track the task to detect critical failures
+                    TrackBackgroundTask(ProcessAccumulatedChanges());
                     
                     // Report throughput
                     var reportInterval = _currentLagSeconds > MaxAcceptableLagSeconds ? 15 : 30;
@@ -702,17 +710,9 @@ namespace OnlineMongoMigrationProcessor
                 // Update lag tracking
                 _lastChangeTimestamp[collectionKey] = timeStamp;
 
-                // Update timestamps immediately without locks for ultra-low latency
-                if (!_syncBack)
-                {
-                    cached.Unit.CursorUtcTimestamp = timeStamp;
-                    _job.CursorUtcTimestamp = timeStamp;
-                }
-                else
-                {
-                    cached.Unit.SyncBackCursorUtcTimestamp = timeStamp;
-                    _job.SyncBackCursorUtcTimestamp = timeStamp;
-                }
+                // REMOVED: Do NOT update timestamps/resume tokens immediately
+                // They will be updated AFTER successful batch processing to prevent data loss on failure
+                // See ProcessAccumulatedChanges() where tokens are updated post-processing
 
                 // Update counters
                 cached.Unit.CSUpdatesInLastBatch++;
@@ -741,12 +741,8 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
 
-                // Update resume tokens immediately
-                if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
-                {
-                    var resumeTokenJson = change.ResumeToken.ToJson();
-                    UpdateResumeToken(resumeTokenJson, change.OperationType, change.DocumentKey.ToJson(), collectionKey);
-                }
+                // REMOVED: Do NOT update resume tokens immediately
+                // They will be updated AFTER successful batch processing in ProcessAccumulatedChanges()
             }
             catch (Exception ex)
             {
@@ -763,8 +759,10 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private async Task ProcessAccumulatedChanges()
         {
-            var flushTasks = new List<Task>();
-            var memoryMB = GC.GetTotalMemory(false) / (1024 * 1024);
+            try
+            {
+                var flushTasks = new List<Task>();
+                var memoryMB = GC.GetTotalMemory(false) / (1024 * 1024);
 
             // Process all collections without prioritization
             foreach (var collectionKey in _globalChangeBuffer.Keys.ToList())
@@ -794,32 +792,86 @@ namespace OnlineMongoMigrationProcessor
                             if (_collectionCache.TryGetValue(collectionKey, out var cached))
                             {
                                 List<ChangeStreamDocument<BsonDocument>> inserts, updates, deletes;
+                                string earliestResumeToken, latestResumeToken;
+                                DateTime earliestTimestamp, latestTimestamp;
+                                ChangeStreamOperationType earliestOpType, latestOpType;
+                                string earliestDocKey, latestDocKey;
                                 
-                                // Extract changes under lock, then process outside lock
+                                // Extract changes and metadata under lock, then process outside lock
                                 lock (buffer)
                                 {
                                     inserts = new List<ChangeStreamDocument<BsonDocument>>(buffer.DocsToBeInserted);
                                     updates = new List<ChangeStreamDocument<BsonDocument>>(buffer.DocsToBeUpdated);
                                     deletes = new List<ChangeStreamDocument<BsonDocument>>(buffer.DocsToBeDeleted);
                                     
+                                    // Capture earliest metadata for rollback on failure
+                                    earliestResumeToken = buffer.EarliestResumeToken;
+                                    earliestTimestamp = buffer.EarliestTimestamp;
+                                    earliestOpType = buffer.EarliestOperationType;
+                                    earliestDocKey = buffer.EarliestDocumentKey;
+                                    
+                                    // Capture latest metadata for checkpoint on success
+                                    latestResumeToken = buffer.LatestResumeToken;
+                                    latestTimestamp = buffer.LatestTimestamp;
+                                    latestOpType = buffer.LatestOperationType;
+                                    latestDocKey = buffer.LatestDocumentKey;
+                                    
                                     buffer.DocsToBeInserted.Clear();
                                     buffer.DocsToBeUpdated.Clear();
                                     buffer.DocsToBeDeleted.Clear();
+                                    buffer.ClearMetadata();
                                 }
 
                                 if (inserts.Count + updates.Count + deletes.Count > 0)
                                 {
-                                    // Use memory-aware batch sizes
-                                    var maxBatchSize = memoryMB > 500 ? 100 : 200;
-                                    var batchSize = Math.Min(maxBatchSize, _adaptiveBatchSize / 2);
+                                    try
+                                    {
+                                        // Use memory-aware batch sizes
+                                        var maxBatchSize = memoryMB > 500 ? 100 : 200;
+                                        var batchSize = Math.Min(maxBatchSize, _adaptiveBatchSize / 2);
 
-                                    await BulkProcessChangesAsync(
-                                        cached.Unit,
-                                        cached.TargetCollection,
-                                        inserts,
-                                        updates,
-                                        deletes,
-                                        batchSize);
+                                        // Process the batch - this will throw if critical failure occurs
+                                        await BulkProcessChangesAsync(
+                                            cached.Unit,
+                                            cached.TargetCollection,
+                                            inserts,
+                                            updates,
+                                            deletes,
+                                            batchSize);
+
+                                        // ✅ SUCCESS: Update resume token and timestamp to LATEST
+                                        // This advances the checkpoint to after the last successfully processed change
+                                        if (!string.IsNullOrEmpty(latestResumeToken))
+                                        {
+                                            UpdateResumeToken(latestResumeToken, latestOpType, latestDocKey, collectionKey);
+                                        }
+
+                                        if (latestTimestamp > DateTime.MinValue)
+                                        {
+                                            if (!_syncBack)
+                                            {
+                                                cached.Unit.CursorUtcTimestamp = latestTimestamp;
+                                                _job.CursorUtcTimestamp = latestTimestamp;
+                                            }
+                                            else
+                                            {
+                                                cached.Unit.SyncBackCursorUtcTimestamp = latestTimestamp;
+                                                _job.SyncBackCursorUtcTimestamp = latestTimestamp;
+                                            }
+                                        }
+                                    }
+                                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                                    {
+                                        // ❌ FAILURE: Rollback resume token to EARLIEST (or keep current if earliest not available)
+                                        // This ensures on restart we reprocess this batch from the beginning
+                                        _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE for {collectionKey}. Batch will be retried on restart. " +
+                                                      $"Earliest token in failed batch: {earliestResumeToken.Substring(0, Math.Min(50, earliestResumeToken.Length))}...", 
+                                                      LogType.Error);
+                                        
+                                        // Do NOT update resume token - keep it at the last successful batch
+                                        // The failed batch will be reprocessed on job restart
+                                        throw; // Re-throw to stop the job
+                                    }
                                 }
                             }
                         }
@@ -841,6 +893,28 @@ namespace OnlineMongoMigrationProcessor
                 {
                     PerformMemoryCleanup();
                 }
+            }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical failure from BulkProcessChangesAsync - propagate to stop the job
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessAccumulatedChanges: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the entire migration job
+            }
+            catch (AggregateException aex) when (aex.InnerExceptions.Any(e => 
+                e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+            {
+                // Task.WhenAll wraps exceptions in AggregateException - unwrap and re-throw critical ones
+                var criticalException = aex.InnerExceptions.First(e => 
+                    e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessAccumulatedChanges (from parallel task): {criticalException.Message}", LogType.Error);
+                throw criticalException; // Re-throw the original critical exception
+            }
+            catch (Exception ex)
+            {
+                // Unexpected error - log and re-throw to ensure visibility
+                _log.WriteLine($"{_syncBackPrefix}Error in ProcessAccumulatedChanges: {ex}", LogType.Error);
+                throw; // Re-throw all exceptions to prevent silent failures
             }
         }
 
@@ -959,6 +1033,9 @@ namespace OnlineMongoMigrationProcessor
             
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
+                // Check for critical failures from background tasks before processing
+                CheckForCriticalFailure();
+
                 try
                 {
                     await WatchServerLevelChangeStreamUltraHighPerformance(token);
@@ -969,12 +1046,21 @@ namespace OnlineMongoMigrationProcessor
                     // Expected when cancelled, exit loop
                     break;
                 }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                {
+                    // Critical failure from processing - DO NOT CONTINUE, stop the job
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL ERROR: Stopping change stream due to critical failure: {ex.Message}", LogType.Error);
+                    throw; // Re-throw to stop the job
+                }
                 catch (Exception ex)
                 {
                     _log.WriteLine($"{_syncBackPrefix}Error in change stream processing: {ex}", LogType.Error);
-                    // Continue processing on errors
+                    // Continue processing on non-critical errors
                 }
             }
+
+            // Wait for all background processing tasks to complete before final save
+            await WaitForBackgroundTasksAndCheckFailures();
 
             // Ensure final processing and save
             await ProcessAccumulatedChanges();
@@ -983,6 +1069,9 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task WatchServerLevelChangeStreamUltraHighPerformance(CancellationToken cancellationToken)
         {
+            // Check for critical failures BEFORE starting new change stream watch
+            CheckForCriticalFailure();
+
             // Calculate optimal batch size based on memory
             int dynamicBatchSize = GetOptimalBatchSize();
             
@@ -1127,6 +1216,9 @@ namespace OnlineMongoMigrationProcessor
             {
                 while (!cancellationToken.IsCancellationRequested && !ExecutionCancelled)
                 {
+                    // Check for critical failures from background tasks FIRST
+                    CheckForCriticalFailure();
+
                     // SMART: Pre-emptive memory check before cursor.MoveNext() - only act when truly needed
                     var preMemoryPercentage = GetMemoryUsagePercentage();
                     if (preMemoryPercentage > emergencyMemoryThreshold)

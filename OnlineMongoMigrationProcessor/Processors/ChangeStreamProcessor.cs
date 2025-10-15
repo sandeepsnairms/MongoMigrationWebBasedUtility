@@ -40,6 +40,11 @@ namespace OnlineMongoMigrationProcessor
         protected ConcurrentDictionary<string, bool> _aggressiveCleanupProcessed = new ConcurrentDictionary<string, bool>();
         protected bool _finalCleanupExecuted = false;
 
+        // Critical failure tracking - shared across server-level and collection-level processors
+        protected readonly ConcurrentBag<Task> _backgroundProcessingTasks = new();
+        protected volatile bool _criticalFailureDetected = false;
+        protected Exception? _criticalFailureException = null;
+
         protected static readonly object _processingLock = new object();
         protected static readonly object _cleanupLock = new object();
 
@@ -346,9 +351,16 @@ namespace OnlineMongoMigrationProcessor
                     IncrementFailureCounter(mu, totalFailures);
                 }
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
+            {
+                // Critical deadlock failure - re-throw to stop the job and prevent data loss
+                _log.WriteLine($"{_syncBackPrefix}Stopping job due to persistent deadlock that would cause data loss. Details: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the entire migration job
+            }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing operations for {collection.CollectionNamespace.FullName}. Details: {ex}", LogType.Error);
+                throw; // Re-throw all exceptions to ensure they are handled upstream
             }
         }
 
@@ -487,6 +499,101 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
         }
+
+        #region Critical Failure Tracking - Common for Server and Collection Level
+
+        /// <summary>
+        /// Check for critical failures and throw if detected
+        /// Should be called at the start of main processing loops
+        /// </summary>
+        protected void CheckForCriticalFailure()
+        {
+            if (_criticalFailureDetected && _criticalFailureException != null)
+            {
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL: Background task failure detected. Stopping processing.", LogType.Error);
+                throw _criticalFailureException;
+            }
+        }
+
+        /// <summary>
+        /// Track a background task and monitor for critical failures
+        /// Use this instead of fire-and-forget to maintain exception visibility
+        /// </summary>
+        protected void TrackBackgroundTask(Task task)
+        {
+            var monitoredTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await task;
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                {
+                    _criticalFailureDetected = true;
+                    _criticalFailureException = ex;
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
+                }
+                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+                {
+                    var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                    _criticalFailureDetected = true;
+                    _criticalFailureException = criticalEx;
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
+                }
+            });
+
+            _backgroundProcessingTasks.Add(monitoredTask);
+            PruneCompletedBackgroundTasks();
+        }
+
+        /// <summary>
+        /// Prune completed background tasks to prevent memory leak
+        /// </summary>
+        protected void PruneCompletedBackgroundTasks()
+        {
+            var activeTasks = new ConcurrentBag<Task>();
+            foreach (var task in _backgroundProcessingTasks)
+            {
+                if (!task.IsCompleted)
+                {
+                    activeTasks.Add(task);
+                }
+            }
+            
+            _backgroundProcessingTasks.Clear();
+            foreach (var task in activeTasks)
+            {
+                _backgroundProcessingTasks.Add(task);
+            }
+        }
+
+        /// <summary>
+        /// Wait for all background tasks to complete and check for critical failures
+        /// Should be called during shutdown
+        /// </summary>
+        protected async Task WaitForBackgroundTasksAndCheckFailures()
+        {
+            if (_backgroundProcessingTasks.Count > 0)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Waiting for {_backgroundProcessingTasks.Count} background tasks to complete...", LogType.Debug);
+                try
+                {
+                    await Task.WhenAll(_backgroundProcessingTasks);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Error waiting for background tasks: {ex.Message}", LogType.Error);
+                }
+            }
+
+            CheckForCriticalFailure();
+        }
+
+        #endregion
 
         #region IDisposable Implementation
         

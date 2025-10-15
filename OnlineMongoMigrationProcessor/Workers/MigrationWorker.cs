@@ -311,9 +311,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                             // For collection-level, set up resume token for each collection (original behavior)
                             if (unit.ResetChangeStream)
                             {
-                                //if  reset CS needto get the latest CS resume token synchronously
+                                //if reset CS need to get the latest CS resume token synchronously
+                                
                                 _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
-                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
+                                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 30, _cts);
                             }
                             else
                             {

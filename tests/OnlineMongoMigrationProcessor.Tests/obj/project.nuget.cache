@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "hdnsW002/0U=",
+  "dgSpecHash": "5a5G8qNr6wk=",
   "success": true,
-  "projectFilePath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
+  "projectFilePath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\sandnair\\.nuget\\packages\\dnsclient\\1.6.1\\dnsclient.1.6.1.nupkg.sha512",
     "C:\\Users\\sandnair\\.nuget\\packages\\fluentassertions\\6.12.0\\fluentassertions.6.12.0.nupkg.sha512",

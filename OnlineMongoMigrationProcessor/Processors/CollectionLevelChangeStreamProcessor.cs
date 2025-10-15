@@ -67,10 +67,16 @@ namespace OnlineMongoMigrationProcessor
 
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
+                // Check for critical failures from background tasks before processing
+                CheckForCriticalFailure();
+
                 var totalKeys = sortedKeys.Count;
 
                 while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
                 {
+                    // Check for critical failures at the start of each batch
+                    CheckForCriticalFailure();
+
                     var tasks = new List<Task>();
                     var collectionProcessed = new List<string>();
 
@@ -141,6 +147,9 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
+
+            // Wait for all background processing tasks to complete
+            await WaitForBackgroundTasksAndCheckFailures();
         }
 
         /// <summary>
@@ -184,8 +193,14 @@ namespace OnlineMongoMigrationProcessor
                 _collectionFlushTimers[collectionKey] = new Timer(
                     _ => 
                     {
-                        // Fire and forget - don't await to avoid timer callback issues
-                        _ = Task.Run(() => ProcessQueuedChangesAsync(collectionKey));
+                        // Check for critical failures before starting new work
+                        if (_criticalFailureDetected)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Critical failure detected. Halting queue processing for {collectionKey}.", LogType.Error);
+                            return;
+                        }
+                        // Track background task for exception monitoring
+                        TrackBackgroundTask(ProcessQueuedChangesAsync(collectionKey));
                     },
                     null,
                     flushInterval,
@@ -298,10 +313,28 @@ namespace OnlineMongoMigrationProcessor
 
                 _isProcessingQueue[collectionKey] = false;
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical failure from BulkProcessChangesAsync - DO NOT CATCH, propagate to stop the job
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync for {collectionKey}: {ex.Message}", LogType.Error);
+                _isProcessingQueue[collectionKey] = false;
+                throw; // Re-throw to stop the migration job
+            }
+            catch (AggregateException aex) when (aex.InnerExceptions.Any(e => 
+                e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+            {
+                // Task.WhenAll wraps exceptions - unwrap and re-throw critical ones
+                var criticalException = aex.InnerExceptions.First(e => 
+                    e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync (from parallel batch) for {collectionKey}: {criticalException.Message}", LogType.Error);
+                _isProcessingQueue[collectionKey] = false;
+                throw criticalException; // Re-throw the original critical exception
+            }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing queued changes for {collectionKey}. Details: {ex}", LogType.Error);
                 _isProcessingQueue[collectionKey] = false;
+                // Do NOT re-throw non-critical exceptions to allow other collections to continue
             }
         }
 
@@ -433,10 +466,16 @@ namespace OnlineMongoMigrationProcessor
                     _processingThrottle.Release();
                 }
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
+            {
+                // Critical deadlock failure - re-throw to stop the job
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in batch processing for {collectionKey}. Stopping job to prevent data loss. Details: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the migration job
+            }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing batch for {collectionKey}. Details: {ex}", LogType.Error);
-                return 0; // Return 0 on error
+                throw; // Re-throw to ensure error handling upstream
             }
         }
 
@@ -488,6 +527,9 @@ namespace OnlineMongoMigrationProcessor
 
         private void ProcessCollectionChangeStream(MigrationUnit mu, bool IsCSProcessingRun = false, int seconds = 0)
         {
+            // Check for critical failures before starting change stream processing
+            CheckForCriticalFailure();
+
             try
             {
                 string databaseName = mu.DatabaseName;
@@ -706,9 +748,16 @@ namespace OnlineMongoMigrationProcessor
                     _log.ShowInMonitor($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.");
                 }
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical failure (deadlock, timeout, etc.) - re-throw to stop the job
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Stopping job to prevent data loss. Details: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the migration job
+            }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
+                throw; // Re-throw to ensure proper error handling
             }
         }
 

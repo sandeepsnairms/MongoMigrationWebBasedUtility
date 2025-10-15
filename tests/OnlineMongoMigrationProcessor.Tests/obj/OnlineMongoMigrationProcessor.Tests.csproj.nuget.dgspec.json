@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj": {}
+    "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj": {}
   },
   "projects": {
-    "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj": {
+    "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj",
+        "projectUniqueName": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj",
         "projectName": "OnlineMongoMigrationProcessor",
-        "projectPath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj",
+        "projectPath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj",
         "packagesPath": "C:\\Users\\sandnair\\.nuget\\packages\\",
-        "outputPath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\obj\\",
+        "outputPath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
@@ -83,14 +83,14 @@
         }
       }
     },
-    "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj": {
+    "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
+        "projectUniqueName": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
         "projectName": "OnlineMongoMigrationProcessor.Tests",
-        "projectPath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
+        "projectPath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\OnlineMongoMigrationProcessor.Tests.csproj",
         "packagesPath": "C:\\Users\\sandnair\\.nuget\\packages\\",
-        "outputPath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\obj\\",
+        "outputPath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\tests\\OnlineMongoMigrationProcessor.Tests\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
@@ -111,8 +111,8 @@
           "net9.0": {
             "targetAlias": "net9.0",
             "projectReferences": {
-              "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj": {
-                "projectPath": "C:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj"
+              "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj": {
+                "projectPath": "c:\\Work\\GitHub\\repos\\MongoMigrationWebBasedUtility\\OnlineMongoMigrationProcessor\\OnlineMongoMigrationProcessor.csproj"
               }
             }
           }
