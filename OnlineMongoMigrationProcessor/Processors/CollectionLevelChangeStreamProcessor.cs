@@ -191,7 +191,7 @@ namespace OnlineMongoMigrationProcessor
                 // Initialize timer with lag-based interval
                 var flushInterval = TimeSpan.FromMilliseconds(100); // Start with 100ms, will adjust based on lag
                 _collectionFlushTimers[collectionKey] = new Timer(
-                    async _ => 
+                    _ => 
                     {
                         // Check for critical failures before starting new work
                         if (_criticalFailureDetected)
@@ -200,32 +200,36 @@ namespace OnlineMongoMigrationProcessor
                             return;
                         }
                         
-                        try
+                        // Fire-and-forget with proper exception handling
+                        // Timer callbacks cannot be async, so we use Task.Run
+                        _ = Task.Run(async () =>
                         {
-                            // Track background task for exception monitoring
-                            await ProcessQueuedChangesAsync(collectionKey);
-                        }
-                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
-                        {
-                            // Critical exception occurred - set flag and log it
-                            string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in timer-based queue processing for {collectionKey}: {ex.Message}";
-                            _log.WriteLine(errorMsg, LogType.Error);
-                            _log.ShowInMonitor(errorMsg);
-                            
-                            _criticalFailureDetected = true;
-                            _criticalFailureException = ex;
-                            
-                            // Stop the timer to prevent further processing
-                            if (_collectionFlushTimers.TryGetValue(collectionKey, out var timerToStop))
+                            try
                             {
-                                timerToStop?.Change(Timeout.Infinite, Timeout.Infinite);
+                                await ProcessQueuedChangesAsync(collectionKey);
                             }
-                        }
-                        catch (Exception ex)
-                        {
-                            // Log non-critical exceptions but don't stop processing
-                            _log.WriteLine($"{_syncBackPrefix}Non-critical error in timer-based queue processing for {collectionKey}: {ex.Message}", LogType.Error);
-                        }
+                            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                            {
+                                // Critical exception occurred - set flag and log it
+                                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in timer-based queue processing for {collectionKey}: {ex.Message}";
+                                _log.WriteLine(errorMsg, LogType.Error);
+                                _log.ShowInMonitor(errorMsg);
+                                
+                                _criticalFailureDetected = true;
+                                _criticalFailureException = ex;
+                                
+                                // Stop the timer to prevent further processing
+                                if (_collectionFlushTimers.TryGetValue(collectionKey, out var timerToStop))
+                                {
+                                    timerToStop?.Change(Timeout.Infinite, Timeout.Infinite);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log non-critical exceptions but don't stop processing
+                                _log.WriteLine($"{_syncBackPrefix}Non-critical error in timer-based queue processing for {collectionKey}: {ex.Message}", LogType.Error);
+                            }
+                        });
                     },
                     null,
                     flushInterval,
