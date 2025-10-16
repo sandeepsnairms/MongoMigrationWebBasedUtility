@@ -206,6 +206,16 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"{processName} operation was paused.");
                 return Task.FromResult(TaskResult.Canceled);
 			}
+			
+			// Check for CRITICAL exceptions that should terminate the job immediately
+			if (ex is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"))
+			{
+			    string errorMsg = $"{processName} encountered a CRITICAL failure. Job must terminate immediately to prevent data loss. Details: {ioe.Message}";
+			    _log.WriteLine(errorMsg, LogType.Error);
+			    _log.ShowInMonitor($"JOB TERMINATING: Critical failure in {processName}");
+			    return Task.FromResult(TaskResult.Abort);
+			}
+			
 			if (ex is MongoExecutionTimeoutException)
             {
                 _log.WriteLine($"{processName} attempt {attemptCount} failed due to timeout: {ex}.", LogType.Error);
@@ -683,6 +693,27 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _job.IsCompleted = true;
                         _jobList.Save();
                     }
+                }
+                else if (result == TaskResult.Abort)
+                {
+                    string errorMsg = "Migration job ABORTED due to critical failure. Check logs for details. Job ID: " + _job.Id;
+                    _log.WriteLine(errorMsg, LogType.Error);
+                    _log.ShowInMonitor("JOB ABORTED: Critical failure - data loss prevention");
+                    _job.IsCompleted = false;
+                    _jobList.Save();
+                }
+                else if (result == TaskResult.FailedAfterRetries)
+                {
+                    string errorMsg = "Migration job FAILED after maximum retry attempts. Job ID: " + _job.Id;
+                    _log.WriteLine(errorMsg, LogType.Error);
+                    _log.ShowInMonitor("JOB FAILED: Max retries exceeded");
+                    _job.IsCompleted = false;
+                    _jobList.Save();
+                }
+                else if (_migrationCancelled)
+                {
+                    _log.WriteLine("Migration job was CANCELLED by user. Job ID: " + _job.Id, LogType.Warning);
+                    _log.ShowInMonitor("JOB CANCELLED: User requested cancellation");
                 }
 
                 StopMigration();
