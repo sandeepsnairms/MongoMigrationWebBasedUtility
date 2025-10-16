@@ -143,7 +143,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing was paused.");
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            catch (Exception ex) when (Helper.IsCriticalException(ex))
             {
                 // Critical failure - log and ensure job termination
                 string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE during change stream processing. Job must terminate. Error: {ex.Message}";
@@ -543,15 +543,15 @@ namespace OnlineMongoMigrationProcessor
                 {
                     await task;
                 }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                catch (Exception ex) when (Helper.IsCriticalException(ex))
                 {
                     _criticalFailureDetected = true;
                     _criticalFailureException = ex;
                     _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
                 }
-                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => Helper.IsCriticalException(e)))
                 {
-                    var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                    var criticalEx = aex.InnerExceptions.First(e => Helper.IsCriticalException(e));
                     _criticalFailureDetected = true;
                     _criticalFailureException = criticalEx;
                     _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);

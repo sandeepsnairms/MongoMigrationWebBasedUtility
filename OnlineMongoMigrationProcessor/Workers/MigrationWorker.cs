@@ -208,9 +208,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 			}
 			
 			// Check for CRITICAL exceptions that should terminate the job immediately
-			if (ex is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"))
+			if (Helper.IsCriticalException(ex))
 			{
-			    string errorMsg = $"{processName} encountered a CRITICAL failure. Job must terminate immediately to prevent data loss. Details: {ioe.Message}";
+			    string errorMsg = $"{processName} encountered a CRITICAL failure. Job must terminate immediately to prevent data loss. Details: {ex.Message}";
 			    _log.WriteLine(errorMsg, LogType.Error);
 			    _log.ShowInMonitor($"JOB TERMINATING: Critical failure in {processName}");
 			    return Task.FromResult(TaskResult.Abort);

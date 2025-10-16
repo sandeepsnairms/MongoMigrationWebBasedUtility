@@ -641,6 +641,22 @@ namespace OnlineMongoMigrationProcessor
                 return string.Empty;
             }
         }
+
+        /// <summary>
+        /// Determines if an exception is a critical failure that should immediately abort the job.
+        /// Critical exceptions indicate scenarios where continuing would result in data loss.
+        /// </summary>
+        /// <param name="ex">The exception to check</param>
+        /// <returns>True if the exception is critical and should abort the job</returns>
+        public static bool IsCriticalException(Exception ex)
+        {
+            // Check for InvalidOperationException with CRITICAL in the message
+            // This pattern is used throughout the codebase to signal critical failures
+            // that require immediate job termination to prevent data loss
+            return ex is InvalidOperationException && 
+                   ex.Message != null && 
+                   ex.Message.Contains("CRITICAL", StringComparison.OrdinalIgnoreCase);
+        }
     }
 }
 

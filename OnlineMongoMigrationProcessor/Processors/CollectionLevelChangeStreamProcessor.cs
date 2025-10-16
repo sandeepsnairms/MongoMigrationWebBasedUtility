@@ -348,7 +348,7 @@ namespace OnlineMongoMigrationProcessor
 
                 _isProcessingQueue[collectionKey] = false;
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            catch (Exception ex) when (Helper.IsCriticalException(ex))
             {
                 // Critical failure from BulkProcessChangesAsync - log, set flag, and re-throw
                 string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync for {collectionKey}: {ex.Message}";
@@ -362,12 +362,10 @@ namespace OnlineMongoMigrationProcessor
                 _isProcessingQueue[collectionKey] = false;
                 throw; // Re-throw to stop the migration job
             }
-            catch (AggregateException aex) when (aex.InnerExceptions.Any(e => 
-                e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+            catch (AggregateException aex) when (aex.InnerExceptions.Any(e => Helper.IsCriticalException(e)))
             {
                 // Task.WhenAll wraps exceptions - unwrap and re-throw critical ones
-                var criticalException = aex.InnerExceptions.First(e => 
-                    e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                var criticalException = aex.InnerExceptions.First(e => Helper.IsCriticalException(e));
                 
                 string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync (from parallel batch) for {collectionKey}: {criticalException.Message}";
                 _log.WriteLine(errorMsg, LogType.Error);
@@ -519,7 +517,7 @@ namespace OnlineMongoMigrationProcessor
                     _processingThrottle.Release();
                 }
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
+            catch (Exception ex) when (Helper.IsCriticalException(ex))
             {
                 // Critical deadlock failure - log and re-throw to stop the job
                 string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in batch processing for {collectionKey}. Stopping job to prevent data loss. Details: {ex.Message}";
@@ -810,7 +808,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.ShowInMonitor($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.");
                 }
             }
-            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            catch (Exception ex) when (Helper.IsCriticalException(ex))
             {
                 // Critical failure (deadlock, timeout, etc.) - log and re-throw to stop the job
                 string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Stopping job to prevent data loss. Details: {ex.Message}";
