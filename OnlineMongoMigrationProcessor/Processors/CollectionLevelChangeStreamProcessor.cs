@@ -191,7 +191,7 @@ namespace OnlineMongoMigrationProcessor
                 // Initialize timer with lag-based interval
                 var flushInterval = TimeSpan.FromMilliseconds(100); // Start with 100ms, will adjust based on lag
                 _collectionFlushTimers[collectionKey] = new Timer(
-                    _ => 
+                    async _ => 
                     {
                         // Check for critical failures before starting new work
                         if (_criticalFailureDetected)
@@ -199,8 +199,33 @@ namespace OnlineMongoMigrationProcessor
                             _log.WriteLine($"{_syncBackPrefix}Critical failure detected. Halting queue processing for {collectionKey}.", LogType.Error);
                             return;
                         }
-                        // Track background task for exception monitoring
-                        TrackBackgroundTask(ProcessQueuedChangesAsync(collectionKey));
+                        
+                        try
+                        {
+                            // Track background task for exception monitoring
+                            await ProcessQueuedChangesAsync(collectionKey);
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                        {
+                            // Critical exception occurred - set flag and log it
+                            string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in timer-based queue processing for {collectionKey}: {ex.Message}";
+                            _log.WriteLine(errorMsg, LogType.Error);
+                            _log.ShowInMonitor(errorMsg);
+                            
+                            _criticalFailureDetected = true;
+                            _criticalFailureException = ex;
+                            
+                            // Stop the timer to prevent further processing
+                            if (_collectionFlushTimers.TryGetValue(collectionKey, out var timerToStop))
+                            {
+                                timerToStop?.Change(Timeout.Infinite, Timeout.Infinite);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log non-critical exceptions but don't stop processing
+                            _log.WriteLine($"{_syncBackPrefix}Non-critical error in timer-based queue processing for {collectionKey}: {ex.Message}", LogType.Error);
+                        }
                     },
                     null,
                     flushInterval,
@@ -250,10 +275,16 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 if (!_collectionQueues.TryGetValue(collectionKey, out var queue))
+                {
+                    _isProcessingQueue[collectionKey] = false;
                     return;
+                }
 
                 if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out var mu))
+                {
+                    _isProcessingQueue[collectionKey] = false;
                     return;
+                }
 
                 // Process in multiple parallel batches if queue is large
                 const int OptimalBatchSize = 1000; // Process 1000 items per batch
@@ -315,8 +346,15 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
             {
-                // Critical failure from BulkProcessChangesAsync - DO NOT CATCH, propagate to stop the job
-                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync for {collectionKey}: {ex.Message}", LogType.Error);
+                // Critical failure from BulkProcessChangesAsync - log, set flag, and re-throw
+                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync for {collectionKey}: {ex.Message}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor(errorMsg);
+                
+                // Set critical failure flag to stop main processing loop
+                _criticalFailureDetected = true;
+                _criticalFailureException = ex;
+                
                 _isProcessingQueue[collectionKey] = false;
                 throw; // Re-throw to stop the migration job
             }
@@ -326,13 +364,24 @@ namespace OnlineMongoMigrationProcessor
                 // Task.WhenAll wraps exceptions - unwrap and re-throw critical ones
                 var criticalException = aex.InnerExceptions.First(e => 
                     e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
-                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync (from parallel batch) for {collectionKey}: {criticalException.Message}", LogType.Error);
+                
+                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in ProcessQueuedChangesAsync (from parallel batch) for {collectionKey}: {criticalException.Message}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor(errorMsg);
+                
+                // Set critical failure flag to stop main processing loop
+                _criticalFailureDetected = true;
+                _criticalFailureException = criticalException;
+                
                 _isProcessingQueue[collectionKey] = false;
                 throw criticalException; // Re-throw the original critical exception
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}Error processing queued changes for {collectionKey}. Details: {ex}", LogType.Error);
+                string errorMsg = $"{_syncBackPrefix}Error processing queued changes for {collectionKey}. Details: {ex}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}Non-critical error in queue processing for {collectionKey}: {ex.Message}");
+                
                 _isProcessingQueue[collectionKey] = false;
                 // Do NOT re-throw non-critical exceptions to allow other collections to continue
             }
@@ -468,13 +517,22 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
             {
-                // Critical deadlock failure - re-throw to stop the job
-                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE in batch processing for {collectionKey}. Stopping job to prevent data loss. Details: {ex.Message}", LogType.Error);
+                // Critical deadlock failure - log and re-throw to stop the job
+                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE in batch processing for {collectionKey}. Stopping job to prevent data loss. Details: {ex.Message}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}JOB TERMINATING: Persistent deadlock for {collectionKey}");
+                
+                // Set critical failure flag
+                _criticalFailureDetected = true;
+                _criticalFailureException = ex;
+                
                 throw; // Re-throw to stop the migration job
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}Error processing batch for {collectionKey}. Details: {ex}", LogType.Error);
+                string errorMsg = $"{_syncBackPrefix}Error processing batch for {collectionKey}. Details: {ex}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}Batch processing error for {collectionKey}: {ex.Message}");
                 throw; // Re-throw to ensure error handling upstream
             }
         }
@@ -750,13 +808,22 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
             {
-                // Critical failure (deadlock, timeout, etc.) - re-throw to stop the job
-                _log.WriteLine($"{_syncBackPrefix}CRITICAL FAILURE processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Stopping job to prevent data loss. Details: {ex.Message}", LogType.Error);
+                // Critical failure (deadlock, timeout, etc.) - log and re-throw to stop the job
+                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Stopping job to prevent data loss. Details: {ex.Message}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}JOB TERMINATING: Critical failure for {mu.DatabaseName}.{mu.CollectionName}");
+                
+                // Set critical failure flag
+                _criticalFailureDetected = true;
+                _criticalFailureException = ex;
+                
                 throw; // Re-throw to stop the migration job
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}Error processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
+                string errorMsg = $"{_syncBackPrefix}Error processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}Change stream error for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}");
                 throw; // Re-throw to ensure proper error handling
             }
         }

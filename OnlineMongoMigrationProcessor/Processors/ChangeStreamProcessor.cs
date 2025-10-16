@@ -143,9 +143,25 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing was paused.");
             }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical failure - log and ensure job termination
+                string errorMsg = $"{_syncBackPrefix}CRITICAL FAILURE during change stream processing. Job must terminate. Error: {ex.Message}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}JOB TERMINATING: Critical failure in change stream processing");
+                
+                // Set critical failure flag
+                _criticalFailureDetected = true;
+                _criticalFailureException = ex;
+                
+                // Re-throw to ensure the exception bubbles up
+                throw;
+            }
             catch (Exception ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}Error during change stream processing: {ex}", LogType.Error);
+                string errorMsg = $"{_syncBackPrefix}Error during change stream processing: {ex}";
+                _log.WriteLine(errorMsg, LogType.Error);
+                _log.ShowInMonitor($"{_syncBackPrefix}Change stream processing error: {ex.Message}");
             }
             finally
             {

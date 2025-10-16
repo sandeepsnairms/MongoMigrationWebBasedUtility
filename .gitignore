@@ -12,3 +12,5 @@
 /publish
 /.vs/ProjectEvaluation
 /.vs/CopilotSnapshots/
+/tests/**/bin/
+/tests/**/obj/

@@ -1476,9 +1476,11 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                            string errorDetails = $"Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
+                                                 $"Exception: {cmdEx.Message}";
+                            log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                            log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent deadlock - {collection.CollectionNamespace.FullName}");
                             
                             // Throw a critical exception to stop the entire job
                             throw new InvalidOperationException(
@@ -1499,9 +1501,11 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                            string errorDetails = $"Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
+                                                 $"Error: {ex.Message}";
+                            log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                            log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent error - {collection.CollectionNamespace.FullName}");
                             
                             // Throw a critical exception to stop the entire job
                             throw new InvalidOperationException(
@@ -1657,9 +1661,11 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                            string errorDetails = $"Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
+                                                 $"Exception: {cmdEx.Message}";
+                            log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                            log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent deadlock - {collection.CollectionNamespace.FullName}");
                             
                             // Throw a critical exception to stop the entire job
                             throw new InvalidOperationException(
@@ -1680,9 +1686,11 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                            string errorDetails = $"Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
+                                                 $"Error: {ex.Message}";
+                            log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                            log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent error - {collection.CollectionNamespace.FullName}");
                             
                             // Throw a critical exception to stop the entire job
                             throw new InvalidOperationException(
@@ -1905,9 +1913,11 @@ namespace OnlineMongoMigrationProcessor
                                 else
                                 {
                                     // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                                    log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
-                                                 $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                                    string errorDetails = $"Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
+                                                         $"Exception: {cmdEx.Message}";
+                                    log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                                    log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent deadlock - {collection.CollectionNamespace.FullName}");
                                     
                                     // Throw a critical exception to stop the entire job
                                     throw new InvalidOperationException(
@@ -1928,9 +1938,11 @@ namespace OnlineMongoMigrationProcessor
                                 else
                                 {
                                     // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                                    log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
-                                                 $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
+                                    string errorDetails = $"Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
+                                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
+                                                         $"Error: {ex.Message}";
+                                    log.WriteLine($"{logPrefix}{errorDetails}", LogType.Error);
+                                    log.ShowInMonitor($"{logPrefix}JOB TERMINATING: Persistent error - {collection.CollectionNamespace.FullName}");
                                     
                                     // Throw a critical exception to stop the entire job
                                     throw new InvalidOperationException(
