@@ -71,7 +71,7 @@ namespace OnlineMongoMigrationProcessor
             else
             {
                 filter = Builders<BsonDocument>.Filter.Empty;
-                docCount = MongoHelper.GetDocumentCount(ctx.Collection, filter, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!));
+                docCount = MongoHelper.GetDocumentCount(ctx.Collection, filter, MongoHelper.GetFilterDoc(mu.UserFilter!));
 
                 mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
                 ctx.DownloadCount = docCount;
@@ -173,6 +173,11 @@ namespace OnlineMongoMigrationProcessor
 
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
+                }
+                else
+                {
+                    _log.WriteLine($"Document copy operation for {{ctx.DatabaseName}}.{{ctx.CollectionName}}[{{i}}] failed because of count mismatch.\", LogType.Error");
+                    return TaskResult.Retry;
                 }
                              
   

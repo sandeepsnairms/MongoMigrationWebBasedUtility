@@ -19,14 +19,16 @@ namespace OnlineMongoMigrationProcessor
         public static int MaxSegments = 20;
         public static int MaxSamples = 2000;
 
+
         
-		/// <summary>
-		/// Creates partitions based on sampled data from the collection.
-		/// </summary>
-		/// <param name="idField">The field used as the partition key.</param>
-		/// <param name="partitionCount">The number of desired partitions.</param>
-		/// <returns>A list of partition boundaries.</returns>
-		public static ChunkBoundaries? CreatePartitions(Log log,bool optimizeForMongoDump,IMongoCollection<BsonDocument> collection, string userFilterCondition, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, out long docCountByType)
+
+        /// <summary>
+        /// Creates partitions based on sampled data from the collection.
+        /// </summary>
+        /// <param name="idField">The field used as the partition key.</param>
+        /// <param name="partitionCount">The number of desired partitions.</param>
+        /// <returns>A list of partition boundaries.</returns>
+        public static ChunkBoundaries? CreatePartitions(Log log,bool optimizeForMongoDump,IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, out long docCountByType)
         {
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
@@ -34,21 +36,19 @@ namespace OnlineMongoMigrationProcessor
             int sampleCount=0;
            
             BsonDocument? userFilter = null;
-            if (userFilterCondition != null && !string.IsNullOrEmpty(userFilterCondition))
-            {
-                userFilter= BsonDocument.Parse(userFilterCondition);
-            }
+            userFilter= MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
+        
 
             // Determine if we should skip DataType filtering
             bool skipDataTypeFilter = migrationUnit?.DataTypeFor_Id.HasValue == true;
 
             if (skipDataTypeFilter)
             {
-                log.AddVerboseMessage($"Skipping DataType filtering for {collection.CollectionNamespace} as DataTypeFor_Id is specified: {migrationUnit!.DataTypeFor_Id!.Value}");
+                log.ShowInMonitor($"Skipping DataType filtering for {collection.CollectionNamespace} as DataTypeFor_Id is specified: {migrationUnit!.DataTypeFor_Id!.Value}");
             }
             else
             {
-                log.AddVerboseMessage($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
+                log.ShowInMonitor($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
             }
             try
             {
@@ -56,7 +56,7 @@ namespace OnlineMongoMigrationProcessor
                 cts.ThrowIfCancellationRequested();
 
                 try
-                {
+                {                    
                     docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
                 }
                 catch (Exception ex)
@@ -149,7 +149,7 @@ namespace OnlineMongoMigrationProcessor
 
                 BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
 
-                // Step 2: Sample the data
+               // Step 2: Sample the data
 
                 if (skipDataTypeFilter)
                 {
@@ -238,9 +238,10 @@ namespace OnlineMongoMigrationProcessor
                     for (int i = 0; i < partitionValues.Count; i++)
                     {
                         var min = partitionValues[i];
-                        var max = i == partitionValues.Count - 1 ? BsonMaxKey.Value : partitionValues[i + 1];
+                        var max = i == partitionValues.Count - 1 ? MongoHelper.GetIdRangeMax(matchCondition) : partitionValues[i + 1];
 
                         if (i % segmentCount == 0) // Parent boundary
+
                         {
                             chunkBoundary = new Boundary
                             {

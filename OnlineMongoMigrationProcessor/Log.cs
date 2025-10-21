@@ -21,6 +21,7 @@ namespace OnlineMongoMigrationProcessor
         private LogBucket _logBucket = new LogBucket();
         private List<LogObject> _verboseMessages = new List<LogObject>();
         private string _currentId = string.Empty;
+        private MigrationJob? _job;
 
         private static readonly object _verboseLock = new object();
         private static readonly object _readLock = new object();
@@ -29,7 +30,15 @@ namespace OnlineMongoMigrationProcessor
 
         public  bool IsInitialized { get; set; } = false;
 
-        public void AddVerboseMessage(string message, LogType LogType = LogType.Message)
+        /// <summary>
+        /// Set the migration job reference for log level filtering
+        /// </summary>
+        public void SetJob(MigrationJob? job)
+        {
+            _job = job;
+        }
+
+        public void ShowInMonitor(string message, LogType LogType = LogType.Info)
         {
             lock (_verboseLock)
             {
@@ -38,12 +47,12 @@ namespace OnlineMongoMigrationProcessor
                     _verboseMessages.RemoveAt(0); // Remove the oldest mu
                 }
                 _verboseMessages.Add(new LogObject(LogType, message)); // Add the new mu
-            }
+            }            
         }
 
 
         
-        public List<LogObject> GetVerboseMessages()
+        public List<LogObject> GetMonitorMessages()
         {
 
             try
@@ -59,7 +68,7 @@ namespace OnlineMongoMigrationProcessor
                 // If the reversed list has fewer than 5 elements, add empty message LogObjects
                 while (reversedList.Count < 5)
                 {
-                    reversedList.Add(new LogObject(LogType.Message, ""));
+                    reversedList.Add(new LogObject(LogType.Info, ""));
                 }
                 return reversedList;
             }
@@ -68,7 +77,7 @@ namespace OnlineMongoMigrationProcessor
                 var blankList = new List<LogObject>();
                 for (int i = 0; i < 5; i++)
                 {
-                    blankList.Add(new LogObject(LogType.Message, ""));
+                    blankList.Add(new LogObject(LogType.Info, ""));
                 }
                 return blankList;
             }
@@ -101,10 +110,16 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public void WriteLine(string message, LogType LogType = LogType.Message)
+        public void WriteLine(string message, LogType LogType = LogType.Info)
         {
             try
             {
+                // Filter based on minimum log level - only log if the message type is at or below the minimum level
+                // Lower numeric values = more severe (Error=0, Info=1, Debug=2, Verbose=3)
+                if (_job != null && LogType > _job.MinimumLogLevel)
+                {
+                    return; // Skip this log entry
+                }
 
                 lock (_writeLock)
                 {

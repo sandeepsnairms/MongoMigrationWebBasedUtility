@@ -48,9 +48,9 @@ namespace OnlineMongoMigrationProcessor.Partitioner
                 foreach (var token in startTokens)
                 {
                     if(isVerificationMode)
-                        _log.AddVerboseMessage($"Verifying partition #{_sourceCollection.CollectionNamespace}[{counter + 1}]");
+                        _log.ShowInMonitor($"Verifying partition #{_sourceCollection.CollectionNamespace}[{counter + 1}]");
                     else
-                        _log.AddVerboseMessage($"Processing partition #{_sourceCollection.CollectionNamespace}[{counter + 1}]");
+                        _log.ShowInMonitor($"Processing partition #{_sourceCollection.CollectionNamespace}[{counter + 1}]");
 
                     //for FFCF create a new resume token with the current timestamp
                     var currentToken = UpdateStartAtOperationTime(token, MongoHelper.ConvertToBsonTimestamp(DateTime.UtcNow)); // Set initial timestamp to 0

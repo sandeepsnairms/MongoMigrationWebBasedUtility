@@ -120,7 +120,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     if (indexDocument.TryGetValue("wildcardProjection", out var wildcardProjection))
                     {
                         // options.WildcardProjection = wildcardProjection.AsBsonDocument; // Not supported in .NET driver
-                        log.WriteLine($"Warning: Wildcard projection skipped in {collectionName}. Create Manually on target.");
+                        log.WriteLine($"Warning: Wildcard projection skipped in {collectionName}. Create Manually on target.", LogType.Warning);
                     }
 
                     var indexModel = new CreateIndexModel<BsonDocument>(keys, options);

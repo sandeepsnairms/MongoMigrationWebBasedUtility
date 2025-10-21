@@ -59,7 +59,7 @@
                         <td>@GetToolName(migration.JobType)</td>
                         <td>@migration.StartedOn</td>
                         <td class="tooltip-text" title="@GetTootTip(migration)">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
-                        <td>@migration.IsOnline</td>
+                        <td>@Helper.IsOnline(migration)</td>
                         <td>@migration.IsCompleted</td>
                         <td>
                             <button class="btn btn-primary" title="View Job" @onclick="() => ViewMigration(migration.Id)">

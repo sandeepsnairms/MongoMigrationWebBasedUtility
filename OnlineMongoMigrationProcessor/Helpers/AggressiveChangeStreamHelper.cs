@@ -56,7 +56,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 }
 
                 await tempCollection.InsertManyAsync(tempDocuments, new InsertManyOptions { IsOrdered = false });
-                _log.AddVerboseMessage($"Stored {tempDocuments.Count} document keys for aggressive change stream delete in temp collection {tempCollectionName}");
+                _log.ShowInMonitor($"Stored {tempDocuments.Count} document keys for aggressive change stream delete in temp collection {tempCollectionName}");
                 return tempDocuments.Count;
             }
             catch (Exception ex)
@@ -97,7 +97,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                 if (result.DeletedCount > 0)
                 {
-                    _log.AddVerboseMessage($"Removed {result.DeletedCount} document key(s) from temp collection {tempCollectionName}");
+                    _log.ShowInMonitor($"Removed {result.DeletedCount} document key(s) from temp collection {tempCollectionName}");
                 }
 
                 return result.DeletedCount;
@@ -159,7 +159,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         break;
                     }
 
-                    _log.AddVerboseMessage($"Processing page {pageNumber + 1} with {storedKeysPage.Count} stored document keys for {sourceDatabaseName}.{sourceCollectionName}");
+                    _log.ShowInMonitor($"Processing page {pageNumber + 1} with {storedKeysPage.Count} stored document keys for {sourceDatabaseName}.{sourceCollectionName}");
 
                     // Process deletes in batches within this page
                     for (int i = 0; i < storedKeysPage.Count; i += deleteBatchSize)
@@ -183,7 +183,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             {
                                 var result = await targetCollection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
                                 totalDeletedCount += result.DeletedCount;
-                                _log.AddVerboseMessage($"Deleted {result.DeletedCount} documents from {sourceDatabaseName}.{sourceCollectionName} (page {pageNumber + 1}, batch {i / deleteBatchSize + 1})");
+                                _log.ShowInMonitor($"Deleted {result.DeletedCount} documents from {sourceDatabaseName}.{sourceCollectionName} (page {pageNumber + 1}, batch {i / deleteBatchSize + 1})");
                             }
                             catch (MongoBulkWriteException<BsonDocument> ex)
                             {
@@ -219,7 +219,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
                 await _targetClient.DropDatabaseAsync(_jobId);
-                _log.WriteLine($"Cleaned up all temporary collections for job {_jobId}");
+                _log.WriteLine($"Cleaned up all temporary collections for job {_jobId}", LogType.Debug);
                 return true;
             }
             catch (Exception ex)

@@ -46,7 +46,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (percent > 0)
             {
-               _log.AddVerboseMessage($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+               _log.ShowInMonitor($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
 
                 mu.DumpPercent = basePercent + percent * contribFactor;
                 mu.RestorePercent = mu.DumpPercent;
@@ -105,7 +105,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 				List<Task<TaskResult>> tasks = new List<Task<TaskResult>>();
 				int segmentIndex = 0;
                 errors = new ConcurrentBag<Exception>();
-
+                mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount = 0;
                 SemaphoreSlim semaphore = new SemaphoreSlim(20);
 
                 foreach (var segment in mu.MigrationChunks[migrationChunkIndex].Segments)
@@ -117,9 +117,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                         segment.Id = segmentIndex.ToString();
 
                     FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
-                    if (mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 || segment.IsProcessed == true)
+                    if ((mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 && string.IsNullOrEmpty(mu.UserFilter)) || segment.IsProcessed == true)
                     {
-                        combinedFilter = filter;
+                        combinedFilter = Builders<BsonDocument>.Filter.Empty;
+
+                        var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(MongoHelper.GetFilterDoc(mu.UserFilter));
+
+                        // Safely combine filters
+                        combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
+
                     }
                     else
                     {
@@ -133,7 +139,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
 
                         // Filter by datatype (skip if DataTypeFor_Id is specified)
-                        BsonDocument? userFilter = BsonDocument.Parse(mu.UserFilter ?? "{}");
+                        BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
                         BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter, mu.DataTypeFor_Id.HasValue);
 
                         // Combine the filters using $and
@@ -178,7 +184,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (!errors.IsEmpty)
             {
-               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process");                
+               _log.WriteLine($"Document copy for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}] encountered {errors.Count} errors, skipped {_skippedCount} during the process", LogType.Warning);                
             }
 
             if (mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0 || errors.Count>0)
@@ -198,7 +204,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Error);
+                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Warning);
                     
                     ResetSegmentsInChunk(mu.MigrationChunks[migrationChunkIndex]);
                     return TaskResult.Retry;
@@ -210,7 +216,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 else
                 {
-                   _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Error);
+                   _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Warning);
 					return TaskResult.Retry;
 				}
                 jobList?.Save(); //persists state
@@ -237,33 +243,32 @@ namespace OnlineMongoMigrationProcessor.Workers
             long targetCount,
             ConcurrentBag<Exception> errors,
             CancellationToken cancellationToken,
-            bool IsWriteSimulated)
+            bool isWriteSimulated) 
         {
-              
             string segmentId = segment.Id;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
 
-           _log.WriteLine($"Document copy started for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]");
-            
+            _log.WriteLine($"Document copy started for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]", LogType.Debug);
 
             if (segment.IsProcessed == true)
             {
-               _log.WriteLine($"Skipping processed segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]");
-                
-
+                _log.WriteLine($"Skipping processed segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]", LogType.Debug);
                 Interlocked.Add(ref _successCount, segment.QueryDocCount);
                 return TaskResult.Success;
             }
-           
-            segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,new BsonDocument());
-            jobList.Save();
 
+            segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
+            jobList.Save();
 
             try
             {
                 bool failed = false;
-                int pageIndex = 0; // Current page index
+                int pageIndex = 0;
                 List<BsonDocument> set = new List<BsonDocument>();
+
+
+                segment.ResultDocCount =0;
+
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     try
@@ -274,34 +279,42 @@ namespace OnlineMongoMigrationProcessor.Workers
                             .Skip(pageIndex * _pageSize)
                             .Limit(_pageSize)
                             .ToListAsync(cancellationToken);
-
-                        segment.ResultDocCount+= set.Count;
+                        
 
                         if (set.Count == 0)
                             break;
 
                         // 2. Write to target (unless simulated)
-                        if (!IsWriteSimulated)
+                        if (!isWriteSimulated)
                         {
-                            var insertModels = set.Select(doc =>
+                            if (!MongoHelper.IsCosmosRUEndpoint(_targetCollection))
                             {
-                                // _id handling only if really needed
-                                if (doc.Contains("_id"))
+                                // BulkWriteAsync
+                                var insertModels = set.Select(doc =>
                                 {
-                                    var id = doc["_id"];
-                                    if (id.IsObjectId)
-                                        doc["_id"] = id.AsObjectId;
-                                }
-                                return new InsertOneModel<BsonDocument>(doc);
-                            }).ToList();
+                                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                                        doc["_id"] = doc["_id"].AsObjectId;
+                                    return new InsertOneModel<BsonDocument>(doc);
+                                }).ToList();
 
-                            var result = await _targetCollection.BulkWriteAsync(
-                                insertModels,
-                                new BulkWriteOptions { IsOrdered = false },
-                                cancellationToken);
+                                var result = await _targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false }, cancellationToken);
+                                Interlocked.Add(ref _successCount, result.InsertedCount);
+                                segment.ResultDocCount += result.InsertedCount;
+                            }
+                            else
+                            {
+                                // InsertManyAsync
+                                var docsToInsert = set.Select(doc =>
+                                {
+                                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                                        doc["_id"] = doc["_id"].AsObjectId;
+                                    return doc;
+                                }).ToList();
 
-                            long insertCount = result.InsertedCount;
-                            Interlocked.Add(ref _successCount, insertCount);
+                                await _targetCollection.InsertManyAsync(docsToInsert, new InsertManyOptions { IsOrdered = false }, cancellationToken);
+                                Interlocked.Add(ref _successCount, docsToInsert.Count);
+                                segment.ResultDocCount += docsToInsert.Count;
+                            }
                         }
                         else
                         {
@@ -310,21 +323,24 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
-                        // Partial success
                         long bulkInserted = ex.Result?.InsertedCount ?? 0;
                         Interlocked.Add(ref _successCount, bulkInserted);
+                        segment.ResultDocCount += bulkInserted;
 
-                        // Analyze errors
+
                         int dupeCount = ex.WriteErrors.Count(e => e.Code == 11000);
                         if (dupeCount > 0)
+                        {
                             Interlocked.Add(ref _skippedCount, dupeCount);
+                            segment.ResultDocCount += dupeCount;
+                        }
 
-                        int otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
+                         int otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
                         if (otherErrors > 0)
                         {
                             Interlocked.Add(ref _failureCount, otherErrors);
                             _log.WriteLine(
-                                $"Document copyencountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
+                                $"Document copy encountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
                                 LogType.Error);
                             LogErrors(
                                 ex.WriteErrors.Where(e => e.Code != 11000).ToList(),
@@ -335,16 +351,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                     catch (OutOfMemoryException ex)
                     {
                         _log.WriteLine(
-                            $"Encountered Out Of Memory exception for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. " +
-                            $"Try reducing _pageSize. Details: {ex}", LogType.Error);
-						return TaskResult.Retry;
-					}
+                            $"Encountered Out Of Memory exception for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize. Details: {ex}",
+                            LogType.Error);
+                        return TaskResult.Retry;
+                    }
                     catch (Exception ex) when (ex.ToString().Contains("canceled."))
                     {
                         _log.WriteLine($"Document copy operation for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] was canceled.");
-						//throw new OperationCanceledException("Document copy operation was cancelled.");
-						return TaskResult.Canceled;
-					}
+                        return TaskResult.Canceled;
+                    }
                     catch (Exception ex)
                     {
                         errors.Add(ex);
@@ -360,37 +375,38 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
 
                     if (failed)
-                        break;                    
+                        break;
                 }
 
-                if(!cancellationToken.IsCancellationRequested)
+                if (!cancellationToken.IsCancellationRequested)
                 {
-                    if(failed)
+                    if (failed)
                     {
-                        _log.WriteLine($"Document copy failed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}].");
+                        _log.WriteLine($"Document copy failed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}].", LogType.Warning);
                     }
-                    else if(_failureCount > 0 || _skippedCount > 0)
-					{
+                    else if (_failureCount > 0 || _skippedCount > 0)
+                    {
                         _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied, {_skippedCount} documents skipped(duplicate), {_failureCount} documents failed.");
-					}
+                    }
                     else
                     {
-						_log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.");
-					}
+                        _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
+                    }
                     segment.IsProcessed = !failed;
                     jobList.Save();
-					return TaskResult.Success;
-				}
+                    return TaskResult.Success;
+                }
                 else
-					return TaskResult.Canceled;
-			}
+                    return TaskResult.Canceled;
+            }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 errors.Add(ex);
-                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex}", LogType.Error);
-				return TaskResult.Retry;
-			}
+                _log.WriteLine($"Document copy encountered error while processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Details: {ex}", LogType.Warning);
+                return TaskResult.Retry;
+            }
         }
+
 
 
         private void LogErrors(List<BulkWriteError> exceptions, string location)
@@ -439,7 +455,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, migrationChunk.DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
                 
-                BsonDocument? userFilter = BsonDocument.Parse(mu.UserFilter ?? "{}");
+                BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
                 BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(migrationChunk.DataType, userFilter, mu.DataTypeFor_Id.HasValue);
 
                 chunkFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
@@ -451,7 +467,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex.Message}", LogType.Error);
+                _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex}", LogType.Warning);
             }
 
             jobList.Save();
@@ -495,6 +511,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 if (documentIds.Count > 0)
                 {
+                    _log.WriteLine($"Processing {documentIds.Count} individual documents as bulk insert failed.");
+
                     var targetFilter = Builders<BsonDocument>.Filter.In("_id", documentIds);
                     var existingTargetDocs = await _targetCollection.Find(targetFilter)
                         .Project(Builders<BsonDocument>.Projection.Include("_id"))
@@ -502,9 +520,11 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                     var existingIds = new HashSet<BsonValue>(existingTargetDocs.Select(doc => doc["_id"]));
 
+                    _log.WriteLine($"Count before loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
                     // Find missing documents
                     foreach (var sourceDoc in sourceDocuments)
                     {
+                        _log.ShowInMonitor("Processing document with _id : " + sourceDoc["_id"].ToString());
                         if (cancellationToken.IsCancellationRequested)
                             return;
 
@@ -525,7 +545,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 {
                                     await _targetCollection.InsertOneAsync(sourceDoc, cancellationToken: cancellationToken);
                                     Interlocked.Increment(ref _successCount);
-                                    
+                                    Interlocked.Decrement(ref _failureCount);                                    
                                     // Update the segment that should contain this document
                                     UpdateSegmentResultCount(migrationChunk);
                                 }
@@ -533,7 +553,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 {
                                     // Document was inserted by another process, skip                                   
                                     Interlocked.Increment(ref _skippedCount);
-                                    
+                                    Interlocked.Decrement(ref _failureCount);
                                     // Update the segment that should contain this document
                                     UpdateSegmentResultCount(migrationChunk);
                                 }
@@ -545,6 +565,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             }                            
                         }
                     }
+                    _log.WriteLine($"Count after loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
                 }
 
                 pageIndex++;
@@ -552,13 +573,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 // Log progress every 10 pages
                 if (pageIndex % 10 == 0)
                 {
-                    _log.AddVerboseMessage($"Processed {processedCount} documents, found {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+                    _log.ShowInMonitor($"Processed {processedCount} documents, found {foundMissingCount} missing documents in chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
                 }
 
                 // Limit the number of pages to prevent infinite loops
                 if (pageIndex > 10000)
                 {
-                    _log.WriteLine($"Reached maximum page limit while comparing chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]", LogType.Error);
+                    _log.WriteLine($"Reached maximum page limit while comparing chunk {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]", LogType.Warning);
                     break;
                 }
             }

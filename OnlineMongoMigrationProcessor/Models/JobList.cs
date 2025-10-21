@@ -43,7 +43,7 @@ namespace OnlineMongoMigrationProcessor
             this._log = _log;
         }
 
-        public bool LoadJobs(out string errorMessage,bool loadBackup= false)
+        public bool LoadJobs(out string errorMessage, bool loadBackup = false)
         {
             //errorMessage = string.Empty;
             lock (_loadLock)
@@ -58,11 +58,11 @@ namespace OnlineMongoMigrationProcessor
                     return false;
                 }
 
-                int max= loadBackup? 1 : 5; //if loading backup, try once  else 4 attempts 
+                int max = loadBackup ? 1 : 5; //if loading backup, try once  else 4 attempts 
                 //this._log = _log;
                 try
                 {
-                    if (File.Exists(path)) 
+                    if (File.Exists(path))
                     {
                         for (int i = 0; i < max; i++) //4 attempts to load json
                         {
@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 if (MigrationJobs != null)
                                 {
-                                    errorMessage=string.Empty;
+                                    errorMessage = string.Empty;
                                     return true;
                                 }
                             }
@@ -127,7 +127,7 @@ namespace OnlineMongoMigrationProcessor
                         errorMessage = "Migration jobs file does not exist.";
                         MigrationJobs = new List<MigrationJob>();
                         return true; // Return true even if the file does not exist, as it will be created later
-                    }                   
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -138,10 +138,10 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-    private string GetBestRestoreSlotFilePath()
+        private string GetBestRestoreSlotFilePath()
         {
             DateTime now = DateTime.Now;
-            DateTime minAllowedTime = now.AddMinutes(-1 * TUMBLING_INTERVAL_MINUTES * (SlotNames.Length-1));
+            DateTime minAllowedTime = now.AddMinutes(-1 * TUMBLING_INTERVAL_MINUTES * (SlotNames.Length - 1));
 
             var backupFolder = _backupFolderPath; // Replace with your folder path
             var slotFiles = SlotNames
@@ -151,7 +151,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     Path = filePath,
                     Timestamp = File.GetLastWriteTime(filePath)
-                })                
+                })
                 .OrderBy(f => f.Timestamp) // Sort ascending
                 .ToList();
 
@@ -166,7 +166,7 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
 
-            if(slotFiles.Count>0 && latestFile == string.Empty)
+            if (slotFiles.Count > 0 && latestFile == string.Empty)
                 latestFile = slotFiles.First().Path;
 
             if (latestFile != string.Empty)
@@ -184,16 +184,16 @@ namespace OnlineMongoMigrationProcessor
         {
             var path = GetBestRestoreSlotFilePath();
 
-            var backupDataUpdatedOn= !string.IsNullOrEmpty(path) && File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+            var backupDataUpdatedOn = !string.IsNullOrEmpty(path) && File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
             return backupDataUpdatedOn;
         }
 
         public bool Save()
         {
-           return Save(out string errorMessage);
+            return Save(out string errorMessage);
         }
 
-        public bool Save(out string errorMessage, bool forceBackup=false)
+        public bool Save(out string errorMessage, bool forceBackup = false)
         {
             try
             {
@@ -205,14 +205,36 @@ namespace OnlineMongoMigrationProcessor
                     // Step 1: Write JSON to temp
                     File.WriteAllText(tempFile, json);
 
-                    //atomic rewrite
-                    File.Move(tempFile, _filePath, overwrite: true);
+                    // Step 2: Safe atomic replacement with file lock handling
+                    if (File.Exists(_filePath))
+                    {
+                        if (!TryReplaceFileWithRetry(_filePath, tempFile, out string replaceError))
+                        {
+                            errorMessage = replaceError;
+                            // Clean up temp file
+                            if (File.Exists(tempFile))
+                                File.Delete(tempFile);
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        // No existing file, just move temp to final location with retry
+                        if (!TryMoveFileWithRetry(tempFile, _filePath, out string moveError))
+                        {
+                            errorMessage = moveError;
+                            // Clean up temp file
+                            if (File.Exists(tempFile))
+                                File.Delete(tempFile);
+                            return false;
+                        }
+                    }
 
                     DateTime now = DateTime.UtcNow;
 
                     bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
 
-                    if (File.Exists(_filePath) && hasJobs && (_processedMin != now.ToString("MM/dd/yyyy HH:mm")|| forceBackup))
+                    if (File.Exists(_filePath) && hasJobs && (_processedMin != now.ToString("MM/dd/yyyy HH:mm") || forceBackup))
                     {
 
                         // Rotate every 15 minutes
@@ -224,9 +246,13 @@ namespace OnlineMongoMigrationProcessor
 
                             int slotIndex = (now.Minute / TUMBLING_INTERVAL_MINUTES) % SlotNames.Length; // 0, 1, 2, or 3
 
-                            // Step 3: Write new backup into slot
+                            // Step 3: Write new backup into slot with retry logic
                             string latestSlot = Path.Combine(_backupFolderPath, SlotNames[slotIndex]);
-                            File.Copy(_filePath, latestSlot, overwrite: true);
+                            if (!TryCopyFileWithRetry(_filePath, latestSlot, out string copyError))
+                            {
+                                _log?.WriteLine($"Warning: Failed to create backup slot: {copyError}", LogType.Error);
+                                // Don't fail the entire save operation for backup failure
+                            }
                         }
                     }
                     errorMessage = string.Empty;
@@ -239,6 +265,129 @@ namespace OnlineMongoMigrationProcessor
                 _log?.WriteLine(errorMessage, LogType.Error);
                 return false;
             }
+        }
+
+        private bool TryReplaceFileWithRetry(string targetPath, string sourcePath, out string errorMessage)
+        {
+            const int maxRetries = 5;
+            const int delayMs = 100;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    string backupFile = targetPath + ".backup";
+
+                    // Remove any existing backup
+                    if (File.Exists(backupFile))
+                        File.Delete(backupFile);
+
+                    // Move original to backup
+                    File.Move(targetPath, backupFile);
+
+                    try
+                    {
+                        // Move temp to final location
+                        File.Move(sourcePath, targetPath);
+
+                        // Clean up backup
+                        File.Delete(backupFile);
+
+                        errorMessage = string.Empty;
+                        return true;
+                    }
+                    catch
+                    {
+                        // If move fails, restore from backup
+                        if (File.Exists(backupFile) && !File.Exists(targetPath))
+                        {
+                            File.Move(backupFile, targetPath);
+                        }
+                        throw;
+                    }
+                }
+                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+                {
+                    _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxRetries)
+                {
+                    _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+            }
+
+            errorMessage = $"Failed to replace file after {maxRetries} attempts due to file lock or access issues.";
+            return false;
+        }
+
+        private bool TryMoveFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
+        {
+            const int maxRetries = 5;
+            const int delayMs = 100;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    File.Move(sourcePath, targetPath);
+                    errorMessage = string.Empty;
+                    return true;
+                }
+                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+                {
+                    _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxRetries)
+                {
+                    _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+            }
+
+            errorMessage = $"Failed to move file after {maxRetries} attempts due to file lock or access issues.";
+            return false;
+        }
+
+        private bool TryCopyFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
+        {
+            const int maxRetries = 3;
+            const int delayMs = 100;
+
+            for (int attempt = 1; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    File.Copy(sourcePath, targetPath, overwrite: true);
+                    errorMessage = string.Empty;
+                    return true;
+                }
+                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+                {
+                    _log?.WriteLine($"Backup copy file lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+                catch (UnauthorizedAccessException) when (attempt < maxRetries)
+                {
+                    _log?.WriteLine($"Backup copy access denied on attempt {attempt}, retrying in {delayMs}ms...");
+                    Thread.Sleep(delayMs * attempt); // Progressive delay
+                }
+            }
+
+            errorMessage = $"Failed to copy backup file after {maxRetries} attempts due to file lock or access issues.";
+            return false;
+        }
+
+        private static bool IsFileLockException(IOException ex)
+        {
+            // Common HRESULTs for file locking issues
+            const int ERROR_SHARING_VIOLATION = -2147024864; // 0x80070020
+            const int ERROR_LOCK_VIOLATION = -2147024865;    // 0x8007001F
+
+            return ex.HResult == ERROR_SHARING_VIOLATION || ex.HResult == ERROR_LOCK_VIOLATION ||
+                   ex.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

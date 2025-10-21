@@ -101,7 +101,7 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{dbName}.{colName}-Chunk [{chunkIndex}] generating query");
 
-                BsonDocument? userFilterDoc = BsonDocument.Parse(mu.UserFilter ?? "{}");
+                BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
                 string query = MongoHelper.GenerateQueryString(gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu);
                 docCount = MongoHelper.GetDocumentCount(collection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu.DataTypeFor_Id.HasValue);
                 mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
@@ -112,7 +112,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (mu.MigrationChunks.Count == 1 && !string.IsNullOrEmpty(mu.UserFilter))
             {
-                BsonDocument? userFilterDoc = BsonDocument.Parse(mu.UserFilter ?? "{}");
+                BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
                 docCount = MongoHelper.GetActualDocumentCount(collection, mu);
                 string query = MongoHelper.GenerateQueryString(userFilterDoc);
                 args = $"{args} --query=\"{query}\"";
@@ -307,7 +307,7 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-            ProcessRunning = true;
+             ProcessRunning = true;
 
             // Initialize processor context (parity with CopyProcessor)
             ProcessorContext ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
@@ -456,6 +456,7 @@ namespace OnlineMongoMigrationProcessor
                 // MongoRestore
                 if (!mu.RestoreComplete && !_cts.Token.IsCancellationRequested && Helper.IsMigrationUnitValid(mu))
                 {
+                                        
                     int restoredChunks;
                     long restoredDocs;
                     RestoreAllPendingChunksOnce(mu, folder, targetConnectionString, dbName, colName, out restoredChunks, out restoredDocs);
@@ -566,6 +567,8 @@ namespace OnlineMongoMigrationProcessor
         // Finalization after restore completes or simulated run concludes
         private void FinalizeUpload(MigrationUnit mu, string key, string folder, string targetConnectionString, string jobId)
         {
+            
+
             // Best-effort cleanup of local dump folder
             try
             {
@@ -588,13 +591,15 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
+            
+
             // Handle offline completion and post-upload CS logic
             if (!_cts.Token.IsCancellationRequested)
             {
                 var migrationJob = _jobList.MigrationJobs?.Find(m => m.Id == jobId);
                 if (migrationJob != null)
                 {
-                    if (!_job.IsOnline && Helper.IsOfflineJobCompleted(migrationJob))
+                    if (!Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(migrationJob))
                     {                        
                         _log.WriteLine($"Job {migrationJob.Id} Completed");
                         migrationJob.IsCompleted = true;

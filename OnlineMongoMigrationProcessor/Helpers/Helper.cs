@@ -13,7 +13,7 @@ using System.Web;
 using System.Xml.Linq;
 using MongoDB.Driver;
 using MongoDB.Bson;
-
+using OnlineMongoMigrationProcessor.Helpers;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
@@ -23,8 +23,21 @@ namespace OnlineMongoMigrationProcessor
     public static class Helper
     {
 
-       static string _workingFolder = string.Empty;
+        static string _workingFolder = string.Empty;
 
+
+        public static bool IsOnline(MigrationJob job)
+        {
+            if (job == null)
+            {
+                return false;
+            }
+            if (job.CDCMode==CDCMode.Offline)
+            {
+                return false;
+            }
+            return true;
+        }
         private static double GetFolderSizeInGB(string folderPath)
         {
             if (!Directory.Exists(folderPath))
@@ -259,12 +272,37 @@ namespace OnlineMongoMigrationProcessor
                 return "NA";
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
-            return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+            
+            // Enhanced lag reporting with more granular information
+            if (lag.TotalSeconds < 60)
+                return $"{(int)lag.TotalSeconds} sec";
+            else if (lag.TotalMinutes < 60)
+                return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
+            else
+                return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
+        }
+
+        public static double GetChangeStreamLagSeconds(MigrationUnit unit, bool isSyncBack)
+        {
+            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+                return 0;
+            var lag = DateTime.UtcNow - timestamp;
+            return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
+        }
+
+        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit unit, bool isSyncBack, double maxAcceptableLagSeconds = 30)
+        {
+            var lagSeconds = GetChangeStreamLagSeconds(unit, isSyncBack);
+            var lagDisplay = GetChangeStreamLag(unit, isSyncBack);
+            var isHighLag = lagSeconds > maxAcceptableLagSeconds;
+            
+            return (lagDisplay, lagSeconds, isHighLag);
         }
 
         public static string GetChangeStreamMode(MigrationJob job)
         {
-            if (job == null || !job.IsOnline)
+            if (job == null || !Helper.IsOnline(job))
                 return "N/A";
 
             if (job.AggresiveChangeStream)
@@ -276,10 +314,10 @@ namespace OnlineMongoMigrationProcessor
         }
 
        
-
-        
-
-        
+        public static bool IsRU(string connectionString)
+        {
+            return connectionString.Contains("mongo.cosmos.azure.com");
+        }         
 
         public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString)
         {
@@ -315,6 +353,7 @@ namespace OnlineMongoMigrationProcessor
                             if (!unitsToAdd.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
                             {
                                 mu.UserFilter = item.Filter;
+
 
                                 if (!string.IsNullOrEmpty(item.DataTypeFor_Id) && Enum.TryParse<DataType>(item.DataTypeFor_Id, out var parsedDataType))
                                 {
@@ -482,6 +521,13 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var item in loadedObject)
                 {                   
+
+                    if(!string.IsNullOrEmpty(item.Filter) && !FilterInspector.HasValidIdFilter(item.Filter))
+                    {
+                        errorMessage = $"Filter for {item.DatabaseName}.{item.CollectionName} uses unsupported operators. Only $gte and $lt are supported.";
+                        return new Tuple<bool, string, string>(false, string.Empty, errorMessage);
+                    }
+
                     var validationResult = ValidateNamespaceFormatfromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}");
                     if (!validationResult.Item1)
                     {
@@ -618,6 +664,46 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

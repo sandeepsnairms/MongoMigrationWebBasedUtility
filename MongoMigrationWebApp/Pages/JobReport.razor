@@ -67,8 +67,8 @@ else
                 <tr><td class="nowrap">Job Name</td><td class="wrap">@MigrationJob.Name</td></tr>
                 <tr><td class="nowrap">Job Type</td><td>@GetToolName(MigrationJob.JobType)</td></tr>
                 <tr><td class="nowrap">Started On (UTC)</td><td>@(MigrationJob.StartedOn?.ToString() ?? "N/A")</td></tr>
-                <tr><td class="nowrap">Is Online</td><td>@(MigrationJob.IsOnline ? "Yes" : "No")</td></tr>
-                @if (MigrationJob.IsOnline)
+                <tr><td class="nowrap">Is Online</td><td>@(Helper.IsOnline(MigrationJob) ? "Yes" : "No")</td></tr>
+                @if (Helper.IsOnline(MigrationJob))
                 {
                     <tr><td class="nowrap">Change Stream Mode</td><td>@Helper.GetChangeStreamMode(MigrationJob)</td></tr>
                 }

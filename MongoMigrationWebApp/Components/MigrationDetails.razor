@@ -51,13 +51,14 @@
                     <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
                         <option value="Offline">Offline</option>
                         <option value="Online">Online</option>
+                        <!--<option value="SyncOnly">Sync Only</option>-->
                     </select>
                 </div>
                 <div class="mb-3">
                     <label for="change-stream-scope" class="form-label" title="Specify the scope of change stream monitoring during online migration.">
                         Change Stream Scope
                     </label>                
-                    <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(!NewMode || !isOnline || jobType == JobType.RUOptimizedCopy)">
+                    <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
                         <option value="Collection" title="Monitor changes at the collection level. Use when collect count is less than 200">Collection</option>
                         <option value="Server" title="Monitor changes at the server level across all databases. Recommended when migration hundreds of collections.">Server</option>
                     </select>
@@ -66,7 +67,7 @@
                     <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
                         Change Stream Mode
                     </label>                
-                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || !isOnline || jobType == JobType.RUOptimizedCopy)">
+                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
                         <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
                         <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
                         <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
@@ -91,7 +92,7 @@
                 <div class="mb-3 checkbox-container">
                     <div class="checkbox-group">
                         <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
-                            <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || !isOnline)" @bind="enableSyncBack" />
+                            <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline)" @bind="enableSyncBack" />
                             Post Migration Sync Back
                         </label>
                     </div>
@@ -151,7 +152,6 @@
     private JobType jobType = JobType.MongoDriver; // Use JobType enum instead of boolean
     private string selectedOption = "MongoDB Driver"; // Default dropdown value
     private bool isSimulatedRun = false; // Variable to track the dummy run option
-    private bool isOnline = true; // Default to online migration
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
     private bool aggressiveCS = false; // if the migration is online, aggressive change stream can be enabled
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
@@ -166,13 +166,20 @@
     private string SelectedChangeStreamScope = "Collection"; // Default change stream type
     private ChangeStreamLevel changeStreamLevel = ChangeStreamLevel.Collection; // Default to Collection
     private string sourceConnectionString { get; set; } = string.Empty;
+    private CDCMode cdcMode =CDCMode.Offline;
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
         var val = e?.Value?.ToString() ?? string.Empty;
-        isOnline = val == "Online";
+        SelectedMode = val;
+        cdcMode = val switch
+        {
+            "Online" => CDCMode.Online,
+            "SyncOnly" => CDCMode.SyncOnly,
+            _ => CDCMode.Offline
+        };
     }
 
     private void OnChangeStreamScopeChanged(ChangeEventArgs e)
@@ -240,7 +247,7 @@
             sourceConnectionString = string.Empty;
             targetConnectionString = string.Empty;
             namespaces = string.Empty;
-            isOnline = false;
+            cdcMode = CDCMode.Offline;
             enableSyncBack = false;
             jobType = JobType.DumpAndRestore;
             selectedOption = "MongoDump and MongoRestore";
@@ -261,10 +268,10 @@
             namespaces = Job?.NameSpaces ?? string.Empty;
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
-            isOnline = Job?.IsOnline ?? false;
+            cdcMode = Job?.CDCMode ?? CDCMode.Offline;
             startCSAfterUploads = Job?.CSStartsAfterAllUploads ?? true;
             aggressiveCS = Job?.AggresiveChangeStream ?? false; 
-            enableSyncBack = (Job?.SyncBackEnabled ?? false) && isOnline && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
+            enableSyncBack = (Job?.SyncBackEnabled ?? false) && (cdcMode != CDCMode.Offline) && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
             jobType = Job?.JobType ?? JobType.MongoDriver;
             selectedOption = jobType switch
             {
@@ -303,14 +310,13 @@
             // Set change stream type dropdown value based on enum value
             SelectedChangeStreamScope = changeStreamLevel == ChangeStreamLevel.Server ? "Server" : "Collection";
 
-            if(isOnline)
+            // Set migration mode dropdown value based on CDCMode enum
+            SelectedMode = cdcMode switch
             {
-                SelectedMode = "Online";
-            }
-            else
-            {
-                SelectedMode = "Offline";
-            }
+                CDCMode.Online => "Online",
+                CDCMode.SyncOnly => "SyncOnly",
+                _ => "Offline"
+            };
         }
     }
     private async void HandleSubmit()
@@ -387,7 +393,7 @@
         {
             Name = name,
             Id = Guid.NewGuid().ToString(),
-            IsOnline = isOnline,
+            CDCMode = cdcMode,
             SourceConnectionString = sourceConnectionString,
             TargetConnectionString = targetConnectionString,
             SourceEndpoint = tmpSrcEndpoint,
@@ -397,7 +403,7 @@
             IsSimulatedRun = isSimulatedRun,
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
-            SyncBackEnabled = (enableSyncBack && isOnline && !isSimulatedRun) ? true : false,
+            SyncBackEnabled = (enableSyncBack && cdcMode != CDCMode.Offline && !isSimulatedRun) ? true : false,
             CSStartsAfterAllUploads = startCSAfterUploads,
             AggresiveChangeStream = aggressiveCS,
             ChangeStreamLevel = changeStreamLevel
