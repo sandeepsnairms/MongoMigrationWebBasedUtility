@@ -941,7 +941,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     for (int j = 0; j < boundary.SegmentBoundaries.Count; j++)
                     {
                         var segment = boundary.SegmentBoundaries[j];
-                        var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, boundary.SegmentBoundaries.Count, j, chunk.Lt ?? string.Empty, chunk.Gte ?? string.Empty);
+                        var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, boundary.SegmentBoundaries.Count, j, userFilter, chunk.Lt ?? string.Empty, chunk.Gte ?? string.Empty);
 
                         chunk.Segments ??= new List<Segment>();
                         chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false, Id = (j + 1).ToString() });

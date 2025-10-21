@@ -524,7 +524,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if(!string.IsNullOrEmpty(item.Filter) && !FilterInspector.HasValidIdFilter(item.Filter))
                     {
-                        errorMessage = $"Filter for {item.DatabaseName}.{item.CollectionName} uses unsupported operators. Only $gte and $lt are supported.";
+                        errorMessage = $"{item.DatabaseName}.{item.CollectionName} filter uses unsupported operators for _id. Only $gte and $lt are supported.";
                         return new Tuple<bool, string, string>(false, string.Empty, errorMessage);
                     }
 
