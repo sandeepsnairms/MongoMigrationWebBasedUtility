@@ -156,7 +156,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (percent > 0 && targetCount>0)
             {
-                _log.AddVerboseMessage($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {percent}%");
+                _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {percent}%");
                 if (processType == "MongoRestore")
                 {
                     mu.RestorePercent = Math.Min(100,basePercent + percent * contribFactor);

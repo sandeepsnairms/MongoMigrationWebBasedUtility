@@ -66,7 +66,7 @@
                             <tr>
                                 <td class="cd-col-label">Change Stream</td>
                                 <td class="group">
-                                    @if (MigrationJob?.IsOnline ?? false)
+                                    @if (MigrationJob != null && Helper.IsOnline(MigrationJob))
                                     {
                                         <div><span class="lbl">Mode:</span> @Helper.GetChangeStreamMode(MigrationJob)</div>
                                         <div><span class="lbl">Started On (UTC):</span> @(MigrationUnit.ChangeStreamStartedOn?.ToString() ?? "N/A")</div>
@@ -96,7 +96,7 @@
                             <tr>
                                 <td class="cd-col-label">Sync Back</td>
                                 <td class="group">
-                                    @if ((MigrationJob?.IsOnline ?? false) && (MigrationJob?.SyncBackEnabled ?? false))
+                                    @if (MigrationJob != null && Helper.IsOnline(MigrationJob) && (MigrationJob?.SyncBackEnabled ?? false))
                                     {
                                         <div><span class="lbl">Resume Token:</span> @(MigrationUnit.SyncBackResumeToken ?? "N/A")</div>
                                         <div><span class="lbl">Started On (UTC):</span> @(MigrationUnit.SyncBackChangeStreamStartedOn?.ToString() ?? "N/A")</div>

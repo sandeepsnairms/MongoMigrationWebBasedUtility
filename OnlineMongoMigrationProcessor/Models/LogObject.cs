@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json.Serialization;
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -12,7 +13,10 @@ namespace OnlineMongoMigrationProcessor
         }
 
         public string Message { get; set; }
+        
+        [JsonConverter(typeof(LogTypeConverter))]
         public LogType Type { get; set; }
+        
         public DateTime Datetime { get; set; }
     }
 }

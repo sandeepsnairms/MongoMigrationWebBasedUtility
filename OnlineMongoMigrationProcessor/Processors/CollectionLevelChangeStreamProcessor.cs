@@ -22,9 +22,11 @@ namespace OnlineMongoMigrationProcessor
 
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
+            _log.ShowInMonitor($"{_syncBackPrefix}ProcessChangeStreamsAsync started. Token cancelled: {token.IsCancellationRequested}, ExecutionCancelled: {ExecutionCancelled}");
+            
             bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
                 .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
-                      
+
             int index = 0;
 
             // Get the latest sorted keys
@@ -38,9 +40,12 @@ namespace OnlineMongoMigrationProcessor
             long loops = 0;
             bool oplogSuccess = true;
 
+            //_log.WriteLine($"{_syncBackPrefix}About to enter main loop: token.IsCancellationRequested={token.IsCancellationRequested}, ExecutionCancelled={ExecutionCancelled}, sortedKeys.Count={sortedKeys.Count}");
+
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 var totalKeys = sortedKeys.Count;
+                
 
                 while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
                 {
@@ -49,6 +54,7 @@ namespace OnlineMongoMigrationProcessor
 
                     // Determine the batch
                     var batchKeys = sortedKeys.Skip(index).Take(_concurrentProcessors).ToList();
+                    _log.WriteLine($"{_syncBackPrefix}Batch starting: index={index}, will process {batchKeys.Count} collections", LogType.Debug);
                     var batchUnits = batchKeys
                         .Select(k => _migrationUnitsToProcess.TryGetValue(k, out var unit) ? unit : null)
                         .Where(u => u != null)
@@ -69,13 +75,48 @@ namespace OnlineMongoMigrationProcessor
                         {
                             collectionProcessed.Add(key);
                             unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
-                            tasks.Add(Task.Run(() => ProcessCollectionChangeStream(unit, true, seconds), token));
+                            // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside ProcessCollectionChangeStream
+                            string collectionName = key; // Capture for closure
+                            var task = Task.Run(async () => 
+                            {
+                                await ProcessCollectionChangeStream(unit, true, seconds);
+                            });
+                            tasks.Add(task);
                         }
                     }
 
-                    _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds");
+                    _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
 
-                    await Task.WhenAll(tasks);
+                    try
+                    {
+                        await Task.WhenAll(tasks);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Task.WhenAll threw exception: {ex.Message}", LogType.Error);
+                        
+                        // Log individual task states
+                        for (int i = 0; i < tasks.Count; i++)
+                        {
+                            var task = tasks[i];
+                            if (task.IsFaulted)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Task {i} FAULTED: {task.Exception?.GetBaseException().Message}", LogType.Error);
+                            }
+                            else if (task.IsCanceled)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Task {i} CANCELED", LogType.Warning);
+                            }
+                            else
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Task {i} completed successfully", LogType.Info);
+                            }
+                        }
+                        
+                        throw; // Re-throw to let outer exception handler deal with it
+                    }
+
+                    _log.WriteLine($"{_syncBackPrefix}Completed processing batch of {collectionProcessed.Count} collection(s). Moving to next batch...", LogType.Debug);
 
                     index += _concurrentProcessors;
 
@@ -83,7 +124,7 @@ namespace OnlineMongoMigrationProcessor
                     Thread.Sleep(100);
                 }
 
-                index = 0;
+                 _log.WriteLine($"{_syncBackPrefix}Completed round {loops + 1} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...", LogType.Debug);                index = 0;
                 // Sort the dictionary after all processing is complete
                 sortedKeys = _migrationUnitsToProcess
                     .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
@@ -113,7 +154,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private void ProcessCollectionChangeStream(MigrationUnit mu, bool IsCSProcessingRun = false, int seconds = 0)
+        private async Task ProcessCollectionChangeStream(MigrationUnit mu, bool IsCSProcessingRun = false, int seconds = 0)
         {
             try
             {
@@ -149,8 +190,16 @@ namespace OnlineMongoMigrationProcessor
 
                 try
                 {
+                    // Calculate seconds first so we can use it in ChangeStreamOptions
+                    if (seconds == 0)
+                        seconds = GetBatchDurationInSeconds(.5f); //get seconds from config or use default
+
+                    // MaxAwaitTime should be shorter than the cancellation timeout to allow proper cleanup
+                    // Use 80% of the total duration to ensure cursor returns before cancellation
+                    int maxAwaitSeconds = Math.Max(5, (int)(seconds * 0.8));
+
                     // Default options; will be overridden based on resume strategy
-                    ChangeStreamOptions options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+                    ChangeStreamOptions options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
 
                     DateTime startedOn;
                     DateTime timeStamp;
@@ -209,20 +258,20 @@ namespace OnlineMongoMigrationProcessor
                     if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && resumeToken == null && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
-                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                     }
                     else if (!string.IsNullOrEmpty(resumeToken) && !mu.ResetChangeStream) //skip resume token if its reset, both version  having resume token
                     {
-                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(resumeToken) };
+                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(resumeToken), MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                     }
                     else if (string.IsNullOrEmpty(resumeToken) && version.StartsWith("3")) //for Mongo 3.6
                     {
-                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                     }
                     else if (startedOn > DateTime.MinValue && !version.StartsWith("3"))  //newer version
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
-                        options = new ChangeStreamOptions { BatchSize = 100, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                         if (mu.ResetChangeStream)
                         {
                             ResetCounters(mu);
@@ -231,35 +280,32 @@ namespace OnlineMongoMigrationProcessor
                         mu.ResetChangeStream = false; //reset the start time after setting resume token
                     }
 
-                    if (seconds == 0)
-                        seconds = GetBatchDurationInSeconds(.5f); //get seconds from config or use default
-
                     var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                     CancellationToken cancellationToken = cancellationTokenSource.Token;
 
-                    _log.AddVerboseMessage($"{_syncBackPrefix}Monitoring change stream with new batch for {sourceCollection!.CollectionNamespace}. Batch Duration {seconds} seconds");
+                    _log.ShowInMonitor($"{_syncBackPrefix}Monitoring change stream with new batch for {sourceCollection!.CollectionNamespace}. Batch Duration {seconds} seconds");
                     // In simulated runs, use source collection as a placeholder to avoid null target warnings
                     if (_job.IsSimulatedRun && targetCollection == null)
                     {
                         targetCollection = sourceCollection;
                     }
 
-                    WatchCollection(mu, options, sourceCollection!, targetCollection!, cancellationToken);
+                    await WatchCollection(mu, options, sourceCollection!, targetCollection!, cancellationToken, seconds);
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
-                    // A new batch will be started. do nothing
+                    _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in ProcessCollectionChangeStream for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Info);
                 }
                 catch (MongoCommandException ex) when (ex.ToString().Contains("Resume of change stream was not possible"))
                 {
                     // Handle other potential exceptions
                     _log.WriteLine($"{_syncBackPrefix}Oplog is full. Error processing change stream for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
-                    _log.AddVerboseMessage($"{_syncBackPrefix}Oplog is full. Error processing change stream for {sourceCollection.CollectionNamespace}. Details: {ex}");
+                    _log.ShowInMonitor($"{_syncBackPrefix}Oplog is full. Error processing change stream for {sourceCollection.CollectionNamespace}. Details: {ex}");
                 }
                 catch (MongoCommandException ex) when (ex.Message.Contains("Expired resume token") || ex.Message.Contains("cursor"))
                 {
                     _log.WriteLine($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.", LogType.Error);
-                    _log.AddVerboseMessage($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.");
+                    _log.ShowInMonitor($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.");
                 }
             }
             catch (Exception ex)
@@ -268,7 +314,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private void WatchCollection(MigrationUnit mu, ChangeStreamOptions options, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken)
+        private async Task WatchCollection(MigrationUnit mu, ChangeStreamOptions options, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken, int seconds)
         {
             bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
                 .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
@@ -276,12 +322,8 @@ namespace OnlineMongoMigrationProcessor
             long counter = 0;
             BsonDocument userFilterDoc = new BsonDocument();
 
-            if (!string.IsNullOrWhiteSpace(mu.UserFilter))
-            {
-                userFilterDoc = BsonDocument.Parse(mu.UserFilter);
-                userFilterDoc ??= new BsonDocument(); // Ensure it's not null
-            }
-
+            userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
+           
             ChangeStreamDocuments changeStreamDocuments = new ChangeStreamDocuments();
 
             try
@@ -309,15 +351,33 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 var pipelineArray = pipeline.ToArray();
-                using var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
+                
+                // Wrap Watch() in a timeout to prevent indefinite blocking - use 80% of batch duration like MaxAwaitTime
+                int watchTimeoutSeconds = (int)(seconds * 0.8);
+                var watchTask = Task.Run(() => sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken));
+                var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds));
+                
+                var completedTask = await Task.WhenAny(watchTask, watchTimeoutTask);
+                
+                if (completedTask == watchTimeoutTask)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Watch() call timed out after {watchTimeoutSeconds} seconds for {sourceCollection.CollectionNamespace} - skipping this collection in this batch", LogType.Debug);
+                    _log.ShowInMonitor($"{_syncBackPrefix}WARNING: Change stream cursor creation timed out for {sourceCollection.CollectionNamespace}");
+                    return; // Skip this collection, will retry in next batch
+                }
+                
+                using var cursor = await watchTask;
                 string lastProcessedToken = string.Empty;
 
                 if (_job.SourceServerVersion.StartsWith("3"))
                 {
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Info);
+                            return;
+                        }
 
                         lastProcessedToken = string.Empty;
                         _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token1);
@@ -332,19 +392,120 @@ namespace OnlineMongoMigrationProcessor
 
                         if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, changeStreamDocuments, ref counter, userFilterDoc))
                             return;
+                        
+                        // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
+                        int totalAccumulated = changeStreamDocuments.DocsToBeInserted.Count + 
+                                              changeStreamDocuments.DocsToBeUpdated.Count + 
+                                              changeStreamDocuments.DocsToBeDeleted.Count;
+                        
+                        if (totalAccumulated >= 5000)
+                        {
+                            // BACKPRESSURE: Check global pending writes before adding more load
+                            int pending = GetGlobalPendingWriteCount();
+                            while (pending >= MAX_GLOBAL_PENDING_WRITES)
+                            {
+                                await WaitWithExponentialBackoffAsync(pending, sourceCollection.CollectionNamespace.ToString());
+                                
+                                // Check if memory recovered after wait
+                                if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+                                {
+                                    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
+                                    await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
+                                }
+                                
+                                pending = GetGlobalPendingWriteCount();
+                            }
+                            
+                            _log.WriteLine($"{_syncBackPrefix}Memory safety flush: Processing {totalAccumulated} accumulated changes for {sourceCollection.CollectionNamespace}", LogType.Info);
+                            
+                            IncrementGlobalPendingWrites();
+                            try
+                            {
+                                // Flush accumulated changes
+                                await BulkProcessChangesAsync(
+                                    mu,
+                                    targetCollection,
+                                    insertEvents: changeStreamDocuments.DocsToBeInserted,
+                                    updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                                    deleteEvents: changeStreamDocuments.DocsToBeDeleted);
+                                
+                                // Update resume token after successful flush
+                                if (!string.IsNullOrEmpty(changeStreamDocuments.LatestResumeToken))
+                                {
+                                    if (!_syncBack)
+                                    {
+                                        mu.ResumeToken = changeStreamDocuments.LatestResumeToken;
+                                        mu.CursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                                    }
+                                    else
+                                    {
+                                        mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
+                                        mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                                    }
+                                    _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
+                                }
+                                
+                                // Clear collections to free memory
+                                changeStreamDocuments.DocsToBeInserted.Clear();
+                                changeStreamDocuments.DocsToBeUpdated.Clear();
+                                changeStreamDocuments.DocsToBeDeleted.Clear();
+                                
+                                _log.WriteLine($"{_syncBackPrefix}Memory safety flush completed, memory released for {sourceCollection.CollectionNamespace}", LogType.Info);
+                            }
+                            finally
+                            {
+                                DecrementGlobalPendingWrites();
+                            }
+                        }
                     }
                 }
                 else
                 {
-                    while (cursor.MoveNext(cancellationToken))
+                    // Watchdog: Track when MoveNext was last called to detect hangs
+                    DateTime lastMoveNextCall = DateTime.UtcNow;
+                    int moveNextTimeoutSeconds = seconds + 10; // Add 10 second buffer beyond batch duration
+                    
+                    while (true)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Info);
+                            return;
+                        }
 
+                        // Watchdog: Check if MoveNext is taking too long (stuck)
+                        if ((DateTime.UtcNow - lastMoveNextCall).TotalSeconds > moveNextTimeoutSeconds)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Watchdog timeout: MoveNext exceeded {moveNextTimeoutSeconds}s for {sourceCollection!.CollectionNamespace}. Breaking out to prevent hang.", LogType.Warning);
+                            break; // Exit the while loop, batch will complete in finally block
+                        }
+
+                        bool hasMore;
+                        try
+                        {
+                            lastMoveNextCall = DateTime.UtcNow;
+                            hasMore = cursor.MoveNext(cancellationToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // Expected when cancellationToken times out
+                            _log.WriteLine($"{_syncBackPrefix}MoveNext cancelled by timeout for {sourceCollection!.CollectionNamespace} - completing batch", LogType.Debug);
+                            break; // Exit loop, process accumulated batch
+                        }
+                        
+                        if (!hasMore)
+                        {
+                            // No more data available, exit loop
+                            break;
+                        }
+                        
                         foreach (var change in cursor.Current)
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            if (ExecutionCancelled) return;
+                            if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
+                                return;
+                            }
 
                             lastProcessedToken = string.Empty;
                             _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
@@ -359,39 +520,162 @@ namespace OnlineMongoMigrationProcessor
 
                             if (!ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, changeStreamDocuments, ref counter, userFilterDoc))
                                 return;
+                            
+                            // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
+                            // Check every 5000 documents to avoid excessive memory buildup
+                            int totalAccumulated = changeStreamDocuments.DocsToBeInserted.Count + 
+                                                  changeStreamDocuments.DocsToBeUpdated.Count + 
+                                                  changeStreamDocuments.DocsToBeDeleted.Count;
+                            
+                            if (totalAccumulated >= 5000)
+                            {
+                                // BACKPRESSURE: Check global pending writes before adding more load
+                                int pending = GetGlobalPendingWriteCount();
+                                while (pending >= MAX_GLOBAL_PENDING_WRITES)
+                                {
+                                    await WaitWithExponentialBackoffAsync(pending, sourceCollection.CollectionNamespace.ToString());
+                                    
+                                    // Check if memory recovered after wait
+                                    if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+                                    {
+                                        _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
+                                        await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
+                                    }
+                                    
+                                    pending = GetGlobalPendingWriteCount();
+                                }
+                                
+                                _log.WriteLine($"{_syncBackPrefix}Memory safety flush: Processing {totalAccumulated} accumulated changes for {sourceCollection.CollectionNamespace}", LogType.Info);
+                                
+                                IncrementGlobalPendingWrites();
+                                try
+                                {
+                                    // Flush accumulated changes
+                                    await BulkProcessChangesAsync(
+                                        mu,
+                                        targetCollection,
+                                        insertEvents: changeStreamDocuments.DocsToBeInserted,
+                                        updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                                        deleteEvents: changeStreamDocuments.DocsToBeDeleted);
+                                    
+                                    // Update resume token after successful flush
+                                    if (!string.IsNullOrEmpty(changeStreamDocuments.LatestResumeToken))
+                                    {
+                                        if (!_syncBack)
+                                        {
+                                            mu.ResumeToken = changeStreamDocuments.LatestResumeToken;
+                                            mu.CursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                                        }
+                                        else
+                                        {
+                                            mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
+                                            mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                                        }
+                                        _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
+                                    }
+                                    
+                                    // Clear collections to free memory
+                                    changeStreamDocuments.DocsToBeInserted.Clear();
+                                    changeStreamDocuments.DocsToBeUpdated.Clear();
+                                    changeStreamDocuments.DocsToBeDeleted.Clear();
+                                    
+                                    _log.WriteLine($"{_syncBackPrefix}Memory safety flush completed, memory released for {sourceCollection.CollectionNamespace}", LogType.Info);
+                                }
+                                finally
+                                {
+                                    DecrementGlobalPendingWrites();
+                                }
+                            }
                         }
 
                         if (ExecutionCancelled)
+                        {
                             return;
+                        }
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                // A new batch will be started. do nothing
+                _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in WatchCollection for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Info);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                _log.WriteLine($"{_syncBackPrefix}Exception in WatchCollection for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Error);
                 throw;
             }
             finally
             {
                 try
                 {
-                    BulkProcessChangesAsync(
-                        mu,
-                        targetCollection,
-                        insertEvents: changeStreamDocuments.DocsToBeInserted,
-                        updateEvents: changeStreamDocuments.DocsToBeUpdated,
-                        deleteEvents: changeStreamDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
+                    int totalChanges = changeStreamDocuments.DocsToBeInserted.Count + 
+                                      changeStreamDocuments.DocsToBeUpdated.Count + 
+                                      changeStreamDocuments.DocsToBeDeleted.Count;
+                    
+                    if (totalChanges > 0)
+                    {
+                        // NO BACKPRESSURE HERE: This finally block REDUCES memory pressure by writing accumulated changes
+                        // Blocking writes here would prevent the very thing that frees up memory
+                        // Backpressure is applied at read/accumulation points (periodic flushes) only
+                        _log.ShowInMonitor($"{_syncBackPrefix}Processing batch for {sourceCollection.CollectionNamespace}: {totalChanges} changes (I:{changeStreamDocuments.DocsToBeInserted.Count}, U:{changeStreamDocuments.DocsToBeUpdated.Count}, D:{changeStreamDocuments.DocsToBeDeleted.Count})");
+                    }
+                    
+                    IncrementGlobalPendingWrites();
+                    try
+                    {
+                        // Process all pending changes in the batch - AWAIT properly to ensure completion before next batch
+                        await BulkProcessChangesAsync(
+                            mu,
+                            targetCollection,
+                            insertEvents: changeStreamDocuments.DocsToBeInserted,
+                            updateEvents: changeStreamDocuments.DocsToBeUpdated,
+                            deleteEvents: changeStreamDocuments.DocsToBeDeleted);
+
+                        if (totalChanges > 0)
+                        {
+                            _log.ShowInMonitor($"{_syncBackPrefix}Batch processing completed for {sourceCollection.CollectionNamespace}: {totalChanges} changes written successfully");
+                        }
+                    }
+                    finally
+                    {
+                        DecrementGlobalPendingWrites();
+                    }
+
+                    // CRITICAL: Only update resume token and timestamp AFTER successful batch write
+                    // This ensures we can recover from the last successful checkpoint on failure
+                    if (!string.IsNullOrEmpty(changeStreamDocuments.LatestResumeToken))
+                    {
+                        if (!_syncBack)
+                        {
+                            mu.ResumeToken = changeStreamDocuments.LatestResumeToken;
+                            mu.CursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                        }
+                        else
+                        {
+                            mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
+                            mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                        }
+
+                        _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
+                        
+                        _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {sourceCollection.CollectionNamespace}: Resume token persisted after successful batch write", LogType.Verbose);
+                    }
 
                     mu.CSUpdatesInLastBatch = counter;
                     mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
                     _jobList?.Save();
+                    
+                    if (counter > 0)
+                    {
+                        _log.ShowInMonitor($"{_syncBackPrefix}Watch cycle completed for {sourceCollection.CollectionNamespace}: {counter} events processed in batch");
+                    }
                 }
                 catch (Exception ex)
                 {
+                    _log.ShowInMonitor($"{_syncBackPrefix}ERROR processing batch for {sourceCollection.CollectionNamespace}: {ex.Message}");
                     _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
+                    // On failure, resume token is NOT updated - we will resume from the last successful checkpoint
+                    _log.WriteLine($"{_syncBackPrefix}Resume token NOT updated due to batch failure - will resume from last successful checkpoint", LogType.Verbose);
                 }
             }
         }
@@ -401,12 +685,12 @@ namespace OnlineMongoMigrationProcessor
         {
             if (documentId == null || string.IsNullOrEmpty(documentId))
             {
-                _log.WriteLine($"Auto replay is empty for {sourceCollection.CollectionNamespace}.");
+                _log.WriteLine($"Auto replay is empty for {sourceCollection.CollectionNamespace}.", LogType.Info);
                 return true; // Skip if no document ID is provided
             }
             else
             {
-                _log.WriteLine($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.");
+                _log.WriteLine($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.", LogType.Info);
             }
 
             var bsonDoc = BsonDocument.Parse(documentId);
@@ -421,7 +705,7 @@ namespace OnlineMongoMigrationProcessor
                     case ChangeStreamOperationType.Insert:
                         if (result == null || result.IsBsonNull)
                         {
-                            _log.WriteLine($"No document found for insert operation with _id {documentId} in {sourceCollection.CollectionNamespace}. Skipping insert.");
+                            _log.WriteLine($"No document found for insert operation with _id {documentId} in {sourceCollection.CollectionNamespace}. Skipping insert.", LogType.Warning);
                             return true; // Skip if no document found
                         }
                         targetCollection.InsertOne(result);
@@ -431,7 +715,7 @@ namespace OnlineMongoMigrationProcessor
                     case ChangeStreamOperationType.Replace:
                         if (result == null || result.IsBsonNull)
                         {
-                            _log.WriteLine($"Processing {opType} operation for {sourceCollection.CollectionNamespace} with _id {documentId}. No document found on source, deleting it from target.");
+                            _log.WriteLine($"Processing {opType} operation for {sourceCollection.CollectionNamespace} with _id {documentId}. No document found on source, deleting it from target.", LogType.Info);
                             var deleteTTLFilter = MongoHelper.BuildFilterFromDocumentKey(bsonDoc);
                             try
                             {
@@ -454,7 +738,7 @@ namespace OnlineMongoMigrationProcessor
                         IncrementDocCounter(mu, opType);
                         return true;
                     default:
-                        _log.WriteLine($"Unhandled operation type: {opType}");
+                        _log.WriteLine($"Unhandled operation type: {opType}", LogType.Error);
                         return false;
                 }
             }
@@ -497,26 +781,15 @@ namespace OnlineMongoMigrationProcessor
 
                 // Output change details to the console
                 if (timeStamp == DateTime.MinValue)
-                    _log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");
                 else
-                    _log.AddVerboseMessage($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}");
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}");
 
                 ProcessChange(change, targetCollection, collNameSpace, changeStreamDocuments, _job.IsSimulatedRun, mu);
 
-                if (!_syncBack)
-                    mu.CursorUtcTimestamp = timeStamp;
-                else
-                    mu.SyncBackCursorUtcTimestamp = timeStamp; //for reverse sync               
-
-                if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
-                {
-                    if (!_syncBack)
-                        mu.ResumeToken = change.ResumeToken.ToJson();
-                    else
-                        mu.SyncBackResumeToken = change.ResumeToken.ToJson();
-
-                    _resumeTokenCache[$"{collNameSpace}"] = change.ResumeToken.ToJson();
-                }
+                // NOTE: Resume token and timestamp are NOT persisted here anymore
+                // They will only be persisted after successful batch write completion
+                // This ensures we can recover from the last successful checkpoint
 
                 // Break if execution is canceled
                 if (ExecutionCancelled)
@@ -533,9 +806,6 @@ namespace OnlineMongoMigrationProcessor
 
         private void ProcessChange(ChangeStreamDocument<BsonDocument> change, IMongoCollection<BsonDocument> targetCollection, string collNameSpace, ChangeStreamDocuments changeStreamDocuments, bool isWriteSimulated, MigrationUnit mu)
         {
-            if (isWriteSimulated)
-                return;
-
             BsonValue idValue = BsonNull.Value;
 
             try
@@ -550,6 +820,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     case ChangeStreamOperationType.Insert:
                         IncrementEventCounter(mu, change.OperationType);
+                        // Accumulate inserts even in simulation mode so counters get updated
                         if (change.FullDocument != null && !change.FullDocument.IsBsonNull)
                             changeStreamDocuments.AddInsert(change);
                         break;
@@ -559,33 +830,39 @@ namespace OnlineMongoMigrationProcessor
                         var filter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
                         if (change.FullDocument == null || change.FullDocument.IsBsonNull)
                         {
-                            _log.WriteLine($"{_syncBackPrefix}Processing {change.OperationType} operation for {collNameSpace} with _id {idValue}. No document found on source, deleting it from target.");
-                            var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
-                            try
+                            // Skip actual delete operation in simulation mode
+                            if (!isWriteSimulated)
                             {
-                                targetCollection.DeleteOne(deleteTTLFilter);
-                                IncrementEventCounter(mu, ChangeStreamOperationType.Delete);
+                                _log.WriteLine($"{_syncBackPrefix}Processing {change.OperationType} operation for {collNameSpace} with _id {idValue}. No document found on source, deleting it from target.", LogType.Info);
+                                var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
+                                try
+                                {
+                                    targetCollection.DeleteOne(deleteTTLFilter);
+                                    IncrementEventCounter(mu, ChangeStreamOperationType.Delete);
+                                }
+                                catch
+                                { }
                             }
-                            catch
-                            { }
                         }
                         else
                         {
+                            // Accumulate updates even in simulation mode so counters get updated
                             changeStreamDocuments.AddUpdate(change);
                         }
                         break;
                     case ChangeStreamOperationType.Delete:
                         IncrementEventCounter(mu, change.OperationType);
+                        // Accumulate deletes even in simulation mode so counters get updated
                         changeStreamDocuments.AddDelete(change);
                         break;
                     default:
-                        _log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {change.OperationType}");
+                        _log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {change.OperationType}", LogType.Error);
                         break;
                 }
 
                 if (changeStreamDocuments.DocsToBeInserted.Count + changeStreamDocuments.DocsToBeUpdated.Count + changeStreamDocuments.DocsToBeDeleted.Count > _config.ChangeStreamMaxDocsInBatch)
                 {
-                    _log.AddVerboseMessage($"{_syncBackPrefix}Change stream max batch size exceeded. Flushing changes for {collNameSpace}");
+                    _log.ShowInMonitor($"{_syncBackPrefix}Change stream max batch size exceeded. Flushing changes for {collNameSpace}", LogType.Debug);
 
                     // Process the changes in bulk if the batch size exceeds the limit
                     BulkProcessChangesAsync(
@@ -595,11 +872,33 @@ namespace OnlineMongoMigrationProcessor
                         updateEvents: changeStreamDocuments.DocsToBeUpdated,
                         deleteEvents: changeStreamDocuments.DocsToBeDeleted).GetAwaiter().GetResult();
 
+                    // CRITICAL: Only update resume token AFTER successful mid-batch flush
+                    // This ensures we can recover from the last successful checkpoint on failure
+                    if (!string.IsNullOrEmpty(changeStreamDocuments.LatestResumeToken))
+                    {
+                        if (!_syncBack)
+                        {
+                            mu.ResumeToken = changeStreamDocuments.LatestResumeToken;
+                            mu.CursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                        }
+                        else
+                        {
+                            mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
+                            mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
+                        }
+
+                        _resumeTokenCache[$"{collNameSpace}"] = changeStreamDocuments.LatestResumeToken;
+                        
+                        _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collNameSpace}: Resume token persisted after successful flush", LogType.Verbose);
+                    }
+
                     _jobList?.Save();
-                    // Clear the lists after processing
+                    
+                    // Clear the lists and metadata after successful processing
                     changeStreamDocuments.DocsToBeInserted.Clear();
                     changeStreamDocuments.DocsToBeUpdated.Clear();
                     changeStreamDocuments.DocsToBeDeleted.Clear();
+                    changeStreamDocuments.ClearMetadata(); // Clear to start fresh for next batch
                 }
             }
             catch (Exception ex)

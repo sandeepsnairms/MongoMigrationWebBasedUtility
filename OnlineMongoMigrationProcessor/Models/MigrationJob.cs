@@ -22,7 +22,7 @@ namespace OnlineMongoMigrationProcessor
         public string? NameSpaces { get; set; }
         public DateTime? StartedOn { get; set; }
         public bool IsCompleted { get; set; }
-        public bool IsOnline { get; set; }
+
         public bool IsCancelled { get; set; }
         public bool IsStarted { get; set; }
         public JobType JobType { get; set; } = JobType.MongoDriver;
@@ -42,7 +42,24 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
         }
-        
+        public CDCMode CDCMode { get; set; } = CDCMode.Offline;
+
+         // Legacy property for backward compatibility - will be removed in future versions
+        // This will only be deserialized if present in JSON, but never serialized
+        [JsonProperty("IsOnline", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        private bool? _isOnlineLegacy
+        {
+            get => null; // Never serialize this
+            set
+            {
+                // Handle deserialization of legacy IsOnline property
+                if (value.HasValue)
+                {
+                    CDCMode = value.Value ? CDCMode.Online : CDCMode.Offline;
+                }
+            }
+        }
+
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
         public bool AppendMode { get; set; }
@@ -53,6 +70,11 @@ namespace OnlineMongoMigrationProcessor
         public bool CSStartsAfterAllUploads { get; set; }
         public bool CSPostProcessingStarted { get; set; }
         public ChangeStreamLevel ChangeStreamLevel { get; set; }
+        
+        /// <summary>
+        /// Minimum log level to write to logs. Default is Info (Error=0, Info=1, Debug=2, Verbose=3)
+        /// </summary>
+        public LogType MinimumLogLevel { get; set; } = LogType.Info;
         
         // Global resume token properties for server-level change streams (Forward sync)
         public string? ResumeToken { get; set; }

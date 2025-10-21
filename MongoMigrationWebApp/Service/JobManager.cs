@@ -120,11 +120,11 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Log Management
 
-        public List<LogObject> GetVerboseMessages(string id)
+        public List<LogObject> GetMonitorMessages(string id)
         {
             //verbose messages  are only  there for active jobList so fetech from migration worker.
             if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
-                return MigrationWorker.GetVerboseMessages(id) ?? new List<LogObject>();
+                return MigrationWorker.GetMonitorMessages(id) ?? new List<LogObject>();
             else
                 return new List<LogObject>();
         }

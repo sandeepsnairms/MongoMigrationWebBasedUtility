@@ -36,7 +36,7 @@
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
 
-            @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.SyncBackEnabled && !MigrationJob.ProcessingSyncBack)
+            @if (MigrationJob != null && Helper.IsOnline(MigrationJob) && MigrationJob.SyncBackEnabled && !MigrationJob.ProcessingSyncBack)
             {
                 <button class="btn btn-warning dropdown-toggle" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" data-bs-toggle="dropdown" aria-expanded="false">Cut Over</button>
 
@@ -46,11 +46,11 @@
 
                 </ul>
             }
-            else if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.SyncBackEnabled && MigrationJob.ProcessingSyncBack)
+            else if (MigrationJob != null && Helper.IsOnline(MigrationJob) && MigrationJob.SyncBackEnabled && MigrationJob.ProcessingSyncBack)
             {
                 <button class="btn btn-warning" title="Complete Job" @onclick="CompleteJob">Complete Job</button>
             }
-            else if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.SyncBackEnabled)
+            else if (MigrationJob != null && Helper.IsOnline(MigrationJob) && !MigrationJob.SyncBackEnabled)
             {
                 <button class="btn btn-warning" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" @onclick="CompleteJob">Cut Over</button>
             }
@@ -153,35 +153,65 @@
     <table class="table collections-table">
         <thead>
             <tr>
-                <th>Database Name</th>
-                <th>Collection Name</th>
+                <th class="sortable-header @GetSortClass("DatabaseName")" @onclick='() => SortBy("DatabaseName")' style="cursor: pointer;">
+                    Database Name
+                    <i class="bi @GetSortIcon("DatabaseName") ms-1"></i>
+                </th>
+                <th class="sortable-header @GetSortClass("CollectionName")" @onclick='() => SortBy("CollectionName")' style="cursor: pointer;">
+                    Collection Name
+                    <i class="bi @GetSortIcon("CollectionName") ms-1"></i>
+                </th>
                 @if (MigrationJob != null && MigrationJob.JobType==OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                 {
-                    <th>Download Status</th>
-                    <th>Upload Status</th>
+                    <th class="sortable-header @GetSortClass("DownloadStatus")" @onclick='() => SortBy("DownloadStatus")' style="cursor: pointer;">
+                        Download Status
+                        <i class="bi @GetSortIcon("DownloadStatus") ms-1"></i>
+                    </th>
+                    <th class="sortable-header @GetSortClass("UploadStatus")" @onclick='() => SortBy("UploadStatus")' style="cursor: pointer;">
+                        Upload Status
+                        <i class="bi @GetSortIcon("UploadStatus") ms-1"></i>
+                    </th>
                 }
                 else
                 {
-                    <th>Copy Status</th>
+                    <th class="sortable-header @GetSortClass("CopyStatus")" @onclick='() => SortBy("CopyStatus")' style="cursor: pointer;">
+                        Copy Status
+                        <i class="bi @GetSortIcon("CopyStatus") ms-1"></i>
+                    </th>
                 }
-                @if (MigrationJob != null && MigrationJob.IsOnline && !MigrationJob.ProcessingSyncBack)
+                @if (MigrationJob != null && Helper.IsOnline(MigrationJob) && !MigrationJob.ProcessingSyncBack)
                 {
                     @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
                     {
-                        <th>Time Since Last Change</th>
-                        <th>Last Batch – Total Changes</th>
+                        <th class="sortable-header @GetSortClass("TimeSinceLastChange")" @onclick='() => SortBy("TimeSinceLastChange")' style="cursor: pointer;">
+                            Time Since Last Change
+                            <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
+                        </th>
+                        <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                            Last Batch – Total Changes
+                            <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                        </th>
                     }
                     else
                     {
-                        <th>Change Stream Last Batch – Total Changes</th>
+                        <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                            Change Stream Last Batch – Total Changes
+                            <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                        </th>
                     }
 
                 }
-                @if (MigrationJob != null && MigrationJob.IsOnline && MigrationJob.ProcessingSyncBack)
+                @if (MigrationJob != null && Helper.IsOnline(MigrationJob) && MigrationJob.ProcessingSyncBack)
                 {
 
-                     <th>Time Since Last Sync Back</th>
-                    <th>Last Batch – Total Changes</th>
+                     <th class="sortable-header @GetSortClass("TimeSinceLastChange")" @onclick='() => SortBy("TimeSinceLastChange")' style="cursor: pointer;">
+                        Time Since Last Sync Back
+                        <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
+                    </th>
+                    <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
+                        Last Batch – Total Changes
+                        <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
+                    </th>
                 }
             </tr>
         </thead>
@@ -213,7 +243,7 @@
 
                             </td>
                         }
-                        @if (MigrationJob != null && MigrationJob.IsOnline)
+                        @if (MigrationJob != null && Helper.IsOnline(MigrationJob))
                         {
                             @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || MigrationJob.ProcessingSyncBack)
                             {
@@ -303,7 +333,7 @@
 {
     <div class="d-flex align-items-center mb-3 mt-4">
         <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections" disabled="@_isLoadingCollections">Update Collections</button>
-        @if (MigrationJob != null && MigrationJob.IsOnline)
+        @if (MigrationJob != null && Helper.IsOnline(MigrationJob))
         {
             <button class="btn btn-warning mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">
                 @(((MigrationJob?.MigrationUnits ?? new List<MigrationUnit>()).Any(MigrationUnit => MigrationUnit.ResetChangeStream)) ? "✓ Reset Change Stream" : "☐ Reset Change Stream")
@@ -330,7 +360,7 @@
             <tbody>
                 @foreach (var logObject in VerboseMessages)
                 {
-                    <tr class="@GetRowClass(logObject.Type.ToString(), logObject.Message)">
+                    <tr>
                         <td>
                             @if(string.IsNullOrEmpty(logObject.Message))
                             {
@@ -350,16 +380,29 @@
 
 @if (LogBucket != null && LogBucket.Logs != null && !_showLogBackupFile)
 {
-    <h5 class=" pt-4">
-        <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File"  style="border: none; background: transparent;">
-            <i class="bi bi-download"></i>
-        </button> Logs
-    </h5>
+    <div class="d-flex justify-content-between align-items-center pt-4">
+        <h5 class="mb-0">
+            <button class="btn btn-light" @onclick="DownloadFile" title="Download Log File" style="border: none; background: transparent;">
+                <i class="bi bi-download"></i>
+            </button> Logs
+        </h5>
+        <div class="d-flex align-items-center">
+            <label class="me-2 mb-0" style="font-weight: normal;">Currently Logging:</label>
+            <select class="form-select form-select-sm" style="width: auto;" @bind="SelectedLogLevel" @bind:after="OnLogLevelChanged">
+                <option value="@LogType.Error">Error Only</option>
+                <option value="@LogType.Warning">Warning + Error</option>
+                <option value="@LogType.Info">Info + Warning + Error</option>
+                <option value="@LogType.Debug">Debug + Info + Warning + Error</option>
+                <option value="@LogType.Debug">All (Verbose)</option>
+            </select>
+        </div>
+    </div>
 
 
-    <table class="table console-output">
+    <table class="table console-output mt-2">
         <thead>
             <tr>
+                <th class="log-icon-header"></th>
                 <th style="width: 150px;">Date Time (UTC)</th>
                 <th>Message</th>
             </tr>
@@ -369,6 +412,7 @@
             @foreach (var logObject in LogBucket.Logs.TakeLast(200).Reverse())  // Reverse the last 200 items
             {
                 <tr class="@GetRowClass(logObject.Type.ToString(),logObject.Message)">
+                    <td class="log-icon-cell">@GetLogIcon(logObject.Type)</td>
                     <td>@logObject.Datetime</td>
                     <td>@logObject.Message</td>
                 </tr>
@@ -377,6 +421,7 @@
             @if (LogBucket.Logs.Count > 250)
             {
                 <tr>
+                    <td></td>
                     <td> ....</td>
                     <td> ..... </td>
                 </tr>
@@ -384,6 +429,7 @@
                 @foreach (var logObject in LogBucket.Logs.Take(30).Reverse()) // Reverse the top 30 items
                 {
                     <tr class="@GetRowClass(logObject.Type.ToString(),logObject.Message)">
+                        <td class="log-icon-cell">@GetLogIcon(logObject.Type)</td>
                         <td style="width: 120px;">@logObject.Datetime</td>
                         <td>@logObject.Message</td>
                     </tr>
@@ -436,10 +482,27 @@ else if (@_showLogBackupFile)
     // Loading spinner state for collection loading
     private bool _isLoadingCollections = false;
 
+    // Log level filtering
+    private LogType SelectedLogLevel
+    {
+        get => MigrationJob?.MinimumLogLevel ?? LogType.Info;
+        set
+        {
+            if (MigrationJob != null)
+            {
+                MigrationJob.MinimumLogLevel = value;
+            }
+        }
+    }
+
     // Pagination and filtering properties (kept for UI binding compatibility)
     private string _filterText = string.Empty;
     private int _currentPage = 1;
     private int _pageSize = 25;
+
+    // Sorting properties
+    private string _sortColumn = "DatabaseName";
+    private bool _sortAscending = true;
 
     // Pagination helper
     private PaginationHelper<MigrationUnit> _paginationHelper = new PaginationHelper<MigrationUnit>(
@@ -487,7 +550,7 @@ else if (@_showLogBackupFile)
             }
 
             // Change Stream Lag (Time Since Last Change/Sync Back)
-            if (MigrationJob?.IsOnline == true)
+            if (MigrationJob!=null & Helper.IsOnline(MigrationJob) == true)
             {
                 var lagText = Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack);
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -495,7 +558,7 @@ else if (@_showLogBackupFile)
             }
 
             // Last Batch Changes Count
-            if (MigrationJob?.IsOnline == true)
+            if (Helper.IsOnline(MigrationJob) == true)
             {
                 var batchCount = unit.CSUpdatesInLastBatch.ToString();
                 if (batchCount.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -528,20 +591,118 @@ else if (@_showLogBackupFile)
         };
     }
 
+    #region Sorting Methods
+
+    private void SortBy(string columnName)
+    {
+        if (_sortColumn == columnName)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = columnName;
+            _sortAscending = true;
+        }
+        
+        _currentPage = 1; // Reset to first page when sorting changes
+        StateHasChanged();
+    }
+
+    private string GetSortIcon(string columnName)
+    {
+        if (_sortColumn != columnName)
+            return "bi-arrow-down-up"; // Neutral sort icon
+        
+        return _sortAscending ? "bi-arrow-up" : "bi-arrow-down";
+    }
+
+    private string GetSortClass(string columnName)
+    {
+        return _sortColumn == columnName ? "sorted-column" : "";
+    }
+
+    private List<MigrationUnit> ApplySorting(List<MigrationUnit> units)
+    {
+        if (units == null || !units.Any())
+            return units ?? new List<MigrationUnit>();
+
+        return _sortColumn switch
+        {
+            "DatabaseName" => _sortAscending 
+                ? units.OrderBy(u => u.DatabaseName).ToList()
+                : units.OrderByDescending(u => u.DatabaseName).ToList(),
+            
+            "CollectionName" => _sortAscending
+                ? units.OrderBy(u => u.CollectionName).ToList()
+                : units.OrderByDescending(u => u.CollectionName).ToList(),
+            
+            "DownloadStatus" or "CopyStatus" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForStatus(u, false)).ToList()
+                : units.OrderByDescending(u => GetSortValueForStatus(u, false)).ToList(),
+            
+            "UploadStatus" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForStatus(u, true)).ToList()
+                : units.OrderByDescending(u => GetSortValueForStatus(u, true)).ToList(),
+            
+            "TimeSinceLastChange" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForTimestamp(u)).ToList()
+                : units.OrderByDescending(u => GetSortValueForTimestamp(u)).ToList(),
+            
+            "LastBatchChanges" => _sortAscending
+                ? units.OrderBy(u => u.CSUpdatesInLastBatch).ToList()
+                : units.OrderByDescending(u => u.CSUpdatesInLastBatch).ToList(),
+            
+            _ => units
+        };
+    }
+
+    private object GetSortValueForStatus(MigrationUnit unit, bool isUploadStatus)
+    {
+        if (unit.SourceStatus == CollectionStatus.NotFound)
+            return "0_Skipped (404)"; // Sort skipped items first
+        
+        if (unit.SourceStatus == CollectionStatus.IsView)
+            return "0_Skipped (VIEW)"; // Sort skipped items first
+
+        if (isUploadStatus)
+        {
+            if (unit.RestoreComplete || unit.RestorePercent == 100)
+                return "2_Success"; // Sort completed items last
+            return $"1_{unit.RestorePercent:000.0}%"; // Sort by percentage in middle
+        }
+        else
+        {
+            if (unit.DumpComplete)
+                return "2_Success"; // Sort completed items last
+            return $"1_{unit.DumpPercent:000.0}%"; // Sort by percentage in middle
+        }
+    }
+
+    private DateTime GetSortValueForTimestamp(MigrationUnit unit)
+    {
+        if (MigrationJob?.ProcessingSyncBack == true)
+            return unit.SyncBackCursorUtcTimestamp;
+        else
+            return unit.CursorUtcTimestamp;
+    }
+
+    #endregion
+
     #region Pagination and Filtering Methods
 
     private void UpdatePaginationHelper()
     {
         var currentUnits = MigrationJob?.MigrationUnits ?? new List<MigrationUnit>();
         
-        // Only recreate if the collection has changed
-        if (_paginationHelper.TotalItemsCount != currentUnits.Count)
-        {
-            _paginationHelper = new PaginationHelper<MigrationUnit>(
-                currentUnits,
-                GetFilterPredicate()
-            );
-        }
+        // Apply sorting before pagination
+        currentUnits = ApplySorting(currentUnits);
+        
+        // Always recreate the pagination helper with sorted data
+        _paginationHelper = new PaginationHelper<MigrationUnit>(
+            currentUnits,
+            GetFilterPredicate()
+        );
         
         // Always update the helper with current component state
         _paginationHelper.FilterText = _filterText;
@@ -633,24 +794,50 @@ else if (@_showLogBackupFile)
         _currentPage = 1; // Reset to first page when page size changes
         StateHasChanged();
     }
+
+    private void OnLogLevelChanged()
+    {
+        // Save the job when log level changes
+        JobManager.SaveJobs(out string errorMessage);
+        if (!string.IsNullOrEmpty(errorMessage))
+        {
+            _errorMessage = errorMessage;
+        }
+        StateHasChanged();
+    }
     #endregion
 
     private string GetRowClass(string type, string message)
     {
-        string rowClass = string.Empty;
-        string lowerMessage = message.ToLower();
-
-        if (lowerMessage.Contains("warning") || lowerMessage.Contains("failure") || lowerMessage.Contains("error") || lowerMessage.Contains("failed") || lowerMessage.Contains("cancel"))
+        // Return CSS class based on LogType
+        // Treat deprecated "Message" as "Info"
+        return type switch
         {
-            rowClass = "warning-row"; // Change to warning-row if any condition matches
-        }
+            "Error" => "error-row",
+            "Warning" => "warning-row",
+            "Message" => "info-row",  // Deprecated, treat as Info
+            "Info" => "info-row",
+            "Debug" => "debug-row",
+            "Verbose" => "verbose-row",
+            _ => string.Empty
+        };
+    }
 
-        if (type == "Error")
+    private MarkupString GetLogIcon(LogType logType)
+    {
+        // Return Bootstrap icon based on LogType
+        #pragma warning disable CS0618 // Type or member is obsolete
+        return logType switch
         {
-            rowClass = "error-row"; // Assign the default row class
-        }
-
-        return rowClass;
+            LogType.Error => new MarkupString("<i class='bi bi-x-circle-fill'></i>"),
+            LogType.Warning => new MarkupString("<i class='bi bi-exclamation-triangle-fill'></i>"),
+            LogType.Message => new MarkupString("<i class='bi bi-info-circle-fill'></i>"),  // Deprecated, treat as Info
+            LogType.Info => new MarkupString("<i class='bi bi-info-circle-fill'></i>"),
+            LogType.Debug => new MarkupString("<i class='bi bi-bug-fill'></i>"),
+            LogType.Verbose => new MarkupString("<i class='bi bi-chat-dots-fill'></i>"),
+            _ => new MarkupString("")
+        };
+        #pragma warning restore CS0618
     }
 
     private void GoBack()
@@ -747,7 +934,7 @@ else if (@_showLogBackupFile)
             if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
                 _logBackupFile = logBackup;
 
-            VerboseMessages = JobManager.GetVerboseMessages(JobId ?? string.Empty);
+            VerboseMessages = JobManager.GetMonitorMessages(JobId ?? string.Empty);
             //Console.WriteLine($"Refresh called for {JobId}");
 
             if (!string.IsNullOrEmpty(_logBackupFile))
@@ -938,7 +1125,7 @@ else if (@_showLogBackupFile)
                                                    mj.TargetConnectionString ?? string.Empty,
                                                    mj.NameSpaces ?? string.Empty,
                                                    mj.JobType,
-                                                   mj.IsOnline);
+                                                   Helper.IsOnline(mj));
                 }
             });
 

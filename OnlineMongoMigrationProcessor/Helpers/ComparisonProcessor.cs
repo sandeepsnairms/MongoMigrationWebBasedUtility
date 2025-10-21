@@ -59,7 +59,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                     var userFilterDoc = string.IsNullOrWhiteSpace(mu.UserFilter)
                         ? new BsonDocument()
-                        : BsonDocument.Parse(mu.UserFilter);
+                        : MongoHelper.GetFilterDoc(mu.UserFilter);
 
                     var agg = sourceCollection.Aggregate();
 
@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                         if (targetDoc == null)
                         {
-                            log.WriteLine($"Error found in {mu.DatabaseName}.{mu.CollectionName}: Document with _id {id} missing in target.");
+                            log.WriteLine($"Error found in {mu.DatabaseName}.{mu.CollectionName}: Document with _id {id} missing in target.", LogType.Error);
                             mismatched++;
                             continue;
                         }

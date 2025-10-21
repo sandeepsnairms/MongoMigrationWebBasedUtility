@@ -78,16 +78,16 @@ namespace OnlineMongoMigrationProcessor.Tests
 
             // 6 messages -> buffer should keep last 5
             for (int i = 0; i < 6; i++)
-                log.AddVerboseMessage($"m{i}");
+                log.ShowInMonitor($"m{i}");
 
-            var last = log.GetVerboseMessages();
+            var last = log.GetMonitorMessages();
             last.Count.Should().Be(5);
             last.Select(x => x.Message).Should().ContainInOrder(new[] { "m5", "m4", "m3", "m2", "m1" });
 
             // When empty, current implementation returns 0 entries (no padding)
             var log2 = new Log();
             log2.Init(Guid.NewGuid().ToString("N"));
-            var empty = log2.GetVerboseMessages();
+            var empty = log2.GetMonitorMessages();
             empty.Count.Should().Be(0);
         }
 
@@ -118,7 +118,7 @@ namespace OnlineMongoMigrationProcessor.Tests
             var log = new Log();
             log.Init(id);
             log.WriteLine("hi");
-            log.AddVerboseMessage("v1");
+            log.ShowInMonitor("v1");
 
             log.Dispose();
 

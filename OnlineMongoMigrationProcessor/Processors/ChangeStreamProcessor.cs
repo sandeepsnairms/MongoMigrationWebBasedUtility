@@ -14,7 +14,7 @@ using static OnlineMongoMigrationProcessor.MongoHelper;
 
 namespace OnlineMongoMigrationProcessor
 {
-    public abstract class ChangeStreamProcessor
+    public abstract class ChangeStreamProcessor : IDisposable
     {
         protected int _concurrentProcessors;
         protected int _processorRunMaxDurationInSec;
@@ -40,8 +40,21 @@ namespace OnlineMongoMigrationProcessor
         protected ConcurrentDictionary<string, bool> _aggressiveCleanupProcessed = new ConcurrentDictionary<string, bool>();
         protected bool _finalCleanupExecuted = false;
 
+        // Critical failure tracking - shared across server-level and collection-level processors
+        protected readonly ConcurrentBag<Task> _backgroundProcessingTasks = new();
+        protected volatile bool _criticalFailureDetected = false;
+        protected Exception? _criticalFailureException = null;
+
         protected static readonly object _processingLock = new object();
         protected static readonly object _cleanupLock = new object();
+
+        // Global backpressure tracking across ALL collections/processors to prevent OOM
+        protected static int _globalPendingWrites = 0;
+        protected static readonly object _pendingWritesLock = new object();
+        protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
+        protected const int MEMORY_THRESHOLD_PERCENT = 80;
+
+        private bool _disposed = false;
 
         public bool ExecutionCancelled { get; set; }
 
@@ -67,13 +80,13 @@ namespace OnlineMongoMigrationProcessor
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
             if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
             {
-                _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
+                //_log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
                 return false;
             }
             if (!_migrationUnitsToProcess.ContainsKey(key))
             {
                 _migrationUnitsToProcess.TryAdd(key, mu);
-                _log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.");
+                _log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.", LogType.Debug);
 
                 _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
                 return true;
@@ -150,6 +163,80 @@ namespace OnlineMongoMigrationProcessor
         }
 
         protected abstract Task ProcessChangeStreamsAsync(CancellationToken token);
+
+        #region Global Backpressure Methods - Shared by All Processors
+
+        protected int GetGlobalPendingWriteCount()
+        {
+            lock (_pendingWritesLock)
+            {
+                return _globalPendingWrites;
+            }
+        }
+
+        protected void IncrementGlobalPendingWrites()
+        {
+            lock (_pendingWritesLock)
+            {
+                _globalPendingWrites++;
+                _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented: {_globalPendingWrites}", LogType.Debug);
+            }
+        }
+
+        protected void DecrementGlobalPendingWrites()
+        {
+            lock (_pendingWritesLock)
+            {
+                _globalPendingWrites = Math.Max(0, _globalPendingWrites - 1);
+                _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented: {_globalPendingWrites}", LogType.Debug);
+            }
+        }
+
+        protected async Task WaitWithExponentialBackoffAsync(int pendingWrites, string collectionName)
+        {
+            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, max 5000ms
+            int delayMs = Math.Min(5000, 100 * (int)Math.Pow(2, Math.Min(pendingWrites - MAX_GLOBAL_PENDING_WRITES, 6)));
+            
+            _log.WriteLine($"{_syncBackPrefix}Backpressure activated for {collectionName}: {pendingWrites} total pending writes, waiting {delayMs}ms", LogType.Warning);
+            _log.ShowInMonitor($"{_syncBackPrefix}BACKPRESSURE: System overloaded ({pendingWrites} pending writes), pausing {collectionName}");
+            
+            await Task.Delay(delayMs);
+        }
+
+        protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
+        {
+            GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
+            maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
+            currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
+            percent = (double)currentMB / maxMB * 100;
+            
+            return percent >= MEMORY_THRESHOLD_PERCENT;
+        }
+
+        protected async Task WaitForMemoryRecoveryAsync(string collectionName)
+        {
+            const int MAX_WAIT_SECONDS = 60;
+            DateTime startWait = DateTime.UtcNow;
+            
+            while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+            {
+                if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
+                {
+                    // Memory stayed high for 60 seconds - STOP JOB
+                    string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
+                    _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
+                    _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
+                    throw new OutOfMemoryException(errorMsg);
+                }
+                
+                _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
+                await Task.Delay(5000); // Check every 5 seconds
+            }
+            
+            _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
+        }
+
+        #endregion
 
         protected IMongoCollection<BsonDocument> GetTargetCollection(string databaseName, string collectionName)
         {
@@ -284,12 +371,6 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
             int batchSize = 50)
         {
-            if (_job.IsSimulatedRun)
-            {
-                _log.WriteLine($"{_syncBackPrefix}Skipping bulk processing for {collection.CollectionNamespace.FullName} in simulated run.");
-                return;
-            }
-
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
                 switch (counterType)
@@ -312,29 +393,58 @@ namespace OnlineMongoMigrationProcessor
                 bool isAggressive = _job.AggresiveChangeStream;
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
+                bool isSimulatedRun = _job.IsSimulatedRun;
 
-                // Use unified methods that handle both normal and aggressive scenarios
-                int insertFailures = await MongoHelper.ProcessInsertsAsync<MigrationUnit>(
-                    mu, collection, insertEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
+                // Use ParallelWriteProcessor for improved performance with retry logic
+                var parallelProcessor = new ParallelWriteProcessor(_log, _syncBackPrefix);
+                
+                var result = await parallelProcessor.ProcessWritesAsync(
+                    mu,
+                    collection,
+                    insertEvents,
+                    updateEvents,
+                    deleteEvents,
+                    counterDelegate,
+                    batchSize,
+                    isAggressive,
+                    isAggressiveComplete,
+                    jobId,
+                    _targetClient,
+                    isSimulatedRun);
 
-                int updateFailures = await MongoHelper.ProcessUpdatesAsync<MigrationUnit>(
-                    mu, collection, updateEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
-
-                int deleteFailures = await MongoHelper.ProcessDeletesAsync<MigrationUnit>(
-                    mu, collection, deleteEvents, counterDelegate, _log, _syncBackPrefix,
-                    batchSize, isAggressive, isAggressiveComplete, jobId, _targetClient);
-
-                var totalFailures = insertFailures + updateFailures + deleteFailures;
-                if (totalFailures > 0)
+                if (!result.Success)
                 {
-                    IncrementFailureCounter(mu, totalFailures);
+                    IncrementFailureCounter(mu, result.TotalFailures);
+                    
+                    // If there were critical errors that would cause data loss, stop the job
+                    if (result.Errors.Any(e => e.Contains("CRITICAL")))
+                    {
+                        var criticalError = result.Errors.First(e => e.Contains("CRITICAL"));
+                        _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error: {criticalError}", LogType.Error);
+                        throw new InvalidOperationException(criticalError);
+                    }
                 }
+                else if (result.TotalFailures > 0)
+                {
+                    IncrementFailureCounter(mu, result.TotalFailures);
+                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
+            {
+                // Critical deadlock failure - re-throw to stop the job and prevent data loss
+                _log.WriteLine($"{_syncBackPrefix}Stopping job due to persistent deadlock that would cause data loss. Details: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the entire migration job
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical error that would cause data loss - re-throw to stop the job
+                _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error that would cause data loss. Details: {ex.Message}", LogType.Error);
+                throw; // Re-throw to stop the entire migration job
             }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing operations for {collection.CollectionNamespace.FullName}. Details: {ex}", LogType.Error);
+                throw; // Re-throw all exceptions to ensure they are handled upstream
             }
         }
 
@@ -352,7 +462,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (mu.AggressiveCacheDeleted || _aggressiveCleanupProcessed.ContainsKey(collectionKey))
                 {
-                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}");
+                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}", LogType.Debug);
                     return;
                 }
 
@@ -409,7 +519,7 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task CleanupAggressiveCSAllCollectionsAsync()
         {
-            if (!_job.AggresiveChangeStream)
+            if (!_job.AggresiveChangeStream || _job.IsSimulatedRun)
             {
                 return;
             }
@@ -419,7 +529,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (_finalCleanupExecuted)
                 {
-                    _log.WriteLine("Aggressive change stream final cleanup already executed");
+                    _log.WriteLine("Aggressive change stream final cleanup already executed", LogType.Debug);
                     return;
                 }
                 _finalCleanupExecuted = true;
@@ -444,7 +554,7 @@ namespace OnlineMongoMigrationProcessor
                         else
                         {
                             skippedCount++;
-                            _log.AddVerboseMessage($"Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - already processed");
+                            _log.ShowInMonitor($"Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - already processed");
                         }
                     }
                 }
@@ -473,5 +583,125 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
         }
+
+        #region Critical Failure Tracking - Common for Server and Collection Level
+
+        /// <summary>
+        /// Check for critical failures and throw if detected
+        /// Should be called at the start of main processing loops
+        /// </summary>
+        protected void CheckForCriticalFailure()
+        {
+            if (_criticalFailureDetected && _criticalFailureException != null)
+            {
+                _log.WriteLine($"{_syncBackPrefix}CRITICAL: Background task failure detected. Stopping processing.", LogType.Error);
+                throw _criticalFailureException;
+            }
+        }
+
+        /// <summary>
+        /// Track a background task and monitor for critical failures
+        /// Use this instead of fire-and-forget to maintain exception visibility
+        /// </summary>
+        protected void TrackBackgroundTask(Task task)
+        {
+            var monitoredTask = Task.Run(async () =>
+            {
+                try
+                {
+                    await task;
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                {
+                    _criticalFailureDetected = true;
+                    _criticalFailureException = ex;
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
+                }
+                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+                {
+                    var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                    _criticalFailureDetected = true;
+                    _criticalFailureException = criticalEx;
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
+                }
+            });
+
+            _backgroundProcessingTasks.Add(monitoredTask);
+            PruneCompletedBackgroundTasks();
+        }
+
+        /// <summary>
+        /// Prune completed background tasks to prevent memory leak
+        /// </summary>
+        protected void PruneCompletedBackgroundTasks()
+        {
+            var activeTasks = new ConcurrentBag<Task>();
+            foreach (var task in _backgroundProcessingTasks)
+            {
+                if (!task.IsCompleted)
+                {
+                    activeTasks.Add(task);
+                }
+            }
+            
+            _backgroundProcessingTasks.Clear();
+            foreach (var task in activeTasks)
+            {
+                _backgroundProcessingTasks.Add(task);
+            }
+        }
+
+        /// <summary>
+        /// Wait for all background tasks to complete and check for critical failures
+        /// Should be called during shutdown
+        /// </summary>
+        protected async Task WaitForBackgroundTasksAndCheckFailures()
+        {
+            if (_backgroundProcessingTasks.Count > 0)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Waiting for {_backgroundProcessingTasks.Count} background tasks to complete...", LogType.Debug);
+                try
+                {
+                    await Task.WhenAll(_backgroundProcessingTasks);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Error waiting for background tasks: {ex.Message}", LogType.Error);
+                }
+            }
+
+            CheckForCriticalFailure();
+        }
+
+        #endregion
+
+        #region IDisposable Implementation
+        
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed && disposing)
+            {
+                // Dispose managed resources - override in derived classes if needed
+                ExecutionCancelled = true;
+                _disposed = true;
+            }
+        }
+
+        ~ChangeStreamProcessor()
+        {
+            Dispose(false);
+        }
+
+        #endregion
     }
 }

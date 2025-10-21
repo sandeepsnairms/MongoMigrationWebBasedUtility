@@ -164,7 +164,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts, manualToken);    
 
-            _log.AddVerboseMessage("Processing RU partition: " + chunk.Id);
+            _log.ShowInMonitor("Processing RU partition: " + chunk.Id);
 
             try
             {
@@ -220,7 +220,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                          }
                     }
                    
-                    _log.AddVerboseMessage($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
+                    _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
                     await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
 
                     if (resumeToken == null)
@@ -288,7 +288,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 //save the remaining items in the batch
                 if (changeStreamDocuments.Count>0)
                 {
-                    _log.AddVerboseMessage($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
+                    _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
                     if (resumeToken != null)
                     {
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
