@@ -146,6 +146,11 @@ namespace OnlineMongoMigrationProcessor
 
 
                 // Step 1: Build the filter pipeline based on the data type
+                //no need to process user filter in partitioning if it doesn't use _id
+                if (!MongoHelper.UsesIdFieldInFilter(userFilter!))
+                {
+                    userFilter = MongoHelper.GetFilterDoc("");
+                }
 
                 BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
 

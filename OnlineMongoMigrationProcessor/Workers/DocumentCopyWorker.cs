@@ -117,6 +117,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         segment.Id = segmentIndex.ToString();
 
                     FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
+
                     if ((mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 && string.IsNullOrEmpty(mu.UserFilter)) || segment.IsProcessed == true)
                     {
                         combinedFilter = Builders<BsonDocument>.Filter.Empty;
@@ -136,14 +137,17 @@ namespace OnlineMongoMigrationProcessor.Workers
                         var lt = bounds.lt;
 
                         // Filter by id bounds
-                        FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                        FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
 
-                        // Filter by datatype (skip if DataTypeFor_Id is specified)
-                        BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
-                        BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter, mu.DataTypeFor_Id.HasValue);
+                        //// Filter by datatype (skip if DataTypeFor_Id is specified)
+                        //BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
+                        //BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter, mu.DataTypeFor_Id.HasValue);
 
-                        // Combine the filters using $and
-                        combinedFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
+                        //// Combine the filters using $and
+                        //combinedFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
+                        combinedFilter=idFilter;
+
+                        //var count=MongoHelper.GetDocumentCount(_sourceCollection, idFilter, new BsonDocument());//filter already has user filter.
                     }
 
                     await semaphore.WaitAsync();
@@ -199,8 +203,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 try
                 {
-                    mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
-                    mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                    mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
+                    mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
                 }
                 catch (Exception ex)
                 {
@@ -453,7 +457,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var gte = bounds.gte;
                 var lt = bounds.lt;
 
-                FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, migrationChunk.DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, migrationChunk.DataType, MongoHelper.GetFilterDoc(mu.UserFilter),mu.DataTypeFor_Id.HasValue);
                 
                 BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
                 BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(migrationChunk.DataType, userFilter, mu.DataTypeFor_Id.HasValue);

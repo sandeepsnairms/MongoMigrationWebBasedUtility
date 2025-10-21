@@ -298,17 +298,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             foreach (var unit in unitsForPrep)
             {
-                //var userFilter = BsonDocument.Parse(unit.UserFilter);
-                //if (MongoHelper.UsesIdFieldInFilter(userFilter))
-                //{
-                //    if (!MongoHelper.UsesOnlyGteAndLt(userFilter))
-                //    {
-                //        _log.WriteLine($"User filter for {unit.DatabaseName}.{unit.CollectionName} contains _id field with operators other than $gte and $lt. Operators other than $gte and $lt are not supported for _id. Collection will be marked 404.", LogType.Error);
-                //        unit.SourceStatus = CollectionStatus.NotFound;
-                //        _jobList.Save();
-                //        continue;
-                //    }
-                //}
 
                 if (unit.SourceStatus == CollectionStatus.IsView)
                     continue;

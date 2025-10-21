@@ -1,4 +1,5 @@
 ﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
@@ -41,7 +42,27 @@ namespace OnlineMongoMigrationProcessor
                 return Task.FromResult(TaskResult.Retry);
             }
         }
+       
 
+        private void checkCounts(IMongoCollection<BsonDocument> collection, MigrationChunk c, BsonDocument UserFilter)
+        {
+            long docCount = 0;
+            foreach (var seg in c.Segments!)
+            {
+                    // Generate query and get document count
+                    var filter = MongoHelper.GenerateQueryFilter(seg.Gte, seg.Lt, c.DataType, UserFilter, false);
+
+                    docCount += MongoHelper.GetDocumentCount(collection, filter, new BsonDocument());//filter already has user filter.
+            }
+
+            Console.WriteLine($"Sum of Count for segments {c.Id} is {docCount}");
+
+            var filter2 = MongoHelper.GenerateQueryFilter(c.Gte, c.Lt, c.DataType, UserFilter, false);
+
+            var docCount2 = MongoHelper.GetDocumentCount(collection, filter2, new BsonDocument());//filter already has user filter.
+
+            Console.WriteLine($"Count for chunk {c.Id} is {docCount2}");
+        }
         private async Task <TaskResult> ProcessChunkAsync(MigrationUnit mu, int chunkIndex, ProcessorContext ctx, double initialPercent, double contributionFactor)
         {
             long docCount;
@@ -58,7 +79,7 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{ctx.DatabaseName}.{ctx.CollectionName}-Chunk [{chunkIndex}] generating query");
 
                 // Generate query and get document count
-                filter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[chunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+                filter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[chunkIndex].DataType,MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
 
                 docCount = MongoHelper.GetDocumentCount(ctx.Collection, filter, new BsonDocument());//filter already has user filter.
                 mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
@@ -76,6 +97,10 @@ namespace OnlineMongoMigrationProcessor
                 mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
                 ctx.DownloadCount = docCount;
             }
+
+
+            checkCounts(ctx.Collection, mu.MigrationChunks[chunkIndex], MongoHelper.GetFilterDoc(mu.UserFilter));
+
 
             if (_targetClient == null && !_job.IsSimulatedRun)
                 _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);

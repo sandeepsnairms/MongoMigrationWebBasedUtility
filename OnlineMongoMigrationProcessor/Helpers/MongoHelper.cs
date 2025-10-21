@@ -321,14 +321,14 @@ namespace OnlineMongoMigrationProcessor
 
             return (lsn, rid, min, max);
         }
-        
+
 
         public static FilterDefinition<BsonDocument> GenerateQueryFilter(
-            BsonValue? gte,
-            BsonValue? lte,
-            DataType dataType,
-            BsonDocument userFilterDoc,
-            bool skipDataTypeFilter = false) 
+             BsonValue? gte,
+             BsonValue? lte,
+             DataType dataType,
+             BsonDocument userFilterDoc,
+             bool skipDataTypeFilter = false)
         {
 
             var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(userFilterDoc);
@@ -336,9 +336,9 @@ namespace OnlineMongoMigrationProcessor
             var filterBuilder = Builders<BsonDocument>.Filter;
 
             FilterDefinition<BsonDocument> typeFilter;
-            
-            if(dataType== DataType.Other)
-                skipDataTypeFilter=true;
+
+            if (dataType == DataType.Other)
+                skipDataTypeFilter = true;
 
             if (skipDataTypeFilter)
             {
@@ -407,10 +407,11 @@ namespace OnlineMongoMigrationProcessor
                 idFilter = typeFilter;
             }
 
-            if (userFilter != null)
+            if (userFilter != null && userFilter.Document.ElementCount>0)
             {
+                // Combine userFilter with idFilter using AND
                 if (!MongoHelper.UsesIdFieldInFilter(userFilterDoc)) // if user filter does not use _id, we can combine at root                {
-                { 
+                {
                     // Combine userFilter with idFilter using AND
                     return filterBuilder.And(userFilter, idFilter);
                 }
@@ -419,12 +420,13 @@ namespace OnlineMongoMigrationProcessor
             return idFilter;
         }
 
+
         public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument userFilterDoc, bool skipDataTypeFilter = false)
         {
-            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType, userFilterDoc, skipDataTypeFilter);
+            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType,userFilterDoc, skipDataTypeFilter);
 
             // Execute the query and return the count
-            return collection.CountDocuments(filter);
+            return collection.CountDocuments(filter);           
         }
 
         public static long GetDocumentCount(
