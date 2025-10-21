@@ -62,7 +62,7 @@ namespace OnlineMongoMigrationProcessor
             var docCount2 = MongoHelper.GetDocumentCount(collection, filter2, new BsonDocument());//filter already has user filter.
 
             Console.WriteLine($"Count for chunk {c.Id} is {docCount2}");
-        }
+       }
         private async Task <TaskResult> ProcessChunkAsync(MigrationUnit mu, int chunkIndex, ProcessorContext ctx, double initialPercent, double contributionFactor)
         {
             long docCount;

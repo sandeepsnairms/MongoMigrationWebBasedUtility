@@ -460,7 +460,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, migrationChunk.DataType, MongoHelper.GetFilterDoc(mu.UserFilter),mu.DataTypeFor_Id.HasValue);
                 
                 BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
-                BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(migrationChunk.DataType, userFilter, mu.DataTypeFor_Id.HasValue);
+                BsonDocument matchCondition = new BsonDocument();// SamplePartitioner.BuildDataTypeCondition(migrationChunk.DataType, userFilter, mu.DataTypeFor_Id.HasValue);
 
                 chunkFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
             }

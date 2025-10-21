@@ -218,43 +218,347 @@ namespace OnlineMongoMigrationProcessor.Workers
             return Task.FromResult(TaskResult.Retry);
         }
 
+        private async Task<TaskResult> CreatePartitionsAsync(CancellationToken _cts)
+        {
+            bool checkedCS = false;
+            if (_job == null || _sourceClient == null)
+                return TaskResult.FailedAfterRetries;
 
-        private async Task<TaskResult> CreatePartitionsAsync(MigrationUnit mu,  CancellationToken _cts)
-        {            
-            if(mu.MigrationChunks!=null && mu.MigrationChunks.Count>0)
+            var unitsForPrep = _job.MigrationUnits ?? new List<MigrationUnit>();
+            foreach (var unit in unitsForPrep)
             {
-                return TaskResult.Success; //partitions already created
+                if (_migrationCancelled) return TaskResult.Abort;
+
+                //if (await MongoHelper.CheckCollectionExists(_sourceClient!, unit.DatabaseName, unit.CollectionName))
+                //{
+                    unit.SourceStatus = CollectionStatus.OK;
+
+                    var db = _sourceClient!.GetDatabase(unit.DatabaseName);
+                    var coll = db.GetCollection<BsonDocument>(unit.CollectionName);
+
+                    unit.EstimatedDocCount = coll.EstimatedDocumentCount();
+
+                    _ = Task.Run(() =>
+                    {
+                        long count = MongoHelper.GetActualDocumentCount(coll, unit);
+                        unit.ActualDocCount = count;
+                        _jobList?.Save();
+                    }, _cts);
+
+                    DateTime currrentTime = DateTime.UtcNow;
+
+                    if (Helper.IsOnline(_job) && unit.ResetChangeStream)
+                    {
+                        //if  reset CS needto get the latest CS resume token synchronously
+                        _log.WriteLine($"Resetting change stream for {unit.DatabaseName}.{unit.CollectionName}.");
+                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, _jobList, _job, unit, 15, _cts);
+                    }
+
+                    if (unit.MigrationChunks == null || unit.MigrationChunks.Count == 0)
+                    {
+                        List<MigrationChunk>? chunks = null;
+
+                        if (_job.JobType == JobType.RUOptimizedCopy)
+                        {
+                            chunks = new RUPartitioner().CreatePartitions(_log, _sourceClient!, unit.DatabaseName, unit.CollectionName, _cts);
+                        }
+                        else
+                        {
+                            chunks = await PartitionCollection(unit.DatabaseName, unit.CollectionName, _cts);
+
+                            if (chunks.Count == 0)
+                            {
+                                _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has no records to migrate", LogType.Error);
+                                unit.SourceStatus = CollectionStatus.NotFound;
+                                continue;
+                            }
+                        }
+
+
+                        if (!_job.IsSimulatedRun && !_job.AppendMode)
+                        {
+                            var database = _sourceClient!.GetDatabase(unit.DatabaseName);
+                            var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
+                            if (string.IsNullOrWhiteSpace(_job.TargetConnectionString))
+                                return TaskResult.FailedAfterRetries;
+                            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+
+                            if (!result)
+                            {
+                                return TaskResult.Retry;
+                            }
+                            _jobList.Save();
+                            //if (_job.SyncBackEnabled && !_job.IsSimulatedRun && Helper.IsOnline(_job && !checkedCS)
+                            //{
+                            //    _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
+
+                            //    var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, _job.TargetConnectionString, unit, true);
+                            //    checkedCS = true;
+                            //    if (!retValue.IsCSEnabled)
+                            //    {
+                            //        return TaskResult.Abort;
+                            //    }
+                            //}
+
+                        }
+
+                        //if (_job.IsOnline)
+                        //{
+                        //    //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
+                        //    _ = Task.Run(async () =>
+                        //    {
+                        //        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
+                        //    });
+                        //}
+
+
+                        if (unit.UserFilter != null && unit.UserFilter.Any())
+                        {
+                            _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks!.Count} chunk(s) with user filter : {unit.UserFilter}");
+                        }
+                        else
+                            _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} has {chunks!.Count} chunk(s)");
+
+                        unit.MigrationChunks = chunks!;
+                        unit.ChangeStreamStartedOn = currrentTime;
+
+                    }
+
+                //}
+                //else
+                //{
+                //    if (!_cts.IsCancellationRequested)
+                //    {
+                //        unit.SourceStatus = CollectionStatus.NotFound;
+                //        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source or has zero records", LogType.Error);
+                //        return TaskResult.Success;
+                //    }
+                //    else
+                //        return TaskResult.Canceled;
+                //}
             }
+            _jobList.Save();
+            return TaskResult.Success;
+        }
+
+        private async Task<List<MigrationChunk>> PartitionCollection(string databaseName, string collectionName, CancellationToken cts, string userFilter = "")
+        {
+            try
+            {
+                cts.ThrowIfCancellationRequested();
+
+                if (_sourceClient == null || _config == null || _job == null)
+                    throw new InvalidOperationException("Worker not initialized");
+
+                var stats = await MongoHelper.GetCollectionStatsAsync(_sourceClient!, databaseName, collectionName);
+
+                long documentCount = stats.DocumentCount;
+                long totalCollectionSizeBytes = stats.CollectionSizeBytes;
+
+                var database = _sourceClient!.GetDatabase(databaseName);
+                var collection = database.GetCollection<BsonDocument>(collectionName);
+
+                int totalChunks = 0;
+                long minDocsInChunk = 0;
+
+                long targetChunkSizeBytes = _config.ChunkSizeInMb * 1024 * 1024;
+                var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
 
 
-            DateTime currrentTime = DateTime.UtcNow;
-            if (_job?.JobType == JobType.RUOptimizedCopy)
-            {                
-                new RUPartitioner().CreatePartitions(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName, _cts);
-                return TaskResult.Success;
+                if (_job.JobType == JobType.DumpAndRestore)
+                {
+                    totalChunks = totalChunksBySize;
+                    minDocsInChunk = documentCount / totalChunks;
+                    _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}");
+                }
+                else
+                {
+                    _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}");
+                    totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / SamplePartitioner.MaxSamples);
+                    totalChunks = Math.Max(1, totalChunks); // At least one chunk
+                    totalChunks = Math.Max(totalChunks, totalChunksBySize);
+                    minDocsInChunk = documentCount / totalChunks;
+                }
+
+                List<MigrationChunk> migrationChunks = new List<MigrationChunk>();
+
+                if (totalChunks > 1 || _job.JobType != JobType.DumpAndRestore)
+                {
+                    _log.WriteLine($"Chunking {databaseName}.{collectionName}");
+
+                    List<DataType> dataTypes = new List<DataType> { DataType.Int, DataType.Int64, DataType.String, DataType.Object, DataType.Decimal128, DataType.Date, DataType.ObjectId };
+
+                    if (_config.ReadBinary)
+                    {
+                        dataTypes.Add(DataType.BinData);
+                    }
+
+                    foreach (var dataType in dataTypes)
+                    {
+                        long docCountByType;
+                        ChunkBoundaries chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, userFilter, totalChunks, dataType, minDocsInChunk, cts, out docCountByType);
+
+                        if (docCountByType == 0 || chunkBoundaries == null) continue;
+
+
+                        CreateSegments(chunkBoundaries, migrationChunks, dataType);
+                    }
+                }
+                else
+                {
+                    var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.String, false, false);
+                    migrationChunks.Add(chunk);
+                }
+
+                return migrationChunks;
+            }
+            catch (OperationCanceledException)
+            {
+                return new List<MigrationChunk>();
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error chunking collection {databaseName}.{collectionName}: {ex.Message}", LogType.Error);
+                return new List<MigrationChunk>();
+            }
+        }
+
+        private void CreateSegments(ChunkBoundaries chunkBoundaries, List<MigrationChunk> migrationChunks, DataType dataType)
+        {
+            for (int i = 0; i < chunkBoundaries.Boundaries.Count; i++)
+            {
+                var (startId, endId) = GetStartEnd(true, chunkBoundaries.Boundaries[i], chunkBoundaries.Boundaries.Count, i);
+                var chunk = new MigrationChunk(startId, endId, dataType, false, false);
+                migrationChunks.Add(chunk);
+
+                var boundary = chunkBoundaries.Boundaries[i];
+                if (_job != null && _job.JobType == JobType.MongoDriver && (boundary.SegmentBoundaries == null || boundary.SegmentBoundaries.Count == 0))
+                {
+                    chunk.Segments ??= new List<Segment>();
+                    chunk.Segments.Add(new Segment { Gte = startId, Lt = endId, IsProcessed = false, Id = "1" });
+                }
+
+                if (_job!.JobType == JobType.MongoDriver && boundary.SegmentBoundaries != null && boundary.SegmentBoundaries.Count > 0)
+                {
+                    for (int j = 0; j < boundary.SegmentBoundaries.Count; j++)
+                    {
+                        var segment = boundary.SegmentBoundaries[j];
+                        var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, boundary.SegmentBoundaries.Count, j,"",chunk.Lt ?? string.Empty, chunk.Gte ?? string.Empty);
+
+                        chunk.Segments ??= new List<Segment>();
+                        chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false, Id = (j + 1).ToString() });
+                    }
+                }
+            }
+        }
+        private Tuple<string, string> GetStartEnd0(bool isChunk, Boundary boundary, int totalBoundaries, int currentIndex, string userFilter = "", string chunkLt = "", string chunkGte = "")
+        {
+            string startId;
+            string endId;
+
+            if (currentIndex == 0)
+            {
+                startId = isChunk ? "" : chunkGte;
+                endId = boundary.EndId?.ToString() ?? "";
+            }
+            else if (currentIndex == totalBoundaries - 1)
+            {
+                startId = boundary.StartId?.ToString() ?? "";
+                endId = isChunk ? "" : chunkLt;
             }
             else
             {
-                var chunks = await PartitionCollectionAsync(mu.DatabaseName, mu.CollectionName, _cts, mu);
-                if (_cts.IsCancellationRequested)
-                    return TaskResult.Canceled;
-                if (chunks.Count == 0)
-                {
-                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has no records to migrate", LogType.Warning);
-                }
-
-                if (mu.UserFilter != null && mu.UserFilter.Any())
-                {
-                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has {chunks!.Count} chunk(s) with user filter : {mu.UserFilter}");
-                }
-                else
-                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has {chunks!.Count} chunk(s)");
-
-                mu.MigrationChunks = chunks!;
-                mu.ChangeStreamStartedOn = currrentTime;
-                return TaskResult.Success;
+                startId = boundary.StartId?.ToString() ?? "";
+                endId = boundary.EndId?.ToString() ?? "";
             }
+
+            return Tuple.Create(startId, endId);
         }
+
+        private Tuple<string, string> GetStartEnd(bool isChunk, Boundary boundary, int totalBoundaries, int currentIndex, string userFilter = "", string chunkLt = "", string chunkGte = "")
+        {
+            string startId;
+            string endId;
+
+            if (currentIndex == 0)
+            {
+                string min = string.Empty;
+
+                var filterDoc = MongoHelper.GetFilterDoc(userFilter);
+                var minValue = MongoHelper.GetIdRangeMin(filterDoc);
+
+                string minId = string.Empty;
+
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+                try
+                {
+                    if (minValue != BsonMinKey.Value)
+                        minId = minValue.AsBsonValue.ToString();
+                }
+                catch
+                {
+                    minId = string.Empty;
+                }
+
+                Console.WriteLine($"userFilter: '{userFilter}'");
+                Console.WriteLine($"filterDoc: {filterDoc?.ToJson() ?? "null"}");
+                Console.WriteLine($"minValue: {minValue ?? "null"}");
+                Console.WriteLine($"minId: {minId}");
+
+                startId = isChunk ? minId : chunkGte;
+#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
+                endId = boundary.EndId?.ToString() ?? "";
+            }
+            else if (currentIndex == totalBoundaries - 1)
+            {
+                startId = boundary.StartId?.ToString() ?? "";
+                endId = isChunk ? "" : chunkLt;
+            }
+            else
+            {
+                startId = boundary.StartId?.ToString() ?? "";
+                endId = boundary.EndId?.ToString() ?? "";
+            }
+
+            return Tuple.Create(startId, endId);
+        }
+
+        //private async Task<TaskResult> CreatePartitionsAsync(MigrationUnit mu,  CancellationToken _cts)
+        //{            
+        //    if(mu.MigrationChunks!=null && mu.MigrationChunks.Count>0)
+        //    {
+        //        return TaskResult.Success; //partitions already created
+        //    }
+
+
+        //    DateTime currrentTime = DateTime.UtcNow;
+        //    if (_job?.JobType == JobType.RUOptimizedCopy)
+        //    {                
+        //        new RUPartitioner().CreatePartitions(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName, _cts);
+        //        return TaskResult.Success;
+        //    }
+        //    else
+        //    {
+        //        var chunks = await PartitionCollectionAsync(mu.DatabaseName, mu.CollectionName, _cts, mu);
+        //        if (_cts.IsCancellationRequested)
+        //            return TaskResult.Canceled;
+        //        if (chunks.Count == 0)
+        //        {
+        //            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has no records to migrate", LogType.Warning);
+        //        }
+
+        //        if (mu.UserFilter != null && mu.UserFilter.Any())
+        //        {
+        //            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has {chunks!.Count} chunk(s) with user filter : {mu.UserFilter}");
+        //        }
+        //        else
+        //            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has {chunks!.Count} chunk(s)");
+
+        //        mu.MigrationChunks = chunks!;
+        //        mu.ChangeStreamStartedOn = currrentTime;
+        //        return TaskResult.Success;
+        //    }
+        //}
 
         private async Task<TaskResult> SetResumeTokens(MigrationUnit mu, CancellationToken _cts)
         {
@@ -417,7 +721,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         
                         if (!skipPartitioning)
                         {
-                            var ret= await CreatePartitionsAsync(unit, _cts); 
+                            var ret= await CreatePartitionsAsync(_cts); 
                             if(ret!= TaskResult.Success)
                                 return ret;
                         }
@@ -520,7 +824,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         if (_migrationProcessor != null)
                         {
                             // Create Chunks , will return sucess if already created
-                            var createPartitionsResult = await CreatePartitionsAsync(migrationUnit, ctsToken);
+                            var createPartitionsResult = await CreatePartitionsAsync(ctsToken);
                             if (createPartitionsResult != TaskResult.Success)
                                 return createPartitionsResult;
 
@@ -885,7 +1189,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     foreach (var dataType in dataTypes)
                     {
                         long docCountByType;
-                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!, out docCountByType);
+                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection,migrationUnit.UserFilter ,totalChunks, dataType, minDocsInChunk, cts, out docCountByType);
 
                         if (docCountByType == 0 || chunkBoundaries == null) continue;
 
@@ -941,7 +1245,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     for (int j = 0; j < boundary.SegmentBoundaries.Count; j++)
                     {
                         var segment = boundary.SegmentBoundaries[j];
-                        var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, boundary.SegmentBoundaries.Count, j, chunk.Lt ?? string.Empty, chunk.Gte ?? string.Empty);
+                        var (segmentStartId, segmentEndId) = GetStartEnd(false, segment, boundary.SegmentBoundaries.Count, j,"", chunk.Lt ?? string.Empty, chunk.Gte ?? string.Empty);
 
                         chunk.Segments ??= new List<Segment>();
                         chunk.Segments.Add(new Segment { Gte = segmentStartId, Lt = segmentEndId, IsProcessed = false, Id = (j + 1).ToString() });
@@ -949,48 +1253,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
             }
         }
-        private Tuple<string, string> GetStartEnd(bool isChunk, Boundary boundary, int totalBoundaries, int currentIndex, string userFilter,string chunkLt = "", string chunkGte = "")
-        {
-            string startId;
-            string endId;
+       
 
-            if (currentIndex == 0)
-            {
-                string min = string.Empty;
-               
-                var filterDoc = MongoHelper.GetFilterDoc(userFilter);
-                var minValue = MongoHelper.GetIdRangeMin(filterDoc);
-
-                string minId =string.Empty;
-
-#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
-                try
-                {
-                    if (minValue != BsonMinKey.Value)
-                        minId = minValue.AsBsonValue.ToString();
-                }
-                catch
-                {
-                    minId = string.Empty;
-                }
-
-                startId = isChunk ? minId : chunkGte;
-#pragma warning restore CS8600 // Converting null literal or possible null value to non-nullable type.
-                endId = boundary.EndId?.ToString() ?? "";
-            }
-            else if (currentIndex == totalBoundaries - 1)
-            {
-                startId = boundary.StartId?.ToString() ?? "";
-                endId = isChunk ? "" : chunkLt;
-            }
-            else
-            {
-                startId = boundary.StartId?.ToString() ?? "";
-                endId = boundary.EndId?.ToString() ?? "";
-            }
-
-            return Tuple.Create(startId, endId);
-        }           
- 
     }
 }

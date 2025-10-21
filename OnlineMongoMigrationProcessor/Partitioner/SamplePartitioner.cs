@@ -16,11 +16,13 @@ namespace OnlineMongoMigrationProcessor
 {
     public static class SamplePartitioner
     {
+#pragma warning disable CS8603
+#pragma warning disable CS8604
+#pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
+
         public static int MaxSegments = 20;
         public static int MaxSamples = 2000;
 
-
-        
 
         /// <summary>
         /// Creates partitions based on sampled data from the collection.
@@ -28,44 +30,37 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="idField">The field used as the partition key.</param>
         /// <param name="partitionCount">The number of desired partitions.</param>
         /// <returns>A list of partition boundaries.</returns>
-        public static ChunkBoundaries? CreatePartitions(Log log,bool optimizeForMongoDump,IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, out long docCountByType)
+        public static ChunkBoundaries CreatePartitions(Log log, bool optimizeForMongoDump, IMongoCollection<BsonDocument> collection, string userFilterCondition, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, out long docCountByType)
         {
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
-            long docsInChunk=0;           
-            int sampleCount=0;
-           
-            BsonDocument? userFilter = null;
-            userFilter= MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
-        
+            long docsInChunk = 0;
+            int sampleCount = 0;
 
-            // Determine if we should skip DataType filtering
-            bool skipDataTypeFilter = migrationUnit?.DataTypeFor_Id.HasValue == true;
+            BsonDocument userFilter = null;
+            if (userFilterCondition != null && !string.IsNullOrEmpty(userFilterCondition))
+            {
+                userFilter = BsonDocument.Parse(userFilterCondition);
+            }
 
-            if (skipDataTypeFilter)
-            {
-                log.ShowInMonitor($"Skipping DataType filtering for {collection.CollectionNamespace} as DataTypeFor_Id is specified: {migrationUnit!.DataTypeFor_Id!.Value}");
-            }
-            else
-            {
-                log.ShowInMonitor($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
-            }
+            log.ShowInMonitor($"Counting documents in {collection.CollectionNamespace}. Sampling data where _id is {dataType}");
+
             try
             {
                 docCountByType = 0;
                 cts.ThrowIfCancellationRequested();
 
                 try
-                {                    
-                    docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
+                {
+                    docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter);
                 }
                 catch (Exception ex)
                 {
-                    log.WriteLine($"Exception occurred while counting documents in {collection.CollectionNamespace}. Details: {ex}", LogType.Error);
-                    if(userFilter==null || userFilter.ElementCount == 0)
+                    log.WriteLine($"Exception occurred while counting documents in {collection.CollectionNamespace}. Details: {ex.ToString()}", LogType.Error);
+                    if (userFilter == null || userFilter.ElementCount == 0)
                     {
                         log.WriteLine($"Using Estimated document count for {collection.CollectionNamespace} due to error in counting documents.");
-                        docCountByType = GetDocumentCountByDataType(collection, dataType, true, userFilter, skipDataTypeFilter);
+                        docCountByType = GetDocumentCountByDataType(collection, dataType, true, userFilter);
                     }
                     else
                         return null;
@@ -73,39 +68,19 @@ namespace OnlineMongoMigrationProcessor
 
                 if (docCountByType == 0)
                 {
-                    if (skipDataTypeFilter)
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has no documents (DataType filtering bypassed)");
-                    }
-                    else
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has no documents where _id is {dataType}");
-                    }
+                    log.WriteLine($"{collection.CollectionNamespace} has no documents where _id is {dataType}");
                     return null;
                 }
                 else if (docCountByType < minDocsPerChunk)
                 {
-                    if (skipDataTypeFilter)
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) (DataType filtering bypassed). Count is less than minimum chunk size.");
-                    }
-                    else
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) where _id is {dataType}. Count is less than minimum chunk size.");
-                    }
+                    log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) where _id is {dataType}. Count is less than minimum chunk size.");
                     sampleCount = 1;
                     chunkCount = 1;
                 }
                 else
                 {
-                    if (skipDataTypeFilter)
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) (DataType filtering bypassed)");
-                    }
-                    else
-                    {
-                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) where _id is {dataType}");
-                    }
+                    log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} document(s) where _id is {dataType}");
+
                 }
 
                 if (chunkCount > MaxSamples)
@@ -146,24 +121,12 @@ namespace OnlineMongoMigrationProcessor
 
 
                 // Step 1: Build the filter pipeline based on the data type
-                //no need to process user filter in partitioning if it doesn't use _id
-                if (!MongoHelper.UsesIdFieldInFilter(userFilter!))
-                {
-                    userFilter = MongoHelper.GetFilterDoc("");
-                }
 
-                BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
+                BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter);
 
-               // Step 2: Sample the data
+                // Step 2: Sample the data
 
-                if (skipDataTypeFilter)
-                {
-                    log.WriteLine($"Sampling {collection.CollectionNamespace} (DataType filtering bypassed) with {sampleCount} samples, Chunk Count: {chunkCount}");
-                }
-                else
-                {
-                    log.WriteLine($"Sampling {collection.CollectionNamespace} for data where _id is {dataType} with {sampleCount} samples, Chunk Count: {chunkCount}");
-                }
+                log.WriteLine($"Sampling {collection.CollectionNamespace} for data where _id is {dataType} with {sampleCount} samples, Chunk Count: {chunkCount}");
 
 
                 var pipeline = new[]
@@ -194,28 +157,16 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (Exception ex)
                     {
-                        if (skipDataTypeFilter)
-                        {
-                            log.WriteLine($"Encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex}");
-                        }
-                        else
-                        {
-                            log.WriteLine($"Encountered error in attempt {i} while sampling data where _id is {dataType}: {ex}");
-                        }
+                        log.WriteLine($"Encountered error in attempt {i} while sampling data where _id is {dataType}: {ex.ToString()}");
+
                     }
                 }
 
                 if (partitionValues == null || partitionValues.Count == 0)
                 {
                     docCountByType = 0;
-                    if (skipDataTypeFilter)
-                    {
-                        log.WriteLine($"No data found (DataType filtering bypassed)");
-                    }
-                    else
-                    {
-                        log.WriteLine($"No data found where _id is {dataType}");
-                    }
+                    log.WriteLine($"No data found where _id is {dataType}");
+
                     return null;
                 }
                 // Step 3: Calculate partition boundaries
@@ -223,8 +174,8 @@ namespace OnlineMongoMigrationProcessor
                 ChunkBoundaries chunkBoundaries = new ChunkBoundaries();
 
 
-                Boundary? segmentBoundary = null;
-                Boundary? chunkBoundary = null;
+                Boundary segmentBoundary = null;
+                Boundary chunkBoundary = null;
 
                 if (dataType == DataType.Other)
                 {
@@ -243,10 +194,9 @@ namespace OnlineMongoMigrationProcessor
                     for (int i = 0; i < partitionValues.Count; i++)
                     {
                         var min = partitionValues[i];
-                        var max = i == partitionValues.Count - 1 ? MongoHelper.GetIdRangeMax(matchCondition) : partitionValues[i + 1];
+                        var max = i == partitionValues.Count - 1 ? BsonMaxKey.Value : partitionValues[i + 1];
 
                         if (i % segmentCount == 0) // Parent boundary
-
                         {
                             chunkBoundary = new Boundary
                             {
@@ -277,17 +227,10 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
 
-                if (skipDataTypeFilter)
-                {
-                    log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} (DataType filtering bypassed)");
-                }
-                else
-                {
-                    log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} where _id is {dataType}");
-                }
+                log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} where _id is {dataType}");
                 return chunkBoundaries;
             }
-            catch(OperationCanceledException)
+            catch (OperationCanceledException)
             {
                 ///do nothing
                 docCountByType = 0;
@@ -295,14 +238,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                if (skipDataTypeFilter)
-                {
-                    log.WriteLine($"Error during sampling data (DataType filtering bypassed): {ex}", LogType.Error);
-                }
-                else
-                {
-                    log.WriteLine($"Error during sampling data where _id is {dataType}: {ex}", LogType.Error);
-                }
+                log.WriteLine($"Error during sampling data where _id is {dataType}: {ex.ToString()}", LogType.Error);
                 docCountByType = 0;
                 return null;
             }
@@ -310,14 +246,14 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, DataType dataType, bool useEstimate = false, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
+        public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, DataType dataType, bool useEstimate = false, BsonDocument? userFilter = null)
         {
             var filterBuilder = Builders<BsonDocument>.Filter;
 
-            BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
+            BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter);
 
             // Get the count of documents matching the filter
-            if (useEstimate && (matchCondition == null || matchCondition.ElementCount == 0))
+            if (useEstimate && (matchCondition is null || matchCondition.ElementCount == 0))
             {
                 var options = new EstimatedDocumentCountOptions { MaxTime = TimeSpan.FromSeconds(300) };
                 var count = collection.EstimatedDocumentCount(options);
@@ -331,82 +267,63 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public static BsonDocument BuildDataTypeCondition(DataType dataType, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
+        public static BsonDocument BuildDataTypeCondition(DataType dataType, BsonDocument? userFilter = null)
         {
             BsonDocument matchCondition;
-
-            if (skipDataTypeFilter)
+            switch (dataType)
             {
-                // When skipping DataType filter, use empty condition (no _id type restriction)
-                matchCondition = new BsonDocument();
+                case DataType.ObjectId:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 7)); // 7 is BSON type for ObjectId
+                    break;
+                case DataType.Int:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 16)); // 16 is BSON type for Int32
+                    break;
+                case DataType.Int64:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 18)); // 18 is BSON type for Int64
+                    break;
+                case DataType.String:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 2)); // 2 is BSON type for String
+                    break;
+                case DataType.Decimal128:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 19)); // 19 is BSON type for Decimal128
+                    break;
+                case DataType.Date:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 9)); // 9 is BSON type for Date
+                    break;
+                case DataType.BinData:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 5)); // 5 is BSON type for Binary
+                    break;
+                case DataType.Object:
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$type", 3)); // 3 is BSON type for embedded document (Object)
+                    break;
+                case DataType.Other:
+                    // Exclude all known types to catch "others"
+                    var excludedTypes = new BsonArray { 2, 7, 9, 16, 18, 19 };
+                    matchCondition = new BsonDocument("_id", new BsonDocument("$nin", new BsonDocument("$type", excludedTypes)));
+                    break;
+                default:
+                    throw new ArgumentException($"Unsupported DataType: {dataType}");
             }
-            else
-            {
-                // Original DataType filtering logic
-                switch (dataType)
-                {
-                    case DataType.ObjectId:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 7)); // 7 is BSON type for ObjectId
-                        break;
-                    case DataType.Int:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 16)); // 16 is BSON type for Int32
-                        break;
-                    case DataType.Int64:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 18)); // 18 is BSON type for Int64
-                        break;
-                    case DataType.String:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 2)); // 2 is BSON type for String
-                        break;
-                    case DataType.Decimal128:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 19)); // 19 is BSON type for Decimal128
-                        break;
-                    case DataType.Date:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 9)); // 9 is BSON type for Date
-                        break;
-                    case DataType.BinData:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 5)); // 5 is BSON type for Binary
-                        break;
-                    case DataType.Object:
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$type", 3)); // 3 is BSON type for embedded document (Object)
-                        break;
-                    case DataType.Other:
-                        // Exclude all known types to catch "others"
-                        var excludedTypes = new BsonArray { 2, 7, 9, 16, 18, 19 };
-                        matchCondition = new BsonDocument("_id", new BsonDocument("$nin", new BsonDocument("$type", excludedTypes)));
-                        break;
-                    default:
-                        throw new ArgumentException($"Unsupported DataType: {dataType}");
-                }
-            }
-
             if (userFilter == null || userFilter.ElementCount == 0)
             {
                 return matchCondition;
             }
             else
             {
-                if (skipDataTypeFilter && matchCondition.ElementCount == 0)
-                {
-                    // If no DataType filter and we have user filter, just return user filter
-                    return userFilter;
-                }
-                else
-                {
-                    // Combine using $and
-                    return new BsonDocument("$and", new BsonArray { matchCondition, userFilter });
-                }
+                // Combine using $and
+                return new BsonDocument("$and", new BsonArray { matchCondition, userFilter });
             }
         }
 
-        public static (BsonValue gte, BsonValue lt) GetChunkBounds(string gteString, string ltString, DataType dataType)
+        public static (BsonValue gte, BsonValue lt) GetChunkBounds(string gteStrring, string ltString, DataType dataType)
         {
-            BsonValue? gte = null;
-            BsonValue? lt = null;
+            BsonValue gte = null;
+            BsonValue lt = null;
 
             // Initialize `gte` and `lt` based on special cases
-            if (gteString.Equals("BsonMaxKey"))
+            if (gteStrring.Equals("BsonMaxKey"))
                 gte = BsonMaxKey.Value;
-            else if (string.IsNullOrEmpty(gteString))
+            else if (string.IsNullOrEmpty(gteStrring))
                 gte = BsonNull.Value;
 
             if (ltString.Equals("BsonMaxKey"))
@@ -418,37 +335,37 @@ namespace OnlineMongoMigrationProcessor
             switch (dataType)
             {
                 case DataType.ObjectId:
-                    gte ??= new BsonObjectId(ObjectId.Parse(gteString));
+                    gte ??= new BsonObjectId(ObjectId.Parse(gteStrring));
                     lt ??= new BsonObjectId(ObjectId.Parse(ltString));
                     break;
 
                 case DataType.Int:
-                    gte ??= new BsonInt32(int.Parse(gteString));
+                    gte ??= new BsonInt32(int.Parse(gteStrring));
                     lt ??= new BsonInt32(int.Parse(ltString));
                     break;
 
                 case DataType.Int64:
-                    gte ??= new BsonInt64(long.Parse(gteString));
+                    gte ??= new BsonInt64(long.Parse(gteStrring));
                     lt ??= new BsonInt64(long.Parse(ltString));
                     break;
 
                 case DataType.String:
-                    gte ??= new BsonString(gteString);
+                    gte ??= new BsonString(gteStrring);
                     lt ??= new BsonString(ltString);
                     break;
 
                 case DataType.Object:
-                    gte ??= BsonDocument.Parse(gteString);
+                    gte ??= BsonDocument.Parse(gteStrring);
                     lt ??= BsonDocument.Parse(ltString);
                     break;
 
                 case DataType.Decimal128:
-                    gte ??= new BsonDecimal128(Decimal128.Parse(gteString));
+                    gte ??= new BsonDecimal128(Decimal128.Parse(gteStrring));
                     lt ??= new BsonDecimal128(Decimal128.Parse(ltString));
                     break;
 
                 case DataType.Date:
-                    gte ??= new BsonDateTime(DateTime.Parse(gteString));
+                    gte ??= new BsonDateTime(DateTime.Parse(gteStrring));
                     lt ??= new BsonDateTime(DateTime.Parse(ltString));
                     break;
 
