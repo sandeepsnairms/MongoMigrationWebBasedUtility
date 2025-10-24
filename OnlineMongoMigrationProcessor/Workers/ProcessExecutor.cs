@@ -75,14 +75,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                         if (!string.IsNullOrEmpty(args.Data))
                         {
                             outputBuffer.AppendLine(args.Data);
-                            _log.WriteLine(Helper.RedactPii(args.Data));
+                            _log.WriteLine($"{processType} Log :{Helper.RedactPii(args.Data)}");
                         }
                     };
 
                     process.ErrorDataReceived += (sender, args) =>
-                    {
+                    {                        
                         if (!string.IsNullOrEmpty(args.Data))
                         {
+                            _log.WriteLine($"{processType} Log : {Helper.RedactPii(args.Data)}", LogType.Debug);
                             errorBuffer.AppendLine(args.Data);
                             ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
                         }
