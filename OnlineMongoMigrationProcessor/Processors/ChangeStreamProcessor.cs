@@ -56,7 +56,18 @@ namespace OnlineMongoMigrationProcessor
 
         private bool _disposed = false;
 
-        public bool ExecutionCancelled { get; set; }
+        public bool ExecutionCancelled { 
+            get => _executionCancelled; 
+            set 
+            {
+                if (_executionCancelled != value)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] ExecutionCancelled changed from {_executionCancelled} to {value}", LogType.Debug);
+                    _executionCancelled = value;
+                }
+            }
+        }
+        private bool _executionCancelled = false;
 
         public ChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
         {
@@ -123,7 +134,20 @@ namespace OnlineMongoMigrationProcessor
                         // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
                         if (_job.AggresiveChangeStream && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
                         {
-                            _ = Task.Run(async () => await CleanupAggressiveCSAsync(migrationUnit));
+                            _ = Task.Run(async () => 
+                            {
+                                try
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] Aggressive cleanup Task.Run starting for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
+                                    await CleanupAggressiveCSAsync(migrationUnit);
+                                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] Aggressive cleanup Task.Run completed for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
+                                    // Don't re-throw for fire-and-forget tasks
+                                }
+                            });
                         }
                     }
                 }
@@ -371,6 +395,9 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
             int batchSize = 50)
         {
+            string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
+            _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync started for {collectionKey}: I:{insertEvents.Count}, U:{updateEvents.Count}, D:{deleteEvents.Count}, batchSize:{batchSize}", LogType.Debug);
+            
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
                 switch (counterType)
@@ -394,10 +421,14 @@ namespace OnlineMongoMigrationProcessor
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
                 string jobId = _job.Id ?? string.Empty;
                 bool isSimulatedRun = _job.IsSimulatedRun;
+                
+                _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync context for {collectionKey}: aggressive={isAggressive}, aggressiveComplete={isAggressiveComplete}, simulated={isSimulatedRun}", LogType.Debug);
 
                 // Use ParallelWriteProcessor for improved performance with retry logic
                 var parallelProcessor = new ParallelWriteProcessor(_log, _syncBackPrefix);
+                _log.WriteLine($"{_syncBackPrefix}[DEBUG] Created ParallelWriteProcessor for {collectionKey}", LogType.Debug);
                 
+                _log.WriteLine($"{_syncBackPrefix}[DEBUG] Starting ParallelWriteProcessor.ProcessWritesAsync for {collectionKey}", LogType.Debug);
                 var result = await parallelProcessor.ProcessWritesAsync(
                     mu,
                     collection,
@@ -412,37 +443,47 @@ namespace OnlineMongoMigrationProcessor
                     _targetClient,
                     isSimulatedRun);
 
+                _log.WriteLine($"{_syncBackPrefix}[DEBUG] ParallelWriteProcessor completed for {collectionKey}: success={result.Success}, totalFailures={result.TotalFailures}", LogType.Debug);
+
                 if (!result.Success)
                 {
+                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync had failures for {collectionKey}, incrementing failure counter by {result.TotalFailures}", LogType.Debug);
                     IncrementFailureCounter(mu, result.TotalFailures);
                     
                     // If there were critical errors that would cause data loss, stop the job
                     if (result.Errors.Any(e => e.Contains("CRITICAL")))
                     {
                         var criticalError = result.Errors.First(e => e.Contains("CRITICAL"));
+                        //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical error detected for {collectionKey}: {criticalError}", LogType.Debug);
                         _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error: {criticalError}", LogType.Error);
                         throw new InvalidOperationException(criticalError);
                     }
                 }
                 else if (result.TotalFailures > 0)
                 {
+                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync had non-critical failures for {collectionKey}, incrementing failure counter by {result.TotalFailures}", LogType.Debug);
                     IncrementFailureCounter(mu, result.TotalFailures);
                 }
+                
+                _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync completed successfully for {collectionKey}", LogType.Debug);
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
             {
+                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical deadlock exception caught for {collectionKey}", LogType.Debug);
                 // Critical deadlock failure - re-throw to stop the job and prevent data loss
                 _log.WriteLine($"{_syncBackPrefix}Stopping job due to persistent deadlock that would cause data loss. Details: {ex.Message}", LogType.Error);
                 throw; // Re-throw to stop the entire migration job
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
             {
+                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical InvalidOperationException caught for {collectionKey}", LogType.Debug);
                 // Critical error that would cause data loss - re-throw to stop the job
                 _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error that would cause data loss. Details: {ex.Message}", LogType.Error);
                 throw; // Re-throw to stop the entire migration job
             }
             catch (Exception ex)
             {
+                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Exception caught in BulkProcessChangesAsync for {collectionKey}: {ex.GetType().Name}", LogType.Debug);
                 _log.WriteLine($"{_syncBackPrefix}Error processing operations for {collection.CollectionNamespace.FullName}. Details: {ex}", LogType.Error);
                 throw; // Re-throw all exceptions to ensure they are handled upstream
             }
