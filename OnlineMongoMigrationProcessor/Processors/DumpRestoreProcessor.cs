@@ -383,6 +383,7 @@ namespace OnlineMongoMigrationProcessor
                     else
                     {
                         downloadCount += mu.MigrationChunks[i].DumpQueryDocCount;
+
                     }
                 }
 

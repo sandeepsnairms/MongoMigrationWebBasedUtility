@@ -31,13 +31,13 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// <summary>
         /// Retrieves the smallest and largest ObjectId in the collection with extended timeout.
         /// </summary>
-        public async Task<ObjectIdRange> GetObjectIdRangeAsync()
+        public async Task<ObjectIdRange> GetObjectIdRangeAsync(BsonDocument filter)
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
 
             // Smallest ObjectId
             var minDoc = await _collection
-                .Find(FilterDefinition<BsonDocument>.Empty)
+                .Find(filter)
                 .Sort(Builders<BsonDocument>.Sort.Ascending("_id"))
                 .Limit(1)
                 .FirstOrDefaultAsync(cts.Token);
@@ -64,12 +64,15 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// Generates N equidistant ObjectIds between the min and max ObjectIds in the collection
         /// and returns them as BsonValue.
         /// </summary>
-        public async Task<List<BsonValue>> GenerateEquidistantObjectIdsAsync(int count)
+        public async Task<List<BsonValue>> GenerateEquidistantObjectIdsAsync(int count, BsonDocument filter)
         {
+            var result = new List<BsonValue>();
             if (count < 2)
-                throw new ArgumentException("Count must be at least 2 to generate a range.", nameof(count));
+            {
+                return result;
+            }
 
-            var range = await GetObjectIdRangeAsync();
+            var range = await GetObjectIdRangeAsync(filter);
 
             var minBytes = range.MinId.ToByteArray();
             var maxBytes = range.MaxId.ToByteArray();
@@ -78,7 +81,6 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             var maxInt = new BigInteger(maxBytes, isUnsigned: true, isBigEndian: true);
             var step = (maxInt - minInt) / (count - 1);
 
-            var result = new List<BsonValue>();
 
             for (int i = 0; i < count; i++)
             {

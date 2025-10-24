@@ -410,11 +410,11 @@ namespace OnlineMongoMigrationProcessor
             if (userFilter != null && userFilter.Document.ElementCount>0)
             {
                 // Combine userFilter with idFilter using AND
-                if (!MongoHelper.UsesIdFieldInFilter(userFilterDoc)) // if user filter does not use _id, we can combine at root                {
-                {
+                //if (!MongoHelper.UsesIdFieldInFilter(userFilterDoc)) // if user filter does not use _id, we can combine at root                {
+                //{
                     // Combine userFilter with idFilter using AND
                     return filterBuilder.And(userFilter, idFilter);
-                }
+                //}
             }
 
             return idFilter;
@@ -1332,12 +1332,12 @@ namespace OnlineMongoMigrationProcessor
             // Add user filter at the root level if provided
             if (userFilterDoc != null && userFilterDoc.ElementCount > 0)
             {
-                if (!MongoHelper.UsesIdFieldInFilter(userFilterDoc)) // if user filter does not use _id, we can combine at root
-                {
+                //if (!MongoHelper.UsesIdFieldInFilter(userFilterDoc)) // if user filter does not use _id, we can combine at root
+                //{
                     // Escape quotes for command-line use
                     var userFilterJsonEscaped = userFilterDoc.ToJson().Replace("\"", "\\\"");
                     rootConditions.Add(userFilterJsonEscaped.TrimStart('{').TrimEnd('}'));
-                }
+                //}
             }
 
             // If no conditions exist, return empty filter

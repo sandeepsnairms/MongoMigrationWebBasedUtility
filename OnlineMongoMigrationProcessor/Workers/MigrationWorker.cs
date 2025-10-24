@@ -865,7 +865,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _log.WriteLine($"Using specified DataType for _id: {migrationUnit.DataTypeFor_Id.Value}");
 
 
-                        if( migrationUnit.DataTypeFor_Id.Value == DataType.ObjectId && !MongoHelper.UsesIdFieldInFilter(MongoHelper.GetFilterDoc(migrationUnit.UserFilter)))
+                        if( migrationUnit.DataTypeFor_Id.Value == DataType.ObjectId)// && !MongoHelper.UsesIdFieldInFilter(MongoHelper.GetFilterDoc(migrationUnit.UserFilter)))
                         {
                             optimizeForObjectId = true;
                         }
@@ -888,9 +888,24 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         if (docCountByType == 0 || chunkBoundaries == null) continue;
 
+                        if (chunkBoundaries.Boundaries.Count == 0)
+                        {
+                            var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false);
+                            migrationChunks.Add(chunk);
+                            if (_job.JobType == JobType.MongoDriver)
+                            {
+                                chunk.Segments = new List<Segment>
+                                {
+                                    new Segment { Gte = "", Lt = "", IsProcessed = false, Id = "1" }
+                                };
+                            }
+                        }
+                        else
+                        {
 #pragma warning disable CS8604 // Possible null reference argument.
-                        CreateSegments(chunkBoundaries, migrationChunks, dataType, migrationUnit?.UserFilter);
+                            CreateSegments(chunkBoundaries, migrationChunks, dataType, migrationUnit?.UserFilter);
 #pragma warning restore CS8604 // Possible null reference argument.
+                        }
                     }
                     
                 }

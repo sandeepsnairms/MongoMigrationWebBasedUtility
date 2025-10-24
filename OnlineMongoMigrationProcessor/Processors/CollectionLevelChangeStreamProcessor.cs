@@ -811,7 +811,7 @@ namespace OnlineMongoMigrationProcessor
 
                         _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
 
-                        _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {sourceCollection.CollectionNamespace}: Resume token persisted after successful batch write", LogType.Verbose);
+                        _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {sourceCollection.CollectionNamespace}: Resume token persisted after successful batch write", LogType.Debug);
                     }
 
                     mu.CSUpdatesInLastBatch = counter;
@@ -830,7 +830,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.ShowInMonitor($"{_syncBackPrefix}ERROR processing batch for {sourceCollection.CollectionNamespace}: {ex.Message}");
                     _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
                     // On failure, resume token is NOT updated - we will resume from the last successful checkpoint
-                    _log.WriteLine($"{_syncBackPrefix}Resume token NOT updated due to batch failure - will resume from last successful checkpoint", LogType.Verbose);
+                    _log.WriteLine($"{_syncBackPrefix}Resume token NOT updated due to batch failure - will resume from last successful checkpoint", LogType.Debug);
                 }
 
                 _log.WriteLine($"{_syncBackPrefix}[DEBUG] WatchCollection finally block completed for {collectionKey}", LogType.Debug);
@@ -1046,7 +1046,7 @@ namespace OnlineMongoMigrationProcessor
 
                         _resumeTokenCache[$"{collNameSpace}"] = changeStreamDocuments.LatestResumeToken;
 
-                        _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collNameSpace}: Resume token persisted after successful flush", LogType.Verbose);
+                        _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collNameSpace}: Resume token persisted after successful flush", LogType.Debug);
                     }
 
                     _jobList?.Save();

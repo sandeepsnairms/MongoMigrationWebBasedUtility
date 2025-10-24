@@ -20,9 +20,7 @@ namespace OnlineMongoMigrationProcessor
     {
         public static int MaxSegments = 20;
         public static int MaxSamples = 2000;
-
-
-        
+                
 
         /// <summary>
         /// Creates partitions based on sampled data from the collection.
@@ -39,7 +37,11 @@ namespace OnlineMongoMigrationProcessor
            
             BsonDocument? userFilter = null;
             userFilter= MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
-        
+
+            if (optimizeForObjectId && dataType == DataType.ObjectId)
+            {
+                MaxSamples = MaxSamples * 1000;
+            }
 
             // Determine if we should skip DataType filtering
             bool skipDataTypeFilter = migrationUnit?.DataTypeFor_Id.HasValue == true;
@@ -59,7 +61,7 @@ namespace OnlineMongoMigrationProcessor
 
                 try                
                 {        
-                    if(optimizeForObjectId)
+                    if(optimizeForObjectId && userFilter != null && userFilter.ElementCount == 0)
                         docCountByType = GetDocumentCountByDataType(collection, DataType.ObjectId, true,new BsonDocument(), true);//use esimated count, don't need exact count for objectId 
                     else
                         docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
@@ -126,6 +128,8 @@ namespace OnlineMongoMigrationProcessor
                     Math.Max(1, (int)Math.Ceiling((double)docsInChunk / minDocsPerSegment)),
                     MaxSegments
                 );
+                
+
 
                 // Calculate the total sample count
                 sampleCount = Math.Min(chunkCount * segmentCount, MaxSamples);
@@ -152,7 +156,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if(optimizeForObjectId && dataType == DataType.ObjectId)
                 {
-                    return GetChunkBoundariesForObjectId(log, collection, optimizeForMongoDump, chunkCount, segmentCount);
+                    return GetChunkBoundariesForObjectId(log, collection, optimizeForMongoDump, sampleCount, segmentCount, userFilter);
                 }
                 else
                 {
@@ -297,11 +301,13 @@ namespace OnlineMongoMigrationProcessor
             return chunkBoundaries;
         }
 
-        private static ChunkBoundaries?  GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int chunkCount,  int segmentCount)
+        private static ChunkBoundaries?  GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount,  int segmentCount, BsonDocument userFilter)
         {
+
+            log.WriteLine($"Using objectId sampler for sampling {collection.CollectionNamespace} with {sampleCount} samples, Segment Count: {segmentCount}");
             MongoObjectIdSampler objectIdSampler = new MongoObjectIdSampler(collection);
-            var objectIdRange = objectIdSampler.GetObjectIdRangeAsync().GetAwaiter().GetResult();
-            var ids = objectIdSampler.GenerateEquidistantObjectIdsAsync(chunkCount + 1).GetAwaiter().GetResult();
+            //var objectIdRange = objectIdSampler.GetObjectIdRangeAsync(userFilter).GetAwaiter().GetResult();
+            var ids = objectIdSampler.GenerateEquidistantObjectIdsAsync(sampleCount, userFilter).GetAwaiter().GetResult();
 
             return ConvertToBoundaries(ids, segmentCount);
         }
