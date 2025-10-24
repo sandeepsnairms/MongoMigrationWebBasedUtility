@@ -94,34 +94,62 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Create a combined, ordered sequence of all operations
             var orderedOperations = CreateOrderedOperationSequence(insertEvents, updateEvents, deleteEvents);
             
+            _log.WriteLine($"{_logPrefix}[DEBUG] ParallelWriteProcessor.ProcessWritesAsync started for {collection.CollectionNamespace}: {orderedOperations.Count} total operations, batchSize={batchSize}, maxThreads={_maxThreads}", LogType.Debug);
+            
             if (!orderedOperations.Any())
             {
+                _log.WriteLine($"{_logPrefix}[DEBUG] No operations to process for {collection.CollectionNamespace}, returning empty result", LogType.Debug);
                 return result; // No operations to process
             }
 
-            _log.WriteLine($"{_logPrefix}Processing {orderedOperations.Count} operations across {_maxThreads} threads for {collection.CollectionNamespace.FullName}", LogType.Debug);
+            _log.WriteLine($"{_logPrefix}[DEBUG] Processing {orderedOperations.Count} operations across {_maxThreads} threads for {collection.CollectionNamespace.FullName}", LogType.Debug);
 
             // Partition operations into batches for parallel processing
             var operationBatches = PartitionOperations(orderedOperations, _maxThreads);
+            _log.WriteLine($"{_logPrefix}[DEBUG] Partitioned operations into {operationBatches.Count} batches for {collection.CollectionNamespace}", LogType.Debug);
             
             // Process batches in parallel with sequence preservation
             var tasks = new List<Task<BatchWriteResult>>();
             
-            foreach (var batch in operationBatches)
+            for (int i = 0; i < operationBatches.Count; i++)
             {
+                var batch = operationBatches[i];
+                var batchIndex = i; // Capture for closure
+                _log.WriteLine($"{_logPrefix}[DEBUG] Creating task for batch {batchIndex} with {batch.Count} operations for {collection.CollectionNamespace}", LogType.Debug);
+                
                 var task = Task.Run(async () =>
                 {
-                    return await ProcessBatchWithRetryAsync(
-                        mu,
-                        collection,
-                        batch,
-                        counterDelegate,
-                        batchSize,
-                        isAggressive,
-                        isAggressiveComplete,
-                        jobId,
-                        targetClient,
-                        isSimulatedRun);
+                    try
+                    {
+                        _log.WriteLine($"{_logPrefix}[DEBUG] Starting batch {batchIndex} processing for {collection.CollectionNamespace}", LogType.Debug);
+                        var batchResult = await ProcessBatchWithRetryAsync(
+                            mu,
+                            collection,
+                            batch,
+                            counterDelegate,
+                            batchSize,
+                            isAggressive,
+                            isAggressiveComplete,
+                            jobId,
+                            targetClient,
+                            isSimulatedRun);
+                        _log.WriteLine($"{_logPrefix}[DEBUG] Completed batch {batchIndex} processing for {collection.CollectionNamespace}: success={batchResult.Success}, processed={batchResult.Processed}, failures={batchResult.Failures}", LogType.Debug);
+                        return batchResult;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"{_logPrefix}Exception in batch {batchIndex} processing for {collection.CollectionNamespace}: {ex}", LogType.Error);
+                        
+                        // Return a failed result instead of throwing to allow other batches to continue
+                        return new BatchWriteResult
+                        {
+                            Success = false,
+                            Processed = 0,
+                            Failures = batch.Count,
+                            Skipped = 0,
+                            Errors = new List<string> { $"Batch {batchIndex} failed: {ex.Message}" }
+                        };
+                    }
                 });
                 
                 tasks.Add(task);
@@ -130,7 +158,9 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Wait for all batches to complete
             try
             {
+                _log.WriteLine($"{_logPrefix}[DEBUG] Waiting for all {tasks.Count} batch tasks to complete for {collection.CollectionNamespace}", LogType.Debug);
                 var batchResults = await Task.WhenAll(tasks);
+                _log.WriteLine($"{_logPrefix}[DEBUG] All batch tasks completed for {collection.CollectionNamespace}, aggregating results", LogType.Debug);
                 
                 // Aggregate results
                 foreach (var batchResult in batchResults)
@@ -145,6 +175,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         result.Errors.AddRange(batchResult.Errors);
                     }
                 }
+                
+                _log.WriteLine($"{_logPrefix}[DEBUG] Result aggregation completed for {collection.CollectionNamespace}: totalProcessed={result.TotalProcessed}, totalFailures={result.TotalFailures}, totalSkipped={result.TotalSkipped}, success={result.Success}", LogType.Debug);
                 
                 if (result.TotalFailures > 0)
                 {
@@ -163,6 +195,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 throw; // Re-throw to stop the job
             }
             
+            _log.WriteLine($"{_logPrefix}[DEBUG] ParallelWriteProcessor.ProcessWritesAsync completed for {collection.CollectionNamespace}", LogType.Debug);
             return result;
         }
 

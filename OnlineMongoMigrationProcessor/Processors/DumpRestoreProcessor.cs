@@ -336,15 +336,22 @@ namespace OnlineMongoMigrationProcessor
 
                 mu.EstimatedDocCount = ctx.Collection.EstimatedDocumentCount();
 
-                try
+                // Start the actual document count operation in the background without awaiting
+                Task<long>? actualCountTask = null;
+                if (mu.ActualDocCount == 0) // Only start if we don't already have the count
                 {
-                    var count = await Task.Run(() => MongoHelper.GetActualDocumentCount(ctx.Collection, mu), _cts.Token);
-                    mu.ActualDocCount = count;
-                    _jobList.Save();
-                }
-                catch (OperationCanceledException)
-                {
-                    // ignore
+                    actualCountTask = Task.Run(() => MongoHelper.GetActualDocumentCount(ctx.Collection, mu), _cts.Token);
+
+                    // Optional: Fire-and-forget completion handler to update the count when ready
+                    _ = actualCountTask.ContinueWith(task =>
+                    {
+                        if (task.IsCompletedSuccessfully)
+                        {
+                            mu.ActualDocCount = task.Result;
+                            _jobList.Save();
+                            _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
+                        }
+                    }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
                 }
 
                 long downloadCount = 0;
@@ -376,6 +383,7 @@ namespace OnlineMongoMigrationProcessor
                     else
                     {
                         downloadCount += mu.MigrationChunks[i].DumpQueryDocCount;
+
                     }
                 }
 

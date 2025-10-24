@@ -831,7 +831,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 long targetChunkSizeBytes = _config.ChunkSizeInMb * 1024 * 1024;
                 var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
-                                
+                
+                bool optimizeForObjectId = false;
 
                 if (_job.JobType == JobType.DumpAndRestore)
                 {
@@ -855,8 +856,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     _log.WriteLine($"Chunking {databaseName}.{collectionName}");
 
                     List<DataType> dataTypes;
-                    string lte=string.Empty;
-                    string gte=string.Empty;
+
                     // Check if DataTypeFor_Id is specified in the MigrationUnit
                     if (migrationUnit?.DataTypeFor_Id.HasValue == true)
                     {
@@ -864,12 +864,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                         dataTypes = new List<DataType> { migrationUnit.DataTypeFor_Id.Value };
                         _log.WriteLine($"Using specified DataType for _id: {migrationUnit.DataTypeFor_Id.Value}");
 
-                        if(string.IsNullOrEmpty(lte) && string.IsNullOrEmpty(gte))
+
+                        if( migrationUnit.DataTypeFor_Id.Value == DataType.ObjectId)// && !MongoHelper.UsesIdFieldInFilter(MongoHelper.GetFilterDoc(migrationUnit.UserFilter)))
                         {
-                            _log.WriteLine($"No GTE or LTE specified for _id, using full range for chunking.");
+                            optimizeForObjectId = true;
                         }
-                        else
-                            _log.WriteLine($"Using specified LTE :{lte} and GTE:{gte}");
                     }
                     else
                     {
@@ -885,14 +884,30 @@ namespace OnlineMongoMigrationProcessor.Workers
                     foreach (var dataType in dataTypes)
                     {
                         long docCountByType;
-                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!, out docCountByType);
+                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!,optimizeForObjectId ,out docCountByType);
 
                         if (docCountByType == 0 || chunkBoundaries == null) continue;
 
+                        if (chunkBoundaries.Boundaries.Count == 0)
+                        {
+                            var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false);
+                            migrationChunks.Add(chunk);
+                            if (_job.JobType == JobType.MongoDriver)
+                            {
+                                chunk.Segments = new List<Segment>
+                                {
+                                    new Segment { Gte = "", Lt = "", IsProcessed = false, Id = "1" }
+                                };
+                            }
+                        }
+                        else
+                        {
 #pragma warning disable CS8604 // Possible null reference argument.
-                        CreateSegments(chunkBoundaries, migrationChunks, dataType, migrationUnit?.UserFilter);
+                            CreateSegments(chunkBoundaries, migrationChunks, dataType, migrationUnit?.UserFilter);
 #pragma warning restore CS8604 // Possible null reference argument.
+                        }
                     }
+                    
                 }
                 else
                 {
