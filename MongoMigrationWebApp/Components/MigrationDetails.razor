@@ -91,6 +91,14 @@
                 </div>
                 <div class="mb-3 checkbox-container">
                     <div class="checkbox-group">
+                        <label title="Check this if all collections in your migration use MongoDB ObjectId for the _id field. This optimizes partitioning and improves migration performance.">
+                            <input type="checkbox" id="allCollectionsUseObjectId" disabled="@(!NewMode)" @bind="allCollectionsUseObjectId" />
+                            All collections use ObjectId for the _id field
+                        </label>
+                    </div>
+                </div>
+                <div class="mb-3 checkbox-container">
+                    <div class="checkbox-group">
                         <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
                             <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline)" @bind="enableSyncBack" />
                             Post Migration Sync Back
@@ -155,6 +163,7 @@
     private bool startCSAfterUploads = true; // Start change streams after all uploads are done
     private bool aggressiveCS = false; // if the migration is online, aggressive change stream can be enabled
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
+    private bool allCollectionsUseObjectId = false; // if all collections use ObjectId for the _id field
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
     private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
@@ -343,10 +352,24 @@
             }
         }
 
-        if (string.IsNullOrEmpty(sourceConnectionString) || string.IsNullOrEmpty(targetConnectionString))
+        if (string.IsNullOrEmpty(sourceConnectionString))
         {
-            errorMessage = "Source and Target Connection Strings can't be empty.";
+            errorMessage = "Source Connection String can't be empty.";
             return;
+        }
+
+        // For simulation mode, add a dummy target connection string if not provided
+        if (string.IsNullOrEmpty(targetConnectionString))
+        {
+            if (isSimulatedRun)
+            {
+                targetConnectionString = "mongodb://simulation-mode-dummy:27017";
+            }
+            else
+            {
+                errorMessage = "Target Connection String can't be empty.";
+                return;
+            }
         }
 
         var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
@@ -363,7 +386,7 @@
             return;
         }
 
-        if (tmpTgtEndpoint == tmpSrcEndpoint)
+        if (tmpTgtEndpoint == tmpSrcEndpoint && !isSimulatedRun)
         {
             errorMessage = "Target and Source endpoints can't be the same.";
             return;
@@ -406,7 +429,8 @@
             SyncBackEnabled = (enableSyncBack && cdcMode != CDCMode.Offline && !isSimulatedRun) ? true : false,
             CSStartsAfterAllUploads = startCSAfterUploads,
             AggresiveChangeStream = aggressiveCS,
-            ChangeStreamLevel = changeStreamLevel
+            ChangeStreamLevel = changeStreamLevel,
+            AllCollectionsUseObjectId = allCollectionsUseObjectId  // Transient flag, not persisted
         };
         await OnSubmit.InvokeAsync(job);
     }

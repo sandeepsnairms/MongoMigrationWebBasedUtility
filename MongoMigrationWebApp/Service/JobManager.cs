@@ -213,6 +213,21 @@ namespace MongoMigrationWebApp.Service
             return MigrationWorker?.IsProcessRunning(id) ?? false;
         }
 
+        public void AdjustDumpWorkers(int newCount)
+        {
+            MigrationWorker?.AdjustDumpWorkers(newCount);
+        }
+
+        public void AdjustRestoreWorkers(int newCount)
+        {
+            MigrationWorker?.AdjustRestoreWorkers(newCount);
+        }
+
+        public void AdjustInsertionWorkers(int newCount)
+        {
+            MigrationWorker?.AdjustInsertionWorkers(newCount);
+        }
+
         #endregion
                 
     }

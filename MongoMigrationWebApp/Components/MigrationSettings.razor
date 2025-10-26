@@ -54,6 +54,18 @@
                     <input type="number" id="cs-compareSampleSize" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CompareSampleSize" />
                 </div>
 
+                <div class="mb-3">
+                    <label for="objectid-partitioner" class="form-label" title="Choose the method for partitioning ObjectId-based collections into chunks for parallel processing.">
+                        ObjectId Partitioner
+                    </label>
+                    <select id="objectid-partitioner" value="@SelectedObjectIdPartitioner" class="form-select" @onchange="OnObjectIdPartitionerChanged">                        
+                        <option value="UseSampleCommand" title="Use MongoDB's $sample command to generate chunk boundaries.">Use Sample Command</option>
+                        <option value="UseTimeBoundaries" title="Generate boundaries based on ObjectId timestamp distribution.">Use Time Boundaries</option>
+                        <option value="UseAdjustedTimeBoundaries" title="Generate time-based boundaries and adjust based on actual record counts.">Use Adjusted Time Boundaries</option>
+                        <option value="UsePagination" title="Use pagination to create chunks of same size.">Use Pagination</option>
+                    </select>
+                </div>
+
 
                 <div class="mb-3">
                     <label for="pem-text" class="form-label">CA certificate file for source server (.pem)</label>
@@ -94,6 +106,20 @@
 
     private string errorMessage = string.Empty;
 
+    private string SelectedObjectIdPartitioner = "UseTimeBoundaries"; // Default partitioner
+
+    private void OnObjectIdPartitionerChanged(ChangeEventArgs e)
+    {
+        var val = e?.Value?.ToString() ?? "UseTimeBoundaries";
+        SelectedObjectIdPartitioner = val;
+        
+        // Update the configuration backup based on the selected value
+        if (Enum.TryParse<OnlineMongoMigrationProcessor.PartitionerType>(val, out var partitionerType))
+        {
+            (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ObjectIdPartitioner = partitionerType;
+        }
+    }
+
     private void ClearPem()
     {
         (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForSourceServer = string.Empty;
@@ -112,6 +138,9 @@
     protected override void OnInitialized()
     {
         _configurationBackup = (OnlineMongoMigrationProcessor.MigrationSettings?)(_configuration?.Clone()) ?? new OnlineMongoMigrationProcessor.MigrationSettings();
+        
+        // Initialize the selected partitioner from the configuration
+        SelectedObjectIdPartitioner = _configurationBackup.ObjectIdPartitioner.ToString();
     }
 
 

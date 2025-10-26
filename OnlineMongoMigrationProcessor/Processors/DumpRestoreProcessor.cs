@@ -105,11 +105,110 @@ namespace OnlineMongoMigrationProcessor
                 _maxParallelRestoreInstances = 1;
             }
             
+            // Store initial values in job for UI monitoring
+            _job.CurrentDumpWorkers = _maxParallelDumpInstances;
+            _job.CurrentRestoreWorkers = _maxParallelRestoreInstances;
+            
+            // Initialize insertion workers (will be calculated per chunk based on doc count)
+            if (!_job.MaxInsertionWorkersPerCollection.HasValue)
+            {
+                _job.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
+            }
+            else
+            {
+                _job.CurrentInsertionWorkers = _job.MaxInsertionWorkersPerCollection.Value;
+            }
+            
             // Initialize semaphores
             _dumpSemaphore = new SemaphoreSlim(_maxParallelDumpInstances, _maxParallelDumpInstances);
             _restoreSemaphore = new SemaphoreSlim(_maxParallelRestoreInstances, _maxParallelRestoreInstances);
             
             _log.WriteLine($"Parallel processing: Dump workers={_maxParallelDumpInstances}, Restore workers={_maxParallelRestoreInstances}");
+        }
+
+        /// <summary>
+        /// Adjusts the number of dump workers at runtime. Increase adds workers, decrease reduces capacity.
+        /// </summary>
+        public void AdjustDumpWorkers(int newCount)
+        {
+            if (newCount < 1) newCount = 1;
+            if (newCount > 16) newCount = 16; // Safety limit
+            
+            int difference = newCount - _maxParallelDumpInstances;
+            
+            if (difference == 0) return;
+            
+            _maxParallelDumpInstances = newCount;
+            _job.CurrentDumpWorkers = newCount;
+            _job.MaxParallelDumpProcesses = newCount; // Update config too
+            
+            if (difference > 0)
+            {
+                // Increase: Release semaphore slots to allow more workers
+                for (int i = 0; i < difference; i++)
+                {
+                    try { _dumpSemaphore?.Release(); } catch { }
+                }
+                _log.WriteLine($"Increased dump workers to {newCount} (+{difference})");
+            }
+            else
+            {
+                // Decrease: Workers will naturally reduce as they finish tasks
+                // The semaphore will limit new acquisitions
+                _log.WriteLine($"Decreased dump worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
+            }
+            
+            _jobList?.Save();
+        }
+
+        /// <summary>
+        /// Adjusts the number of restore workers at runtime. Increase adds workers, decrease reduces capacity.
+        /// </summary>
+        public void AdjustRestoreWorkers(int newCount)
+        {
+            if (newCount < 1) newCount = 1;
+            if (newCount > 16) newCount = 16; // Safety limit
+            
+            int difference = newCount - _maxParallelRestoreInstances;
+            
+            if (difference == 0) return;
+            
+            _maxParallelRestoreInstances = newCount;
+            _job.CurrentRestoreWorkers = newCount;
+            _job.MaxParallelRestoreProcesses = newCount; // Update config too
+            
+            if (difference > 0)
+            {
+                // Increase: Release semaphore slots to allow more workers
+                for (int i = 0; i < difference; i++)
+                {
+                    try { _restoreSemaphore?.Release(); } catch { }
+                }
+                _log.WriteLine($"Increased restore workers to {newCount} (+{difference})");
+            }
+            else
+            {
+                // Decrease: Workers will naturally reduce as they finish tasks
+                _log.WriteLine($"Decreased restore worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
+            }
+            
+            _jobList?.Save();
+        }
+
+        /// <summary>
+        /// Adjusts the number of insertion workers per collection for mongorestore at runtime.
+        /// </summary>
+        public void AdjustInsertionWorkers(int newCount)
+        {
+            if (newCount < 1) newCount = 1;
+            if (newCount > 16) newCount = 16; // Safety limit
+            
+            _job.CurrentInsertionWorkers = newCount;
+            _job.MaxInsertionWorkersPerCollection = newCount;
+            
+            _log.WriteLine($"Set insertion workers per collection to {newCount}. Will apply to new restore operations.");
+            
+            _jobList?.Save();
         }
 
         private int CalculateOptimalConcurrency(int? configOverride, bool isDump)
@@ -856,12 +955,19 @@ namespace OnlineMongoMigrationProcessor
                 ? mu.MigrationChunks[chunkIndex].DumpQueryDocCount
                 : Helper.GetMigrationUnitDocCount(mu);
 
-            if (docCount > 100_000 && Environment.ProcessorCount > 2)
+            // Determine insertion workers based on configuration or auto-calculate
+            int insertionWorkers = 1; // Default
+            
+            if (_job.MaxInsertionWorkersPerCollection.HasValue && docCount > 100_000)
             {
-                // for large chunks, we can increase number of insertion workers to speed up the process
-                int workers = Math.Min(Environment.ProcessorCount / 2, 8); // max 8 workers
-                args = $"{args} --numInsertionWorkersPerCollection={workers}";
-                _log.WriteLine($"Restore will use {workers} insertion workers for {dbName}.{colName}[{chunkIndex}]");
+                // Use configured value
+                insertionWorkers = _job.MaxInsertionWorkersPerCollection.Value;
+            }
+            
+            if (insertionWorkers > 1)
+            {
+                args = $"{args} --numInsertionWorkersPerCollection={insertionWorkers}";
+                _log.WriteLine($"Restore will use {insertionWorkers} insertion workers for {dbName}.{colName}[{chunkIndex}]");
             }
 
             try

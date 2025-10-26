@@ -20,6 +20,14 @@ namespace OnlineMongoMigrationProcessor
         public string? TargetConnectionString { get; set; }
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
+        
+        /// <summary>
+        /// Transient flag (not persisted) used during job creation to indicate all collections use ObjectId for _id field.
+        /// This is only used as input when creating migration units.
+        /// </summary>
+        [JsonIgnore]
+        public bool AllCollectionsUseObjectId { get; set; }
+        
         public DateTime? StartedOn { get; set; }
         public bool IsCompleted { get; set; }
 
@@ -91,6 +99,26 @@ namespace OnlineMongoMigrationProcessor
         /// Enable parallel processing feature. Default: true
         /// </summary>
         public bool EnableParallelProcessing { get; set; } = true;
+        
+        /// <summary>
+        /// Current number of active dump workers. Used for runtime monitoring and adjustment.
+        /// </summary>
+        public int CurrentDumpWorkers { get; set; }
+        
+        /// <summary>
+        /// Current number of active restore workers. Used for runtime monitoring and adjustment.
+        /// </summary>
+        public int CurrentRestoreWorkers { get; set; }
+        
+        /// <summary>
+        /// Maximum number of insertion workers per collection for mongorestore. Null = auto-calculate based on CPU cores and doc count.
+        /// </summary>
+        public int? MaxInsertionWorkersPerCollection { get; set; }
+        
+        /// <summary>
+        /// Current number of insertion workers per collection. Used for runtime monitoring and adjustment.
+        /// </summary>
+        public int CurrentInsertionWorkers { get; set; }
         
         // Global resume token properties for server-level change streams (Forward sync)
         public string? ResumeToken { get; set; }

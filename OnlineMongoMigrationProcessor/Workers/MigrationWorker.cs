@@ -108,6 +108,39 @@ namespace OnlineMongoMigrationProcessor.Workers
             catch { }
         }
 
+        /// <summary>
+        /// Adjusts the number of dump workers at runtime for DumpAndRestore jobs.
+        /// </summary>
+        public void AdjustDumpWorkers(int newCount)
+        {
+            if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
+            {
+                dumpRestoreProcessor.AdjustDumpWorkers(newCount);
+            }
+        }
+
+        /// <summary>
+        /// Adjusts the number of restore workers at runtime for DumpAndRestore jobs.
+        /// </summary>
+        public void AdjustRestoreWorkers(int newCount)
+        {
+            if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
+            {
+                dumpRestoreProcessor.AdjustRestoreWorkers(newCount);
+            }
+        }
+
+        /// <summary>
+        /// Adjusts the number of insertion workers per collection for mongorestore at runtime.
+        /// </summary>
+        public void AdjustInsertionWorkers(int newCount)
+        {
+            if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
+            {
+                dumpRestoreProcessor.AdjustInsertionWorkers(newCount);
+            }
+        }
+
         private async Task<TaskResult> PrepareForMigration()
         {
             if (_job == null)
@@ -649,7 +682,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _job.MigrationUnits = new List<MigrationUnit>();
             }
 
-            var unitsToAdd = await Helper.PopulateJobCollectionsAsync(namespacesToMigrate, sourceConnectionString);
+            var unitsToAdd = await Helper.PopulateJobCollectionsAsync(namespacesToMigrate, sourceConnectionString, _job.AllCollectionsUseObjectId);
             if (unitsToAdd.Count > 0)
             {
                 foreach (var mu in unitsToAdd)
@@ -884,7 +917,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     foreach (var dataType in dataTypes)
                     {
                         long docCountByType;
-                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!,optimizeForObjectId ,out docCountByType);
+                        ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, _job.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!,optimizeForObjectId , _config,out docCountByType);
 
                         if (docCountByType == 0 || chunkBoundaries == null) continue;
 
