@@ -76,6 +76,22 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public LogType MinimumLogLevel { get; set; } = LogType.Info;
         
+        // Parallel Processing Configuration
+        /// <summary>
+        /// Maximum number of parallel mongodump processes. Null = auto-calculate based on CPU cores.
+        /// </summary>
+        public int? MaxParallelDumpProcesses { get; set; }
+        
+        /// <summary>
+        /// Maximum number of parallel mongorestore processes. Null = auto-calculate based on CPU cores.
+        /// </summary>
+        public int? MaxParallelRestoreProcesses { get; set; }
+        
+        /// <summary>
+        /// Enable parallel processing feature. Default: true
+        /// </summary>
+        public bool EnableParallelProcessing { get; set; } = true;
+        
         // Global resume token properties for server-level change streams (Forward sync)
         public string? ResumeToken { get; set; }
         public string? OriginalResumeToken { get; set; }

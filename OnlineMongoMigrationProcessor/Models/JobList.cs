@@ -13,8 +13,11 @@ namespace OnlineMongoMigrationProcessor
     public class JobList
     {
         public List<MigrationJob>? MigrationJobs { get; set; }
-        public int ActiveRestoreProcessId { get; set; } = 0;
-        public int ActiveDumpProcessId { get; set; } = 0;
+        
+        // Thread-safe process ID tracking for parallel execution
+        public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
+        public List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
+        
         private string _filePath = string.Empty;
         private string _backupFolderPath = string.Empty;
         private static readonly object _fileLock = new object();

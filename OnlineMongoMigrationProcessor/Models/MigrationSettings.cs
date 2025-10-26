@@ -18,6 +18,7 @@ namespace OnlineMongoMigrationProcessor
         public int ChangeStreamMaxCollsInBatch { get; set; }
 		public int MongoCopyPageSize { get; set; }
         public int CompareSampleSize { get; set; }
+        
         private string _filePath = string.Empty;
 
         public MigrationSettings()
@@ -48,9 +49,10 @@ namespace OnlineMongoMigrationProcessor
 					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 120 : loadedObject.ChangeStreamBatchDuration;
                     ChangeStreamBatchDurationMin = loadedObject.ChangeStreamBatchDurationMin == 0 ? 30 : loadedObject.ChangeStreamBatchDurationMin;
                     ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
-					MongoCopyPageSize = loadedObject.MongoCopyPageSize;
+                    MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CompareSampleSize = loadedObject.CompareSampleSize == 0 ? 50 : loadedObject.CompareSampleSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
+                    
                     initialized = true;
                     if (ChangeStreamMaxDocsInBatch > 10000)
                         ChangeStreamMaxDocsInBatch = 10000;

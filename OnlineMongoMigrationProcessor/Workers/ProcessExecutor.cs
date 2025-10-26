@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Xml.Linq;
 
 #pragma warning disable CS8600
@@ -10,125 +11,129 @@ namespace OnlineMongoMigrationProcessor.Workers
 {
     internal class ProcessExecutor
     {
-        private static bool _migrationCancelled = false;
         private Log _log;
+        private Process? _process = null;
+        private readonly object _processLock = new object();
+        private CancellationToken _cancellationToken;
 
 		public ProcessExecutor(Log log)
         {
-            // Constructor logic if needed
             _log = log;
 		}
+		
 		/// <summary>
 		/// Executes a process with the given executable path and arguments.
 		/// </summary>
+		/// <param name="jobList">The job list for saving state.</param>
+		/// <param name="mu">Migration unit.</param>
+		/// <param name="chunk">Migration chunk.</param>
+		/// <param name="chunkIndex">Index of the chunk.</param>
+		/// <param name="basePercent">Base percentage for progress calculation.</param>
+		/// <param name="contribFactor">Contribution factor for progress calculation.</param>
+		/// <param name="targetCount">Target document count.</param>
 		/// <param name="exePath">The full path to the executable file.</param>
 		/// <param name="arguments">The arguments to pass to the executable.</param>
+		/// <param name="cancellationToken">Cancellation token for graceful shutdown.</param>
+		/// <param name="onProcessStarted">Callback when process starts with PID.</param>
+		/// <param name="onProcessEnded">Callback when process ends with PID.</param>
 		/// <returns>True if the process completed successfully, otherwise false.</returns>
-		public bool Execute(JobList jobList, MigrationUnit mu, MigrationChunk chunk, int chunkIndex, double basePercent, double contribFactor, long targetCount, string exePath, string arguments)
+		public bool Execute(
+			JobList jobList, 
+			MigrationUnit mu, 
+			MigrationChunk chunk, 
+			int chunkIndex, 
+			double basePercent, 
+			double contribFactor, 
+			long targetCount, 
+			string exePath, 
+			string arguments,
+			CancellationToken cancellationToken,
+			Action<int>? onProcessStarted = null,
+			Action<int>? onProcessEnded = null)
         {
-            int pid;
-            string processType = string.Empty;
+			_cancellationToken = cancellationToken;
+            string processType = exePath.ToLower().Contains("restore") ? "MongoRestore" : "MongoDump";
+            
             try
             {
-                // Determine process type and active process ID
-                if (exePath.ToLower().Contains("restore"))
+                lock (_processLock)
                 {
-                    processType = "MongoRestore";
-                    pid = jobList.ActiveRestoreProcessId;
-                }
-                else
-                {
-                    processType = "MongoDump";
-                    pid = jobList.ActiveDumpProcessId;
-                }
-
-                // Kill any existing process
-                if (pid > 0)
-                {
-                    try
+                    _process = new Process
                     {
-                        var existingProcess = Process.GetProcessById(pid);
-                        existingProcess?.Kill();
-                    }
-                    catch { }
-                }
-
-                using (var process = new Process
-                {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = exePath,
-                        Arguments = arguments,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    }
-                })
-                {
-                    // Capture output and error data synchronously
-                    StringBuilder outputBuffer = new StringBuilder();
-                    StringBuilder errorBuffer = new StringBuilder();
-
-                    process.OutputDataReceived += (sender, args) =>
-                    {
-                        if (!string.IsNullOrEmpty(args.Data))
+                        StartInfo = new ProcessStartInfo
                         {
-                            outputBuffer.AppendLine(args.Data);
-                            _log.WriteLine($"{processType} Log :{Helper.RedactPii(args.Data)}");
+                            FileName = exePath,
+                            Arguments = arguments,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true,
+                            UseShellExecute = false,
+                            CreateNoWindow = true
                         }
                     };
+                }
 
-                    process.ErrorDataReceived += (sender, args) =>
-                    {                        
-                        if (!string.IsNullOrEmpty(args.Data))
-                        {
-                            _log.WriteLine($"{processType} Log : {Helper.RedactPii(args.Data)}", LogType.Debug);
-                            errorBuffer.AppendLine(args.Data);
-                            ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
-                        }
-                    };
+                StringBuilder outputBuffer = new StringBuilder();
+                StringBuilder errorBuffer = new StringBuilder();
 
-                    process.Start();
-                    process.BeginOutputReadLine();
-                    process.BeginErrorReadLine();
-
-                    if (processType == "MongoRestore")
-                        jobList.ActiveRestoreProcessId = process.Id;
-                    else
-                        jobList.ActiveDumpProcessId = process.Id;
-
-                    while (!process.WaitForExit(1000)) // Poll every sec
+                _process.OutputDataReceived += (sender, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
                     {
-                        if (_migrationCancelled)
+                        outputBuffer.AppendLine(args.Data);
+                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}");
+                    }
+                };
+
+                _process.ErrorDataReceived += (sender, args) =>
+                {
+                    if (!string.IsNullOrEmpty(args.Data))
+                    {
+                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}", LogType.Debug);
+                        errorBuffer.AppendLine(args.Data);
+                        ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
+                    }
+                };
+
+                _process.Start();
+                _process.BeginOutputReadLine();
+                _process.BeginErrorReadLine();
+
+                int processId = _process.Id;
+                onProcessStarted?.Invoke(processId);
+                _log.WriteLine($"{processType} process started: PID {processId} for chunk {chunkIndex}");
+
+                // Wait for process to exit, checking cancellation periodically
+                while (!_process.WaitForExit(1000))
+                {
+                    if (_cancellationToken.IsCancellationRequested)
+                    {
+                        try
                         {
-                            try
-                            {
-                                process.Kill();
-                                _log.WriteLine($"{processType} process terminated due to cancellation.");
-                                _migrationCancelled = false;
-                                break;
-                            }
-                            catch (Exception ex)
-                            {
-                                _log.WriteLine($"Error terminating process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-                            }
+                            _process.Kill(entireProcessTree: true);
+                            _log.WriteLine($"{processType} process {processId} terminated due to cancellation.");
+                            onProcessEnded?.Invoke(processId);
+                            return false;
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.WriteLine($"Error killing process {processId}: {Helper.RedactPii(ex.Message)}", LogType.Error);
                         }
                     }
-
-                    if (processType == "MongoRestore")
-                        jobList.ActiveRestoreProcessId = 0;
-                    else
-                        jobList.ActiveDumpProcessId = 0;
-
-                    
-                    return process.ExitCode == 0;
                 }
+
+                onProcessEnded?.Invoke(processId);
+                
+                bool success = _process.ExitCode == 0;
+                if (!success)
+                {
+                    _log.WriteLine($"{processType} process {processId} exited with code {_process.ExitCode}", LogType.Error);
+                }
+                
+                return success;
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error executing process {processType}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-
+                _log.WriteLine($"Error executing {processType}: {Helper.RedactPii(ex.Message)}", LogType.Error);
                 return false;
             }
         }
@@ -267,10 +272,26 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         /// <summary>
         /// Terminates the currently running process, if any.
+        /// Note: This method is deprecated. Use CancellationToken instead.
         /// </summary>
+        [Obsolete("Use CancellationToken for graceful cancellation")]
         public void Terminate()
         {
-            _migrationCancelled = true;
+            lock (_processLock)
+            {
+                if (_process != null && !_process.HasExited)
+                {
+                    try
+                    {
+                        _process.Kill(entireProcessTree: true);
+                        _log.WriteLine("Process terminated via Terminate() method");
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"Error terminating process: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                    }
+                }
+            }
         }
     }
 }
