@@ -57,6 +57,10 @@ namespace OnlineMongoMigrationProcessor.Workers
 			_cancellationToken = cancellationToken;
             string processType = exePath.ToLower().Contains("restore") ? "MongoRestore" : "MongoDump";
             
+            // Start timer immediately when process begins to ensure percentage updates
+            // even if console output takes time to arrive or for resumed jobs
+            EnsurePercentageTimerRunning(mu, jobList, processType);
+            
             try
             {
                 lock (_processLock)
@@ -166,6 +170,21 @@ namespace OnlineMongoMigrationProcessor.Workers
                     chunk.DumpResultDocCount = count;
                 }
             }
+            else if (percent > 0 && targetCount > 0)
+            {
+                // When only percentage is reported (no doc count), calculate the doc count
+                // This happens with mongorestore which often reports percentage but not document count
+                long calculatedCount = (long)(percent / 100.0 * targetCount);
+                
+                if (processType == "MongoRestore")
+                {
+                    chunk.RestoredSuccessDocCount = calculatedCount;
+                }
+                else
+                {
+                    chunk.DumpResultDocCount = calculatedCount;
+                }
+            }
             //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
             if (percent == 100 & processType == "MongoRestore")
             {
@@ -232,6 +251,12 @@ namespace OnlineMongoMigrationProcessor.Workers
             for (int i = 0; i < mu.MigrationChunks.Count; i++)
             {
                 var c = mu.MigrationChunks[i];
+                
+                if (c.DumpQueryDocCount == 0)
+                {
+                    continue;
+                }
+                
                 double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
                 
                 if (isRestore)
@@ -296,10 +321,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                         
                         if (processType == "MongoRestore")
                         {
-                            // Check if there are any active restore chunks
+                            // Check if there are any active or pending restore chunks
+                            // Active: RestoredSuccessDocCount > 0 and not uploaded
+                            // Pending: IsDownloaded (dump complete) but not IsUploaded (restore not complete)
                             foreach (var chunk in mu.MigrationChunks)
                             {
-                                if (chunk.IsUploaded != true && chunk.RestoredSuccessDocCount > 0)
+                                if (chunk.IsUploaded != true && (chunk.RestoredSuccessDocCount > 0 || chunk.IsDownloaded == true))
                                 {
                                     hasActiveChunks = true;
                                     break;
@@ -318,10 +345,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         else // MongoDump
                         {
-                            // Check if there are any active dump chunks
+                            // Check if there are any active or pending dump chunks
+                            // Active: DumpResultDocCount > 0 and not downloaded
+                            // Pending: DumpQueryDocCount > 0 (chunk initialized) but not IsDownloaded
                             foreach (var chunk in mu.MigrationChunks)
                             {
-                                if (chunk.IsDownloaded != true && chunk.DumpResultDocCount > 0)
+                                if (chunk.IsDownloaded != true && chunk.DumpQueryDocCount > 0)
                                 {
                                     hasActiveChunks = true;
                                     break;
