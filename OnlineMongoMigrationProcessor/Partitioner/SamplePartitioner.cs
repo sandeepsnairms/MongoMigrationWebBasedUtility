@@ -28,7 +28,7 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="idField">The field used as the partition key.</param>
         /// <param name="partitionCount">The number of desired partitions.</param>
         /// <returns>A list of partition boundaries.</returns>
-        public static ChunkBoundaries? CreatePartitions(Log log,bool optimizeForMongoDump,IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, bool optimizeForObjectId,out long docCountByType)
+        public static ChunkBoundaries? CreatePartitions(Log log,bool optimizeForMongoDump,IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, bool optimizeForObjectId, MigrationSettings config, out long docCountByType)
         {
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
@@ -154,9 +154,17 @@ namespace OnlineMongoMigrationProcessor
                     throw new ArgumentException("Chunk count must be greater than 0.");
 
 
-                if(optimizeForObjectId && dataType == DataType.ObjectId)
+                if(optimizeForObjectId && dataType == DataType.ObjectId && config.ObjectIdPartitioner != PartitionerType.UseSampleCommand)
                 {
-                    return GetChunkBoundariesForObjectId(log, collection, optimizeForMongoDump, sampleCount, segmentCount, userFilter);
+                    try
+                    {
+                        return GetChunkBoundariesForObjectId(log, collection, optimizeForMongoDump, sampleCount, segmentCount, userFilter, config);
+                    }
+                    catch(Exception ex)
+                    {
+                        log.WriteLine($"Falling back to general sampler for {collection.CollectionNamespace} as ObjectId sampler failed. Details:  {ex}", LogType.Warning);
+                        return GetChunkBoundariesGeneral(log, collection, optimizeForMongoDump, dataType, userFilter, skipDataTypeFilter, sampleCount, chunkCount, segmentCount);
+                    }
                 }
                 else
                 {
@@ -301,13 +309,13 @@ namespace OnlineMongoMigrationProcessor
             return chunkBoundaries;
         }
 
-        private static ChunkBoundaries?  GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount,  int segmentCount, BsonDocument userFilter)
+        private static ChunkBoundaries?  GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount,  int segmentCount, BsonDocument userFilter, MigrationSettings config)
         {
 
-            log.WriteLine($"Using objectId sampler for sampling {collection.CollectionNamespace} with {sampleCount} samples, Segment Count: {segmentCount}");
+            log.WriteLine($"Using objectId sampler {config.ObjectIdPartitioner} for sampling {collection.CollectionNamespace} with {sampleCount} samples, Segment Count: {segmentCount}");
             MongoObjectIdSampler objectIdSampler = new MongoObjectIdSampler(collection);
             //var objectIdRange = objectIdSampler.GetObjectIdRangeAsync(userFilter).GetAwaiter().GetResult();
-            var ids = objectIdSampler.GenerateEquidistantObjectIdsAsync(sampleCount, userFilter).GetAwaiter().GetResult();
+            var ids = objectIdSampler.GenerateEquidistantObjectIdsAsync(sampleCount, userFilter,config).GetAwaiter().GetResult();
 
             return ConvertToBoundaries(ids, segmentCount);
         }

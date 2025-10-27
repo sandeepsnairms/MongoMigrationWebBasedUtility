@@ -319,7 +319,7 @@ namespace OnlineMongoMigrationProcessor
             return connectionString.Contains("mongo.cosmos.azure.com");
         }         
 
-        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString)
+        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
             if (string.IsNullOrWhiteSpace(namespacesToMigrate))
@@ -371,7 +371,16 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(namespacesToMigrate, connectionString);                
+                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(namespacesToMigrate, connectionString);
+                
+                // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
+                if (allCollectionsUseObjectId)
+                {
+                    foreach (var mu in unitsToAdd)
+                    {
+                        mu.DataTypeFor_Id = DataType.ObjectId;
+                    }
+                }
             }
 
            

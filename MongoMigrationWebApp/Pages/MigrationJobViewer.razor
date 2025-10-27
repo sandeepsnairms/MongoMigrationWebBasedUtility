@@ -16,6 +16,9 @@
         </button> @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
+
+        
+
         @if (IsResumeEnabled() && !_isLoadingCollections)
         {
             <div class="btn-group mx-2">
@@ -35,7 +38,27 @@
         @if (IsPauseEnabled() && !_isLoadingCollections)
         {
             <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
-
+            
+            @* Worker adjustment dropdown - only for DumpAndRestore jobs with parallel processing enabled *@
+            @if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore && 
+                    MigrationJob?.EnableParallelProcessing == true)
+            {
+                <div class="btn-group mx-2">
+                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="workerAdjustmentDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Adjust parallel processing workers. D=Dump processes, R=Restore processes, I=Insertion workers per restore process">
+                        <i class="bi bi-speedometer2"></i> D:@(MigrationJob?.CurrentDumpWorkers ?? 0), R:@(MigrationJob?.CurrentRestoreWorkers ?? 0), I:@(MigrationJob?.CurrentInsertionWorkers ?? 0)
+                    </button>
+                    <ul class="dropdown-menu" aria-labelledby="workerAdjustmentDropdown">
+                        <li><a class="dropdown-item" @onclick="IncreaseDumpWorkers" title="Increase the number of parallel mongodump processes to speed up data extraction from source"><i class="bi bi-plus-circle"></i> Dump Instances</a></li>
+                        <li><a class="dropdown-item" @onclick="DecreaseDumpWorkers" title="Decrease the number of parallel mongodump processes to reduce load on source"><i class="bi bi-dash-circle"></i> Dump Instances</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" @onclick="IncreaseRestoreWorkers" title="Increase the number of parallel mongorestore processes to speed up data insertion to target"><i class="bi bi-plus-circle"></i> Restore Instances</a></li>
+                        <li><a class="dropdown-item" @onclick="DecreaseRestoreWorkers" title="Decrease the number of parallel mongorestore processes to reduce load on target"><i class="bi bi-dash-circle"></i> Restore Instances</a></li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li><a class="dropdown-item" @onclick="IncreaseInsertionWorkers" title="Increase the number of insertion threads per mongorestore process for faster document insertion"><i class="bi bi-plus-circle"></i> Insertion Workers</a></li>
+                        <li><a class="dropdown-item" @onclick="DecreaseInsertionWorkers" title="Decrease the number of insertion threads per mongorestore process to reduce target database load"><i class="bi bi-dash-circle"></i> Insertion Workers</a></li>
+                    </ul>
+                </div>
+            }
             @if (MigrationJob != null && Helper.IsOnline(MigrationJob) && MigrationJob.SyncBackEnabled && !MigrationJob.ProcessingSyncBack)
             {
                 <button class="btn btn-warning dropdown-toggle" title="Perform Cut Over" disabled="@(!CheckCutoverReadiness())" data-bs-toggle="dropdown" aria-expanded="false">Cut Over</button>
@@ -1382,6 +1405,66 @@ else if (@_showLogBackupFile)
         // MigrationJob.CurrentlyActive = false;
         if (!SaveJobs()) return;
         _refreshTimer = null;
+    }
+
+    private void IncreaseDumpWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentDumpWorkers < 16)
+        {
+            int newCount = MigrationJob.CurrentDumpWorkers + 1;
+            JobManager.AdjustDumpWorkers(newCount);
+            StateHasChanged();
+        }
+    }
+
+    private void DecreaseDumpWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentDumpWorkers > 1)
+        {
+            int newCount = MigrationJob.CurrentDumpWorkers - 1;
+            JobManager.AdjustDumpWorkers(newCount);
+            StateHasChanged();
+        }
+    }
+
+    private void IncreaseRestoreWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentRestoreWorkers < 16)
+        {
+            int newCount = MigrationJob.CurrentRestoreWorkers + 1;
+            JobManager.AdjustRestoreWorkers(newCount);
+            StateHasChanged();
+        }
+    }
+
+    private void DecreaseRestoreWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentRestoreWorkers > 1)
+        {
+            int newCount = MigrationJob.CurrentRestoreWorkers - 1;
+            JobManager.AdjustRestoreWorkers(newCount);
+            StateHasChanged();
+        }
+    }
+
+    private void IncreaseInsertionWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentInsertionWorkers < 16)
+        {
+            int newCount = MigrationJob.CurrentInsertionWorkers + 1;
+            JobManager.AdjustInsertionWorkers(newCount);
+            StateHasChanged();
+        }
+    }
+
+    private void DecreaseInsertionWorkers()
+    {
+        if (MigrationJob != null && MigrationJob.CurrentInsertionWorkers > 1)
+        {
+            int newCount = MigrationJob.CurrentInsertionWorkers - 1;
+            JobManager.AdjustInsertionWorkers(newCount);
+            StateHasChanged();
+        }
     }
 
     private bool NoOtherActiveJobs()
