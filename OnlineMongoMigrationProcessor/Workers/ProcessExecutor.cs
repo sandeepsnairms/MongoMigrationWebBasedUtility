@@ -155,6 +155,16 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (!string.IsNullOrEmpty(docsProcessed) && int.TryParse(docsProcessed, out count) && count > 0)
             {
                 percent = Math.Round((double)count / targetCount * 100, 3);
+                
+                // Update chunk counts so timer can calculate overall progress
+                if (processType == "MongoRestore")
+                {
+                    chunk.RestoredSuccessDocCount = count;
+                }
+                else
+                {
+                    chunk.DumpResultDocCount = count;
+                }
             }
             //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
             if (percent == 100 & processType == "MongoRestore")
@@ -166,6 +176,21 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (percent > 0 && targetCount>0)
             {
                 _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {percent}%");
+                
+                // Immediately calculate and update percentage from all chunks
+                if (processType == "MongoRestore")
+                {
+                    mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
+                    if (mu.RestorePercent >= 99.99)
+                        mu.RestoreComplete = true;
+                }
+                else
+                {
+                    mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false);
+                    if (mu.DumpPercent >= 99.99)
+                        mu.DumpComplete = true;
+                }
+                jobList.Save();
                 
                 // Ensure timer is running for this migration unit to handle percentage updates
                 EnsurePercentageTimerRunning(mu, jobList, processType);
@@ -194,10 +219,10 @@ namespace OnlineMongoMigrationProcessor.Workers
         }
 
         /// <summary>
-        /// Calculates overall restore percent by checking all chunks (active and completed).
-        /// Called periodically to get accurate progress when multiple chunks run in parallel.
+        /// Calculates overall percent from all chunks by checking their current state.
+        /// Used by timer to recalculate overall progress for dump or restore operations.
         /// </summary>
-        private static double CalculateOverallRestorePercent(MigrationUnit mu, int currentChunkIndex, double currentChunkPercent)
+        private static double CalculateOverallPercentFromAllChunks(MigrationUnit mu, bool isRestore)
         {
             double totalPercent = 0;
             long totalDocs = Helper.GetMigrationUnitDocCount(mu);
@@ -209,127 +234,36 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var c = mu.MigrationChunks[i];
                 double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
                 
-                if (i == currentChunkIndex)
+                if (isRestore)
                 {
-                    // Current chunk: use live percent from console output
-                    totalPercent += currentChunkPercent * chunkContrib;
+                    if (c.IsUploaded == true)
+                    {
+                        // Completed chunk: 100%
+                        totalPercent += 100 * chunkContrib;
+                    }
+                    else if (c.RestoredSuccessDocCount > 0)
+                    {
+                        // In-progress chunk: calculate from restored count
+                        double chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / c.DumpQueryDocCount * 100);
+                        totalPercent += chunkPercent * chunkContrib;
+                    }
+                    // else: not started, contributes 0%
                 }
-                else if (c.IsUploaded == true)
+                else // Dump
                 {
-                    // Completed chunk: 100%
-                    totalPercent += 100 * chunkContrib;
+                    if (c.IsDownloaded == true)
+                    {
+                        // Completed chunk: 100%
+                        totalPercent += 100 * chunkContrib;
+                    }
+                    else if (c.DumpResultDocCount > 0)
+                    {
+                        // In-progress chunk: calculate from dumped count
+                        double chunkPercent = Math.Min(100, (double)c.DumpResultDocCount / c.DumpQueryDocCount * 100);
+                        totalPercent += chunkPercent * chunkContrib;
+                    }
+                    // else: not started, contributes 0%
                 }
-                else if (c.RestoredSuccessDocCount > 0)
-                {
-                    // In-progress chunk: calculate from restored count
-                    double chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / c.DumpQueryDocCount * 100);
-                    totalPercent += chunkPercent * chunkContrib;
-                }
-                // else: not started, contributes 0%
-            }
-            
-            return Math.Min(100, totalPercent);
-        }
-
-        /// <summary>
-        /// Calculates overall restore percent from all chunks without a specific current chunk.
-        /// Used by timer to recalculate overall progress.
-        /// </summary>
-        private static double CalculateOverallRestorePercentFromAllChunks(MigrationUnit mu)
-        {
-            double totalPercent = 0;
-            long totalDocs = Helper.GetMigrationUnitDocCount(mu);
-            
-            if (totalDocs == 0) return 0;
-            
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
-            {
-                var c = mu.MigrationChunks[i];
-                double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
-                
-                if (c.IsUploaded == true)
-                {
-                    // Completed chunk: 100%
-                    totalPercent += 100 * chunkContrib;
-                }
-                else if (c.RestoredSuccessDocCount > 0)
-                {
-                    // In-progress chunk: calculate from restored count
-                    double chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / c.DumpQueryDocCount * 100);
-                    totalPercent += chunkPercent * chunkContrib;
-                }
-                // else: not started, contributes 0%
-            }
-            
-            return Math.Min(100, totalPercent);
-        }
-
-        /// <summary>
-        /// Calculates overall dump percent by checking all chunks (active and completed).
-        /// Called periodically to get accurate progress when multiple chunks run in parallel.
-        /// </summary>
-        private static double CalculateOverallDumpPercent(MigrationUnit mu, int currentChunkIndex, double currentChunkPercent)
-        {
-            double totalPercent = 0;
-            long totalDocs = Helper.GetMigrationUnitDocCount(mu);
-            
-            if (totalDocs == 0) return 0;
-            
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
-            {
-                var c = mu.MigrationChunks[i];
-                double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
-                
-                if (i == currentChunkIndex)
-                {
-                    // Current chunk: use live percent from console output
-                    totalPercent += currentChunkPercent * chunkContrib;
-                }
-                else if (c.IsDownloaded == true)
-                {
-                    // Completed chunk: 100%
-                    totalPercent += 100 * chunkContrib;
-                }
-                else if (c.DumpResultDocCount > 0)
-                {
-                    // In-progress chunk: calculate from dumped count
-                    double chunkPercent = Math.Min(100, (double)c.DumpResultDocCount / c.DumpQueryDocCount * 100);
-                    totalPercent += chunkPercent * chunkContrib;
-                }
-                // else: not started, contributes 0%
-            }
-            
-            return Math.Min(100, totalPercent);
-        }
-
-        /// <summary>
-        /// Calculates overall dump percent from all chunks without a specific current chunk.
-        /// Used by timer to recalculate overall progress.
-        /// </summary>
-        private static double CalculateOverallDumpPercentFromAllChunks(MigrationUnit mu)
-        {
-            double totalPercent = 0;
-            long totalDocs = Helper.GetMigrationUnitDocCount(mu);
-            
-            if (totalDocs == 0) return 0;
-            
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
-            {
-                var c = mu.MigrationChunks[i];
-                double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
-                
-                if (c.IsDownloaded == true)
-                {
-                    // Completed chunk: 100%
-                    totalPercent += 100 * chunkContrib;
-                }
-                else if (c.DumpResultDocCount > 0)
-                {
-                    // In-progress chunk: calculate from dumped count
-                    double chunkPercent = Math.Min(100, (double)c.DumpResultDocCount / c.DumpQueryDocCount * 100);
-                    totalPercent += chunkPercent * chunkContrib;
-                }
-                // else: not started, contributes 0%
             }
             
             return Math.Min(100, totalPercent);
@@ -375,7 +309,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (hasActiveChunks)
                             {
                                 // Recalculate overall restore percent from all chunks
-                                mu.RestorePercent = CalculateOverallRestorePercentFromAllChunks(mu);
+                                double previousPercent = mu.RestorePercent;
+                                mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
                                 if (mu.RestorePercent >= 99.99)
                                     mu.RestoreComplete = true;
                                 jobList.Save();
@@ -396,7 +331,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (hasActiveChunks)
                             {
                                 // Recalculate overall dump percent from all chunks
-                                mu.DumpPercent = CalculateOverallDumpPercentFromAllChunks(mu);
+                                double previousPercent = mu.DumpPercent;
+                                mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false);
                                 if (mu.DumpPercent >= 99.99)
                                     mu.DumpComplete = true;
                                 jobList.Save();

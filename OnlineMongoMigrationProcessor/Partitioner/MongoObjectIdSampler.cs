@@ -73,7 +73,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
 
             // Get total count first
-            var totalCount = await _collection.CountDocumentsAsync(filter, cancellationToken: cts.Token);
+            var totalCount = await _collection.CountAsync(filter, cancellationToken: cts.Token);
 
             // Return empty list if total records < 1K
             if (totalCount < MIN_RECORDS_PER_RANGE)

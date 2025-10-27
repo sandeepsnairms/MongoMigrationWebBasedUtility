@@ -33,6 +33,10 @@ namespace OnlineMongoMigrationProcessor
         private SemaphoreSlim? _dumpSemaphore;
         private SemaphoreSlim? _restoreSemaphore;
         
+        // Cancellation tokens for semaphore blocker tasks
+        private CancellationTokenSource? _dumpBlockerCts;
+        private CancellationTokenSource? _restoreBlockerCts;
+        
         // Thread-safe locks
         private readonly object _pidLock = new object();
         private readonly object _progressLock = new object();
@@ -112,7 +116,7 @@ namespace OnlineMongoMigrationProcessor
             // Initialize insertion workers (will be calculated per chunk based on doc count)
             if (!_job.MaxInsertionWorkersPerCollection.HasValue)
             {
-                _job.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
+                _job.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 4, 8);
             }
             else
             {
@@ -144,17 +148,53 @@ namespace OnlineMongoMigrationProcessor
             
             if (difference > 0)
             {
-                // Increase: Release semaphore slots to allow more workers
-                for (int i = 0; i < difference; i++)
-                {
-                    try { _dumpSemaphore?.Release(); } catch { }
-                }
+                // Cancel any existing blocker task first
+                _dumpBlockerCts?.Cancel();
+                _dumpBlockerCts?.Dispose();
+                _dumpBlockerCts = null;
+                
+                // Increase: Create a new semaphore with increased capacity
+                // Get current available count before disposing
+                int currentAvailable = _dumpSemaphore?.CurrentCount ?? newCount;
+                _dumpSemaphore?.Dispose();
+                
+                // New semaphore has higher max count, start with previous available + difference
+                _dumpSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
+                
                 _log.WriteLine($"Increased dump workers to {newCount} (+{difference})");
             }
             else
             {
-                // Decrease: Workers will naturally reduce as they finish tasks
-                // The semaphore will limit new acquisitions
+                // Decrease: Consume semaphore slots to prevent new workers from starting
+                // Cancel any previous blocker task and create a new one
+                _dumpBlockerCts?.Cancel();
+                _dumpBlockerCts?.Dispose();
+                _dumpBlockerCts = new CancellationTokenSource();
+                
+                var cts = _dumpBlockerCts;
+                Task.Run(async () =>
+                {
+                    int acquiredCount = 0;
+                    try
+                    {
+                        for (int i = 0; i < Math.Abs(difference); i++)
+                        {
+                            await _dumpSemaphore!.WaitAsync(cts.Token);
+                            acquiredCount++;
+                            _log.WriteLine($"Consumed dump semaphore slot {acquiredCount}/{Math.Abs(difference)} to enforce limit");
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Release any slots we acquired before cancellation
+                        for (int i = 0; i < acquiredCount; i++)
+                        {
+                            try { _dumpSemaphore?.Release(); } catch { }
+                        }
+                        _log.WriteLine($"Dump blocker task cancelled (limit increased), released {acquiredCount} slots");
+                    }
+                    catch { }
+                }, cts.Token);
                 _log.WriteLine($"Decreased dump worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
             }
             
@@ -179,16 +219,53 @@ namespace OnlineMongoMigrationProcessor
             
             if (difference > 0)
             {
-                // Increase: Release semaphore slots to allow more workers
-                for (int i = 0; i < difference; i++)
-                {
-                    try { _restoreSemaphore?.Release(); } catch { }
-                }
+                // Cancel any existing blocker task first
+                _restoreBlockerCts?.Cancel();
+                _restoreBlockerCts?.Dispose();
+                _restoreBlockerCts = null;
+                
+                // Increase: Create a new semaphore with increased capacity
+                // Get current available count before disposing
+                int currentAvailable = _restoreSemaphore?.CurrentCount ?? newCount;
+                _restoreSemaphore?.Dispose();
+                
+                // New semaphore has higher max count, start with previous available + difference
+                _restoreSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
+                
                 _log.WriteLine($"Increased restore workers to {newCount} (+{difference})");
             }
             else
             {
-                // Decrease: Workers will naturally reduce as they finish tasks
+                // Decrease: Consume semaphore slots to prevent new workers from starting
+                // Cancel any previous blocker task and create a new one
+                _restoreBlockerCts?.Cancel();
+                _restoreBlockerCts?.Dispose();
+                _restoreBlockerCts = new CancellationTokenSource();
+                
+                var cts = _restoreBlockerCts;
+                Task.Run(async () =>
+                {
+                    int acquiredCount = 0;
+                    try
+                    {
+                        for (int i = 0; i < Math.Abs(difference); i++)
+                        {
+                            await _restoreSemaphore!.WaitAsync(cts.Token);
+                            acquiredCount++;
+                            _log.WriteLine($"Consumed restore semaphore slot {acquiredCount}/{Math.Abs(difference)} to enforce limit");
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Release any slots we acquired before cancellation
+                        for (int i = 0; i < acquiredCount; i++)
+                        {
+                            try { _restoreSemaphore?.Release(); } catch { }
+                        }
+                        _log.WriteLine($"Restore blocker task cancelled (limit increased), released {acquiredCount} slots");
+                    }
+                    catch { }
+                }, cts.Token);
                 _log.WriteLine($"Decreased restore worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
             }
             
@@ -473,10 +550,12 @@ namespace OnlineMongoMigrationProcessor
                     return TaskResult.Canceled;
                 }
                 
+                bool semaphoreAcquired = false;
                 try
                 {
                     // Acquire semaphore slot
                     await _dumpSemaphore!.WaitAsync(_cts.Token);
+                    semaphoreAcquired = true;
                     
                     try
                     {
@@ -520,8 +599,18 @@ namespace OnlineMongoMigrationProcessor
                     }
                     finally
                     {
-                        // Always release semaphore
-                        _dumpSemaphore.Release();
+                        // Always release semaphore if it was acquired
+                        if (semaphoreAcquired)
+                        {
+                            try
+                            {
+                                _dumpSemaphore.Release();
+                            }
+                            catch (SemaphoreFullException ex)
+                            {
+                                _log.WriteLine($"Dump worker {workerId} chunk {workItem.ChunkIndex} semaphore overflow on release: {ex.Message}. Current count may already be at max.", LogType.Error);
+                            }
+                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -698,10 +787,12 @@ namespace OnlineMongoMigrationProcessor
                     return TaskResult.Canceled;
                 }
                 
+                bool semaphoreAcquired = false;
                 try
                 {
                     // Acquire semaphore slot
                     await _restoreSemaphore!.WaitAsync(_cts.Token);
+                    semaphoreAcquired = true;
                     
                     try
                     {
@@ -744,8 +835,18 @@ namespace OnlineMongoMigrationProcessor
                     }
                     finally
                     {
-                        // Always release semaphore
-                        _restoreSemaphore.Release();
+                        // Always release semaphore if it was acquired
+                        if (semaphoreAcquired)
+                        {
+                            try
+                            {
+                                _restoreSemaphore.Release();
+                            }
+                            catch (SemaphoreFullException ex)
+                            {
+                                _log.WriteLine($"Restore worker {workerId} chunk {workItem.ChunkIndex} semaphore overflow on release: {ex.Message}. Current count may already be at max.", LogType.Error);
+                            }
+                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -958,16 +1059,22 @@ namespace OnlineMongoMigrationProcessor
             // Determine insertion workers based on configuration or auto-calculate
             int insertionWorkers = 1; // Default
             
-            if (_job.MaxInsertionWorkersPerCollection.HasValue && docCount > 100_000)
+            if (_job.MaxInsertionWorkersPerCollection.HasValue)
             {
                 // Use configured value
                 insertionWorkers = _job.MaxInsertionWorkersPerCollection.Value;
             }
+            else
+            {
+                // Use the calculated default from constructor
+                insertionWorkers = _job.CurrentInsertionWorkers;
+            }
+            
+            _log.WriteLine($"Restore will use {insertionWorkers} insertion worker(s) for {dbName}.{colName}[{chunkIndex}] ({docCount} docs)");
             
             if (insertionWorkers > 1)
             {
                 args = $"{args} --numInsertionWorkersPerCollection={insertionWorkers}";
-                _log.WriteLine($"Restore will use {insertionWorkers} insertion workers for {dbName}.{colName}[{chunkIndex}]");
             }
 
             try
@@ -1195,10 +1302,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
 
-                    if(!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
-                        mu.BulkCopyEndedOn = DateTime.UtcNow;
-
-
+                    // BulkCopyEndedOn will be set after restore completes, not here
                 }
             }
             else if (mu.DumpComplete && !mu.RestoreComplete && !_cts.Token.IsCancellationRequested)
@@ -1274,9 +1378,14 @@ namespace OnlineMongoMigrationProcessor
                         mu.RestoreGap = Helper.GetMigrationUnitDocCount(mu) - restoredDocs;
                         mu.RestorePercent = 100;
                         mu.RestoreComplete = true;
+                        
+                        // Set BulkCopyEndedOn only after both dump and restore are complete
                         if (mu.DumpComplete && mu.RestoreComplete)
                         {
-                            mu.BulkCopyEndedOn = DateTime.UtcNow;
+                            if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
+                            {
+                                mu.BulkCopyEndedOn = DateTime.UtcNow;
+                            }
                         }
                         _jobList.Save(); // Persist state
                     }
@@ -1454,6 +1563,15 @@ namespace OnlineMongoMigrationProcessor
             
             // Kill all active processes first
             KillAllActiveProcesses();
+            
+            // Cancel and dispose blocker tasks
+            _dumpBlockerCts?.Cancel();
+            _dumpBlockerCts?.Dispose();
+            _dumpBlockerCts = null;
+            
+            _restoreBlockerCts?.Cancel();
+            _restoreBlockerCts?.Dispose();
+            _restoreBlockerCts = null;
             
             // Dispose semaphores
             _dumpSemaphore?.Dispose();
