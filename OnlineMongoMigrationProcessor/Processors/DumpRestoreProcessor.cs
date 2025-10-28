@@ -153,13 +153,29 @@ namespace OnlineMongoMigrationProcessor
                 _dumpBlockerCts?.Dispose();
                 _dumpBlockerCts = null;
                 
-                // Increase: Create a new semaphore with increased capacity
-                // Get current available count before disposing
-                int currentAvailable = _dumpSemaphore?.CurrentCount ?? newCount;
-                _dumpSemaphore?.Dispose();
-                
-                // New semaphore has higher max count, start with previous available + difference
-                _dumpSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
+                // Increase: Don't dispose old semaphore, just release additional slots
+                // This way existing workers can continue using it
+                for (int i = 0; i < difference; i++)
+                {
+                    try
+                    {
+                        _dumpSemaphore?.Release();
+                        _log.WriteLine($"Released dump semaphore slot {i + 1}/{difference} to increase capacity");
+                    }
+                    catch (SemaphoreFullException)
+                    {
+                        // Semaphore is at max, need to create new one with higher max
+                        int currentCount = _dumpSemaphore?.CurrentCount ?? 0;
+                        int inUse = _maxParallelDumpInstances - difference - currentCount; // Old max - old available = in use
+                        
+                        _dumpSemaphore?.Dispose();
+                        // New semaphore: in-use slots are 'taken', rest are available
+                        _dumpSemaphore = new SemaphoreSlim(newCount - inUse, newCount);
+                        
+                        _log.WriteLine($"Created new dump semaphore with max={newCount}, available={newCount - inUse} (estimated {inUse} in use)");
+                        break;
+                    }
+                }
                 
                 _log.WriteLine($"Increased dump workers to {newCount} (+{difference})");
             }
@@ -224,13 +240,29 @@ namespace OnlineMongoMigrationProcessor
                 _restoreBlockerCts?.Dispose();
                 _restoreBlockerCts = null;
                 
-                // Increase: Create a new semaphore with increased capacity
-                // Get current available count before disposing
-                int currentAvailable = _restoreSemaphore?.CurrentCount ?? newCount;
-                _restoreSemaphore?.Dispose();
-                
-                // New semaphore has higher max count, start with previous available + difference
-                _restoreSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
+                // Increase: Don't dispose old semaphore, just release additional slots
+                // This way existing workers can continue using it
+                for (int i = 0; i < difference; i++)
+                {
+                    try
+                    {
+                        _restoreSemaphore?.Release();
+                        _log.WriteLine($"Released restore semaphore slot {i + 1}/{difference} to increase capacity");
+                    }
+                    catch (SemaphoreFullException)
+                    {
+                        // Semaphore is at max, need to create new one with higher max
+                        int currentCount = _restoreSemaphore?.CurrentCount ?? 0;
+                        int inUse = _maxParallelRestoreInstances - difference - currentCount; // Old max - old available = in use
+                        
+                        _restoreSemaphore?.Dispose();
+                        // New semaphore: in-use slots are 'taken', rest are available
+                        _restoreSemaphore = new SemaphoreSlim(newCount - inUse, newCount);
+                        
+                        _log.WriteLine($"Created new restore semaphore with max={newCount}, available={newCount - inUse} (estimated {inUse} in use)");
+                        break;
+                    }
+                }
                 
                 _log.WriteLine($"Increased restore workers to {newCount} (+{difference})");
             }
