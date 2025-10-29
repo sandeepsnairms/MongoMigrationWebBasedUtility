@@ -11,11 +11,19 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-
         public CopyProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
             : base(log, jobList, job, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
+        }
+
+        /// <summary>
+        /// Override to handle controlled pause for CopyProcessor
+        /// </summary>
+        public override void InitiateControlledPause()
+        {
+            base.InitiateControlledPause();
+            _log.WriteLine("CopyProcessor: Controlled pause initiated");
         }
 
         // Custom exception handler delegate with logic to control retry flow
@@ -151,6 +159,13 @@ namespace OnlineMongoMigrationProcessor
             {
                 for (int i = 0; i < mu.MigrationChunks.Count; i++)
                 {
+                    // Check for controlled pause before starting new chunk
+                    if (_controlledPauseRequested)
+                    {
+                        _log.WriteLine($"Controlled pause: Stopping before chunk {i}, {mu.MigrationChunks.Count - i} chunks not started");
+                        break;
+                    }
+                    
                     _cts.Token.ThrowIfCancellationRequested();
 
                     double initialPercent = ((double)100 / mu.MigrationChunks.Count) * i;
@@ -167,7 +182,6 @@ namespace OnlineMongoMigrationProcessor
                             _log
                         );
 
-
                         if (result== TaskResult.Abort || result== TaskResult.FailedAfterRetries)
                         {
                             _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName}[{i}] failed after multiple attempts.", LogType.Error);
@@ -179,6 +193,14 @@ namespace OnlineMongoMigrationProcessor
                     {
                         ctx.DownloadCount += mu.MigrationChunks[i].DumpQueryDocCount;
                     }
+                }
+
+                // Check if controlled pause completed
+                if (_controlledPauseRequested && mu.DumpComplete)
+                {
+                    _log.WriteLine("Controlled pause completed for CopyProcessor");
+                    StopProcessing();
+                    return TaskResult.Success;
                 }
 
                 mu.SourceCountDuringCopy = mu.MigrationChunks.Sum(chunk => (long)(chunk.Segments?.Sum(seg => seg.QueryDocCount) ?? 0));
