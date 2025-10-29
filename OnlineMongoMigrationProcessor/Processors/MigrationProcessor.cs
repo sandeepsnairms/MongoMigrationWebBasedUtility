@@ -21,6 +21,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected CancellationTokenSource _cts;
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
         protected bool _postUploadCSProcessing = false;
+        protected bool _controlledPauseRequested = false;
         protected Log _log;
 
         public bool ProcessRunning { get; set; }
@@ -42,7 +43,9 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
 
             if (_job != null)
+            {
                 _job.IsStarted = false;
+            }
 
             _jobList?.Save();
 
@@ -53,6 +56,15 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             if (_changeStreamProcessor != null)
                 _changeStreamProcessor.ExecutionCancelled = true;
+        }
+
+        /// <summary>
+        /// Signals processor to stop accepting new work but complete current tasks
+        /// </summary>
+        public virtual void InitiateControlledPause()
+        {
+            _controlledPauseRequested = true;
+            _log.WriteLine("Controlled pause initiated in MigrationProcessor");
         }
 
         protected ProcessorContext SetProcessorContext(MigrationUnit mu, string sourceConnectionString, string targetConnectionString)
@@ -184,8 +196,17 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                             if (!Helper.IsOnline(_job))
                             {
-                                _log.WriteLine($"{migrationJob.Id} completed.");
-                                migrationJob.IsCompleted = true;
+                                // Don't mark as completed if this is a controlled pause
+                                if (!_controlledPauseRequested)
+                                {
+                                    _log.WriteLine($"{migrationJob.Id} completed.");
+                                    migrationJob.IsCompleted = true;
+                                }
+                                else
+                                {
+                                    _log.WriteLine($"{migrationJob.Id} paused (controlled pause) - can be resumed");
+                                }
+                                
                                 StopProcessing(true);
                                 _jobList.Save();
                             }

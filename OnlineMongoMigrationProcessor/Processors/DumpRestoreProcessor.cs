@@ -28,14 +28,8 @@ namespace OnlineMongoMigrationProcessor
         private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
 
         // Parallel processing infrastructure
-        private int _maxParallelDumpInstances;
-        private int _maxParallelRestoreInstances;
-        private SemaphoreSlim? _dumpSemaphore;
-        private SemaphoreSlim? _restoreSemaphore;
-        
-        // Cancellation tokens for semaphore blocker tasks
-        private CancellationTokenSource? _dumpBlockerCts;
-        private CancellationTokenSource? _restoreBlockerCts;
+        private WorkerPoolManager? _dumpPool;
+        private WorkerPoolManager? _restorePool;
         
         // Thread-safe locks
         private readonly object _pidLock = new object();
@@ -48,6 +42,18 @@ namespace OnlineMongoMigrationProcessor
         // Chunk work queues
         private readonly ConcurrentQueue<ChunkWorkItem> _dumpQueue = new();
         private readonly ConcurrentQueue<ChunkWorkItem> _restoreQueue = new();
+        
+        // Active worker tracking
+        private readonly List<Task<TaskResult>> _activeDumpWorkers = new();
+        private readonly List<Task<TaskResult>> _activeRestoreWorkers = new();
+        private readonly object _workerLock = new object();
+        
+        // Worker context for dynamic spawning (shared between dump and restore)
+        private IMongoCollection<BsonDocument>? _currentCollection;
+        private string? _currentFolder;
+        private MigrationUnit? _currentMigrationUnit;  // Contains DatabaseName and CollectionName
+        private int _nextDumpWorkerId = 1;
+        private int _nextRestoreWorkerId = 1;
         
         // Progress tracking
         private DateTime _lastSave = DateTime.MinValue;
@@ -91,43 +97,44 @@ namespace OnlineMongoMigrationProcessor
             : base(log, jobList, job, sourceClient, config)
         {
             // Calculate optimal concurrency
+            int maxDumpWorkers, maxRestoreWorkers;
             if (job.EnableParallelProcessing)
             {
-                _maxParallelDumpInstances = CalculateOptimalConcurrency(
+                maxDumpWorkers = CalculateOptimalConcurrency(
                     job.MaxParallelDumpProcesses,
                     isDump: true
                 );
                 
-                _maxParallelRestoreInstances = CalculateOptimalConcurrency(
+                maxRestoreWorkers = CalculateOptimalConcurrency(
                     job.MaxParallelRestoreProcesses,
                     isDump: false
                 );
             }
             else
             {
-                _maxParallelDumpInstances = 1;
-                _maxParallelRestoreInstances = 1;
+                maxDumpWorkers = 1;
+                maxRestoreWorkers = 1;
             }
             
-            // Store initial values in job for UI monitoring
-            _job.CurrentDumpWorkers = _maxParallelDumpInstances;
-            _job.CurrentRestoreWorkers = _maxParallelRestoreInstances;
+            // Initialize worker pools
+            _dumpPool = new WorkerPoolManager(_log, "Dump", maxDumpWorkers);
+            _restorePool = new WorkerPoolManager(_log, "Restore", maxRestoreWorkers);
             
-            // Initialize insertion workers (will be calculated per chunk based on doc count)
+            // Store initial values in job for UI monitoring
+            _job.CurrentDumpWorkers = maxDumpWorkers;
+            _job.CurrentRestoreWorkers = maxRestoreWorkers;
+            
+            
             if (!_job.MaxInsertionWorkersPerCollection.HasValue)
             {
-                _job.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 4, 8);
+                _job.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
             }
             else
             {
                 _job.CurrentInsertionWorkers = _job.MaxInsertionWorkersPerCollection.Value;
             }
             
-            // Initialize semaphores
-            _dumpSemaphore = new SemaphoreSlim(_maxParallelDumpInstances, _maxParallelDumpInstances);
-            _restoreSemaphore = new SemaphoreSlim(_maxParallelRestoreInstances, _maxParallelRestoreInstances);
-            
-            _log.WriteLine($"Parallel processing: Dump workers={_maxParallelDumpInstances}, Restore workers={_maxParallelRestoreInstances}");
+            _log.WriteLine($"Parallel processing: Dump workers={maxDumpWorkers}, Restore workers={maxRestoreWorkers}");
         }
 
         /// <summary>
@@ -138,64 +145,39 @@ namespace OnlineMongoMigrationProcessor
             if (newCount < 1) newCount = 1;
             if (newCount > 16) newCount = 16; // Safety limit
             
-            int difference = newCount - _maxParallelDumpInstances;
+            int difference = _dumpPool!.AdjustPoolSize(newCount);
             
             if (difference == 0) return;
             
-            _maxParallelDumpInstances = newCount;
             _job.CurrentDumpWorkers = newCount;
             _job.MaxParallelDumpProcesses = newCount; // Update config too
             
-            if (difference > 0)
+            // Spawn new worker tasks if capacity increased and processing is active
+            if (difference > 0 && _currentCollection != null && !_dumpQueue.IsEmpty)
             {
-                // Cancel any existing blocker task first
-                _dumpBlockerCts?.Cancel();
-                _dumpBlockerCts?.Dispose();
-                _dumpBlockerCts = null;
-                
-                // Increase: Create a new semaphore with increased capacity
-                // Get current available count before disposing
-                int currentAvailable = _dumpSemaphore?.CurrentCount ?? newCount;
-                _dumpSemaphore?.Dispose();
-                
-                // New semaphore has higher max count, start with previous available + difference
-                _dumpSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
-                
-                _log.WriteLine($"Increased dump workers to {newCount} (+{difference})");
-            }
-            else
-            {
-                // Decrease: Consume semaphore slots to prevent new workers from starting
-                // Cancel any previous blocker task and create a new one
-                _dumpBlockerCts?.Cancel();
-                _dumpBlockerCts?.Dispose();
-                _dumpBlockerCts = new CancellationTokenSource();
-                
-                var cts = _dumpBlockerCts;
-                Task.Run(async () =>
+                lock (_workerLock)
                 {
-                    int acquiredCount = 0;
-                    try
+                    _log.WriteLine($"Spawning {difference} additional dump workers to process queue");
+                    
+                    for (int i = 0; i < difference; i++)
                     {
-                        for (int i = 0; i < Math.Abs(difference); i++)
+                        int workerId = _nextDumpWorkerId++;
+                        var workerTask = Task.Run(async () =>
                         {
-                            await _dumpSemaphore!.WaitAsync(cts.Token);
-                            acquiredCount++;
-                            _log.WriteLine($"Consumed dump semaphore slot {acquiredCount}/{Math.Abs(difference)} to enforce limit");
-                        }
+                            return await DumpWorkerAsync(
+                                workerId,
+                                _currentCollection!,
+                                _currentFolder!,
+                                _job.SourceConnectionString!,
+                                _job.TargetConnectionString!,
+                                _currentMigrationUnit!.DatabaseName,
+                                _currentMigrationUnit!.CollectionName
+                            );
+                        }, _cts.Token);
+                        
+                        _activeDumpWorkers.Add(workerTask);
                     }
-                    catch (OperationCanceledException)
-                    {
-                        // Release any slots we acquired before cancellation
-                        for (int i = 0; i < acquiredCount; i++)
-                        {
-                            try { _dumpSemaphore?.Release(); } catch { }
-                        }
-                        _log.WriteLine($"Dump blocker task cancelled (limit increased), released {acquiredCount} slots");
-                    }
-                    catch { }
-                }, cts.Token);
-                _log.WriteLine($"Decreased dump worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
+                }
             }
             
             _jobList?.Save();
@@ -209,64 +191,38 @@ namespace OnlineMongoMigrationProcessor
             if (newCount < 1) newCount = 1;
             if (newCount > 16) newCount = 16; // Safety limit
             
-            int difference = newCount - _maxParallelRestoreInstances;
+            int difference = _restorePool!.AdjustPoolSize(newCount);
             
             if (difference == 0) return;
             
-            _maxParallelRestoreInstances = newCount;
             _job.CurrentRestoreWorkers = newCount;
             _job.MaxParallelRestoreProcesses = newCount; // Update config too
             
-            if (difference > 0)
+            // Spawn new worker tasks if capacity increased and processing is active
+            if (difference > 0 && _currentFolder != null && !_restoreQueue.IsEmpty)
             {
-                // Cancel any existing blocker task first
-                _restoreBlockerCts?.Cancel();
-                _restoreBlockerCts?.Dispose();
-                _restoreBlockerCts = null;
-                
-                // Increase: Create a new semaphore with increased capacity
-                // Get current available count before disposing
-                int currentAvailable = _restoreSemaphore?.CurrentCount ?? newCount;
-                _restoreSemaphore?.Dispose();
-                
-                // New semaphore has higher max count, start with previous available + difference
-                _restoreSemaphore = new SemaphoreSlim(currentAvailable + difference, newCount);
-                
-                _log.WriteLine($"Increased restore workers to {newCount} (+{difference})");
-            }
-            else
-            {
-                // Decrease: Consume semaphore slots to prevent new workers from starting
-                // Cancel any previous blocker task and create a new one
-                _restoreBlockerCts?.Cancel();
-                _restoreBlockerCts?.Dispose();
-                _restoreBlockerCts = new CancellationTokenSource();
-                
-                var cts = _restoreBlockerCts;
-                Task.Run(async () =>
+                lock (_workerLock)
                 {
-                    int acquiredCount = 0;
-                    try
+                    _log.WriteLine($"Spawning {difference} additional restore workers to process queue");
+                    
+                    for (int i = 0; i < difference; i++)
                     {
-                        for (int i = 0; i < Math.Abs(difference); i++)
+                        int workerId = _nextRestoreWorkerId++;
+                        var workerTask = Task.Run(async () =>
                         {
-                            await _restoreSemaphore!.WaitAsync(cts.Token);
-                            acquiredCount++;
-                            _log.WriteLine($"Consumed restore semaphore slot {acquiredCount}/{Math.Abs(difference)} to enforce limit");
-                        }
+                            return await RestoreWorkerAsync(
+                                workerId,
+                                _restoreQueue,
+                                _currentFolder!,
+                                _job.TargetConnectionString!,
+                                _currentMigrationUnit!.DatabaseName,
+                                _currentMigrationUnit!.CollectionName
+                            );
+                        }, _cts.Token);
+                        
+                        _activeRestoreWorkers.Add(workerTask);
                     }
-                    catch (OperationCanceledException)
-                    {
-                        // Release any slots we acquired before cancellation
-                        for (int i = 0; i < acquiredCount; i++)
-                        {
-                            try { _restoreSemaphore?.Release(); } catch { }
-                        }
-                        _log.WriteLine($"Restore blocker task cancelled (limit increased), released {acquiredCount} slots");
-                    }
-                    catch { }
-                }, cts.Token);
-                _log.WriteLine($"Decreased restore worker limit to {newCount} ({difference}). Active workers will finish current tasks.");
+                }
             }
             
             _jobList?.Save();
@@ -474,7 +430,13 @@ namespace OnlineMongoMigrationProcessor
                 return TaskResult.Success;
             }
             
-            _log.WriteLine($"Starting parallel dump of {sortedChunks.Count} chunks with {_maxParallelDumpInstances} workers");
+            _log.WriteLine($"Starting parallel dump of {sortedChunks.Count} chunks with {_dumpPool!.MaxWorkers} workers");
+            
+            // Store context for dynamic worker spawning
+            _currentCollection = collection;
+            _currentFolder = folder;
+            _currentMigrationUnit = mu;
+            _nextDumpWorkerId = 1;
             
             // Enqueue all chunks
             foreach (var chunk in sortedChunks)
@@ -483,28 +445,44 @@ namespace OnlineMongoMigrationProcessor
             }
             
             // Start worker tasks
-            var workerTasks = new List<Task<TaskResult>>();
-            for (int i = 0; i < Math.Min(_maxParallelDumpInstances, sortedChunks.Count); i++)
+            Task<TaskResult>[] workerTaskArray;
+            lock (_workerLock)
             {
-                int workerId = i + 1;
-                var workerTask = Task.Run(async () =>
+                _activeDumpWorkers.Clear();
+                for (int i = 0; i < Math.Min(_dumpPool.MaxWorkers, sortedChunks.Count); i++)
                 {
-                    return await DumpWorkerAsync(
-                        workerId, 
-                        collection, 
-                        folder, 
-                        sourceConnectionString, 
-                        targetConnectionString,
-                        dbName, 
-                        colName
-                    );
-                }, _cts.Token);
-                
-                workerTasks.Add(workerTask);
+                    int workerId = _nextDumpWorkerId++;
+                    var workerTask = Task.Run(async () =>
+                    {
+                        return await DumpWorkerAsync(
+                            workerId, 
+                            collection, 
+                            folder, 
+                            sourceConnectionString, 
+                            targetConnectionString,
+                            dbName, 
+                            colName
+                        );
+                    }, _cts.Token);
+                    
+                    _activeDumpWorkers.Add(workerTask);
+                }
+                workerTaskArray = _activeDumpWorkers.ToArray();
             }
             
             // Wait for all workers to complete
-            var results = await Task.WhenAll(workerTasks);
+            var results = await Task.WhenAll(workerTaskArray);
+            
+            // Clear context
+            _currentCollection = null;
+            
+            // Check for controlled pause - stop after current workers finish
+            if (_controlledPauseRequested)
+            {
+                _log.WriteLine("Controlled pause - dump workers stopped after completing active chunks");
+                StopProcessing();
+                return TaskResult.Success;
+            }
             
             // Check if any worker failed
             if (results.Any(r => r == TaskResult.FailedAfterRetries || r == TaskResult.Abort))
@@ -542,75 +520,81 @@ namespace OnlineMongoMigrationProcessor
         {
             _log.WriteLine($"Dump worker {workerId} started");
             
-            while (_dumpQueue.TryDequeue(out var workItem))
+            while (true)
             {
+                // Check for controlled pause first
+                if (_controlledPauseRequested)
+                {
+                    _log.WriteLine($"Dump worker {workerId}: Controlled pause active - exiting");
+                    break;
+                }
+                
                 if (_cts.Token.IsCancellationRequested)
                 {
                     _log.WriteLine($"Dump worker {workerId} cancelled");
                     return TaskResult.Canceled;
                 }
                 
+                ChunkWorkItem? workItem = null;
                 bool semaphoreAcquired = false;
                 try
                 {
-                    // Acquire semaphore slot
-                    await _dumpSemaphore!.WaitAsync(_cts.Token);
+                    // Acquire semaphore slot first
+                    await _dumpPool!.WaitAsync(_cts.Token);
                     semaphoreAcquired = true;
                     
-                    try
+                    // Now try to dequeue work
+                    if (!_dumpQueue.TryDequeue(out workItem))
                     {
-                        _log.WriteLine($"Worker {workerId} processing chunk {workItem.ChunkIndex}");
-                        
-                        double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
-                        double contributionFactor = 1.0 / workItem.MigrationUnit.MigrationChunks.Count;
-                        
-                        TaskResult result = await new RetryHelper().ExecuteTask(
-                            () => DumpChunkAsync(
-                                workItem.MigrationUnit, 
-                                workItem.ChunkIndex, 
-                                collection, 
-                                folder,
-                                sourceConnectionString, 
-                                targetConnectionString, 
-                                initialPercent, 
-                                contributionFactor,
-                                dbName, 
-                                colName
-                            ),
-                            (ex, attemptCount, currentBackoff) => DumpChunk_ExceptionHandler(
-                                ex, attemptCount, "DumpChunk", dbName, colName, workItem.ChunkIndex, currentBackoff
-                            ),
-                            _log
-                        );
-                        
-                        if (result == TaskResult.FailedAfterRetries || result == TaskResult.Abort)
-                        {
-                            _log.WriteLine($"Worker {workerId} failed on chunk {workItem.ChunkIndex}", LogType.Error);
-                            
-                            // Kill all processes on failure
-                            KillAllActiveProcesses();
-                            return TaskResult.FailedAfterRetries;
-                        }
-                        
-                        if (result == TaskResult.Canceled)
-                        {
-                            return TaskResult.Canceled;
-                        }
+                        // No more work, exit
+                        break;
                     }
-                    finally
+                    
+                    // Check again after dequeue in case pause was requested
+                    if (_controlledPauseRequested)
                     {
-                        // Always release semaphore if it was acquired
-                        if (semaphoreAcquired)
-                        {
-                            try
-                            {
-                                _dumpSemaphore.Release();
-                            }
-                            catch (SemaphoreFullException ex)
-                            {
-                                _log.WriteLine($"Dump worker {workerId} chunk {workItem.ChunkIndex} semaphore overflow on release: {ex.Message}. Current count may already be at max.", LogType.Error);
-                            }
-                        }
+                        // Put the work item back for later
+                        _dumpQueue.Enqueue(workItem);
+                        _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning chunk {workItem.ChunkIndex}");
+                        break;
+                    }
+                    
+                    _log.WriteLine($"Worker {workerId} processing chunk {workItem.ChunkIndex}");
+                    
+                    double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
+                    double contributionFactor = 1.0 / workItem.MigrationUnit.MigrationChunks.Count;
+                    
+                    TaskResult result = await new RetryHelper().ExecuteTask(
+                        () => DumpChunkAsync(
+                            workItem.MigrationUnit, 
+                            workItem.ChunkIndex, 
+                            collection, 
+                            folder,
+                            sourceConnectionString, 
+                            targetConnectionString, 
+                            initialPercent, 
+                            contributionFactor,
+                            dbName, 
+                            colName
+                        ),
+                        (ex, attemptCount, currentBackoff) => DumpChunk_ExceptionHandler(
+                            ex, attemptCount, "DumpChunk", dbName, colName, workItem.ChunkIndex, currentBackoff
+                        ),
+                        _log
+                    );
+                    
+                    if (result == TaskResult.FailedAfterRetries || result == TaskResult.Abort)
+                    {
+                        _log.WriteLine($"Worker {workerId} failed on chunk {workItem.ChunkIndex}", LogType.Error);
+                        
+                        // Kill all processes on failure
+                        KillAllActiveProcesses();
+                        return TaskResult.FailedAfterRetries;
+                    }
+                    
+                    if (result == TaskResult.Canceled)
+                    {
+                        return TaskResult.Canceled;
                     }
                 }
                 catch (OperationCanceledException)
@@ -621,7 +605,8 @@ namespace OnlineMongoMigrationProcessor
                 catch (Exception ex)
                 {
                     _log.WriteLine($"Dump worker {workerId} error: {Helper.RedactPii(ex.Message)}", LogType.Error);
-                    _chunkErrors.Add((workItem.ChunkIndex, ex));
+                    if (workItem != null)
+                        _chunkErrors.Add((workItem.ChunkIndex, ex));
                     
                     // Continue processing other chunks unless critical error
                     if (ex is OutOfMemoryException || ex is StackOverflowException)
@@ -630,9 +615,28 @@ namespace OnlineMongoMigrationProcessor
                         return TaskResult.Abort;
                     }
                 }
+                finally
+                {
+                    // Always release semaphore if it was acquired
+                    if (semaphoreAcquired)
+                    {
+                        if (!_dumpPool!.TryRelease())
+                        {
+                            _log.WriteLine($"Dump worker {workerId} semaphore overflow on release.", LogType.Debug);
+                        }
+                        semaphoreAcquired = false; // Reset flag after release
+                    }
+                }
             }
             
             _log.WriteLine($"Dump worker {workerId} completed");
+            
+            // Check if controlled pause completed
+            if (_controlledPauseRequested && _dumpQueue.IsEmpty)
+            {
+                _log.WriteLine("All dump chunks completed during controlled pause");
+            }
+            
             return TaskResult.Success;
         }
 
@@ -684,40 +688,65 @@ namespace OnlineMongoMigrationProcessor
                 };
             }
             
-            _log.WriteLine($"Starting parallel restore of {sortedChunks.Count} chunks with {_maxParallelRestoreInstances} workers");
+            _log.WriteLine($"Starting parallel restore of {sortedChunks.Count} chunks with {_restorePool!.MaxWorkers} workers");
+            
+            // Store context for dynamic worker spawning
+            _currentFolder = folder;
+            _currentMigrationUnit = mu;
+            _nextRestoreWorkerId = 1;
             
             // Clear chunk errors before starting
             _chunkErrors.Clear();
             
-            // Create queue for restore work
-            var restoreQueue = new ConcurrentQueue<ChunkWorkItem>();
+            // Enqueue restore work to global queue
             foreach (var chunk in sortedChunks)
             {
-                restoreQueue.Enqueue(chunk);
+                _restoreQueue.Enqueue(chunk);
             }
             
             // Start worker tasks
-            var workerTasks = new List<Task<TaskResult>>();
-            for (int i = 0; i < Math.Min(_maxParallelRestoreInstances, sortedChunks.Count); i++)
+            Task<TaskResult>[] workerTaskArray;
+            lock (_workerLock)
             {
-                int workerId = i + 1;
-                var workerTask = Task.Run(async () =>
+                _activeRestoreWorkers.Clear();
+                for (int i = 0; i < Math.Min(_restorePool.MaxWorkers, sortedChunks.Count); i++)
                 {
-                    return await RestoreWorkerAsync(
-                        workerId,
-                        restoreQueue,
-                        folder,
-                        targetConnectionString,
-                        dbName,
-                        colName
-                    );
-                }, _cts.Token);
-                
-                workerTasks.Add(workerTask);
+                    int workerId = _nextRestoreWorkerId++;
+                    var workerTask = Task.Run(async () =>
+                    {
+                        return await RestoreWorkerAsync(
+                            workerId,
+                            _restoreQueue,
+                            folder,
+                            targetConnectionString,
+                            dbName,
+                            colName
+                        );
+                    }, _cts.Token);
+                    
+                    _activeRestoreWorkers.Add(workerTask);
+                }
+                workerTaskArray = _activeRestoreWorkers.ToArray();
             }
             
             // Wait for all workers to complete
-            var results = await Task.WhenAll(workerTasks);
+            var results = await Task.WhenAll(workerTaskArray);
+            
+            // Clear context
+            _currentFolder = null;
+            
+            // Check for controlled pause - stop after current workers finish
+            if (_controlledPauseRequested)
+            {
+                _log.WriteLine("Controlled pause - restore workers stopped after completing active chunks");
+                StopProcessing();
+                return new RestoreResult 
+                { 
+                    Result = TaskResult.Success, 
+                    RestoredChunks = restoredChunks, 
+                    RestoredDocs = restoredDocs 
+                };
+            }
             
             // Check if any worker failed
             if (results.Any(r => r == TaskResult.FailedAfterRetries || r == TaskResult.Abort))
@@ -779,74 +808,80 @@ namespace OnlineMongoMigrationProcessor
         {
             _log.WriteLine($"Restore worker {workerId} started");
             
-            while (restoreQueue.TryDequeue(out var workItem))
+            while (true)
             {
+                // Check for controlled pause first
+                if (_controlledPauseRequested)
+                {
+                    _log.WriteLine($"Restore worker {workerId}: Controlled pause active - exiting");
+                    break;
+                }
+                
                 if (_cts.Token.IsCancellationRequested)
                 {
                     _log.WriteLine($"Restore worker {workerId} cancelled");
                     return TaskResult.Canceled;
                 }
                 
+                ChunkWorkItem? workItem = null;
                 bool semaphoreAcquired = false;
                 try
                 {
-                    // Acquire semaphore slot
-                    await _restoreSemaphore!.WaitAsync(_cts.Token);
+                    // Acquire semaphore slot first
+                    await _restorePool!.WaitAsync(_cts.Token);
                     semaphoreAcquired = true;
                     
-                    try
+                    // Now try to dequeue work
+                    if (!restoreQueue.TryDequeue(out workItem))
                     {
-                        _log.WriteLine($"Worker {workerId} restoring chunk {workItem.ChunkIndex}");
-                        
-                        double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
-                        double contributionFactor = (double)workItem.Chunk.DumpQueryDocCount / Helper.GetMigrationUnitDocCount(workItem.MigrationUnit);
-                        if (workItem.MigrationUnit.MigrationChunks.Count == 1) contributionFactor = 1;
-                        
-                        TaskResult result = await new RetryHelper().ExecuteTask(
-                            () => RestoreChunkAsync(
-                                workItem.MigrationUnit,
-                                workItem.ChunkIndex,
-                                folder,
-                                targetConnectionString,
-                                initialPercent,
-                                contributionFactor,
-                                dbName,
-                                colName
-                            ),
-                            (ex, attemptCount, currentBackoff) => RestoreChunk_ExceptionHandler(
-                                ex, attemptCount, "RestoreChunk", dbName, colName, workItem.ChunkIndex, currentBackoff
-                            ),
-                            _log
-                        );
-                        
-                        if (result == TaskResult.FailedAfterRetries || result == TaskResult.Abort)
-                        {
-                            _log.WriteLine($"Worker {workerId} failed on chunk {workItem.ChunkIndex}", LogType.Error);
-                            
-                            // Kill all processes on failure
-                            KillAllActiveProcesses();
-                            return TaskResult.FailedAfterRetries;
-                        }
-                        
-                        if (result == TaskResult.Canceled)
-                        {
-                            return TaskResult.Canceled;
-                        }
+                        // No more work, exit
+                        break;
                     }
-                    finally
+                    
+                    // Check again after dequeue in case pause was requested
+                    if (_controlledPauseRequested)
                     {
-                        // Always release semaphore if it was acquired
-                        if (semaphoreAcquired)
-                        {
-                            try
-                            {
-                                _restoreSemaphore.Release();
-                            }
-                            catch (SemaphoreFullException ex)
-                            {
-                                _log.WriteLine($"Restore worker {workerId} chunk {workItem.ChunkIndex} semaphore overflow on release: {ex.Message}. Current count may already be at max.", LogType.Error);
-                            }
-                        }
+                        // Put the work item back for later
+                        restoreQueue.Enqueue(workItem);
+                        _log.WriteLine($"Restore worker {workerId}: Controlled pause active - returning chunk {workItem.ChunkIndex}");
+                        break;
+                    }
+                    
+                    _log.WriteLine($"Worker {workerId} restoring chunk {workItem.ChunkIndex}");
+                    
+                    double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
+                    double contributionFactor = (double)workItem.Chunk.DumpQueryDocCount / Helper.GetMigrationUnitDocCount(workItem.MigrationUnit);
+                    if (workItem.MigrationUnit.MigrationChunks.Count == 1) contributionFactor = 1;
+                    
+                    TaskResult result = await new RetryHelper().ExecuteTask(
+                        () => RestoreChunkAsync(
+                            workItem.MigrationUnit,
+                            workItem.ChunkIndex,
+                            folder,
+                            targetConnectionString,
+                            initialPercent,
+                            contributionFactor,
+                            dbName,
+                            colName
+                        ),
+                        (ex, attemptCount, currentBackoff) => RestoreChunk_ExceptionHandler(
+                            ex, attemptCount, "RestoreChunk", dbName, colName, workItem.ChunkIndex, currentBackoff
+                        ),
+                        _log
+                    );
+                    
+                    if (result == TaskResult.FailedAfterRetries || result == TaskResult.Abort)
+                    {
+                        _log.WriteLine($"Worker {workerId} failed on chunk {workItem.ChunkIndex}", LogType.Error);
+                        
+                        // Kill all processes on failure
+                        KillAllActiveProcesses();
+                        return TaskResult.FailedAfterRetries;
+                    }
+                    
+                    if (result == TaskResult.Canceled)
+                    {
+                        return TaskResult.Canceled;
                     }
                 }
                 catch (OperationCanceledException)
@@ -857,7 +892,8 @@ namespace OnlineMongoMigrationProcessor
                 catch (Exception ex)
                 {
                     _log.WriteLine($"Restore worker {workerId} error: {Helper.RedactPii(ex.Message)}", LogType.Error);
-                    _chunkErrors.Add((workItem.ChunkIndex, ex));
+                    if (workItem != null)
+                        _chunkErrors.Add((workItem.ChunkIndex, ex));
                     
                     // Continue processing other chunks unless critical error
                     if (ex is OutOfMemoryException || ex is StackOverflowException)
@@ -866,9 +902,28 @@ namespace OnlineMongoMigrationProcessor
                         return TaskResult.Abort;
                     }
                 }
+                finally
+                {
+                    // Always release semaphore if it was acquired
+                    if (semaphoreAcquired)
+                    {
+                        if (!_restorePool!.TryRelease())
+                        {
+                            _log.WriteLine($"Restore worker {workerId} semaphore overflow on release.", LogType.Debug);
+                        }
+                        semaphoreAcquired = false; // Reset flag after release
+                    }
+                }
             }
             
             _log.WriteLine($"Restore worker {workerId} completed");
+            
+            // Check if controlled pause completed
+            if (_controlledPauseRequested && restoreQueue.IsEmpty)
+            {
+                _log.WriteLine("All restore chunks completed during controlled pause");
+            }
+            
             return TaskResult.Success;
         }
 
@@ -1034,6 +1089,27 @@ namespace OnlineMongoMigrationProcessor
         {           
 
             _cts.Token.ThrowIfCancellationRequested();
+
+            // Handle simulation mode - simulate successful restore immediately
+            if (_job.IsSimulatedRun)
+            {
+                // Simulate successful restore
+                mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = mu.MigrationChunks[chunkIndex].DumpQueryDocCount;
+                mu.MigrationChunks[chunkIndex].RestoredFailedDocCount = 0;
+                mu.MigrationChunks[chunkIndex].IsUploaded = true;
+                
+                // Update progress
+                double progress = initialPercent + (contributionFactor * 100);
+                mu.RestorePercent = Math.Min(progress, 100);
+                
+                _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
+                _jobList?.Save();
+                
+                // Small delay to simulate processing time (50ms per chunk)
+                try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
+                
+                return Task.FromResult(TaskResult.Success);
+            }
 
             // Build args per attempt
             string args = $" --uri=\"{targetConnectionString}\" --gzip {folder}\\{chunkIndex}.bson";
@@ -1229,68 +1305,29 @@ namespace OnlineMongoMigrationProcessor
 
                 long downloadCount = 0;
 
-                // Use parallel dump if enabled and multiple instances configured
-                if (_maxParallelDumpInstances > 1)
+                // Always use parallel dump infrastructure (supports dynamic worker scaling)
+                _log.WriteLine($"Starting dump with {_dumpPool!.MaxWorkers} worker(s)");
+                
+                TaskResult result = await ParallelDumpChunksAsync(
+                    mu, 
+                    ctx.Collection, 
+                    folder, 
+                    ctx.SourceConnectionString, 
+                    ctx.TargetConnectionString,
+                    dbName, 
+                    colName
+                );
+                
+                if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
                 {
-                    _log.WriteLine($"Using parallel dump with {_maxParallelDumpInstances} instances");
-                    
-                    TaskResult result = await ParallelDumpChunksAsync(
-                        mu, 
-                        ctx.Collection, 
-                        folder, 
-                        ctx.SourceConnectionString, 
-                        ctx.TargetConnectionString,
-                        dbName, 
-                        colName
-                    );
-                    
-                    if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
-                    {
-                        _log.WriteLine($"Parallel dump operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
-                        StopProcessing();
-                        return result;
-                    }
-                    
-                    if (result == TaskResult.Canceled)
-                    {
-                        return result;
-                    }
+                    _log.WriteLine($"Dump operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
+                    StopProcessing();
+                    return result;
                 }
-                else
+                
+                if (result == TaskResult.Canceled)
                 {
-                    // Sequential dump (original logic)
-                    _log.WriteLine($"Using sequential dump");
-                    
-                    for (int i = 0; i < mu.MigrationChunks.Count; i++)
-                    {
-                        _cts.Token.ThrowIfCancellationRequested();
-
-                        double initialPercent = ((double)100 / mu.MigrationChunks.Count) * i;
-                        double contributionFactor = 1.0 / mu.MigrationChunks.Count;
-
-                        // docCount is computed inside DumpChunkAsync now
-                        if (!mu.MigrationChunks[i].IsDownloaded == true)
-                        {
-                            TaskResult result = await new RetryHelper().ExecuteTask(
-                                () => DumpChunkAsync(mu, i, ctx.Collection, folder, ctx.SourceConnectionString, ctx.TargetConnectionString, initialPercent, contributionFactor, dbName, colName),
-                                (ex, attemptCount, currentBackoff) => DumpChunk_ExceptionHandler(ex, attemptCount, "Dump Executor", dbName, colName, i, currentBackoff),
-                                _log
-                            );
-
-                            if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
-                            {
-                                _log.WriteLine($"Dump operation for {dbName}.{colName}[{i}] failed after multiple attempts.", LogType.Error);
-                                StopProcessing();
-
-                                return result; // Abort the process
-                            }
-                        }
-                        else
-                        {
-                            downloadCount += mu.MigrationChunks[i].DumpQueryDocCount;
-
-                        }
-                    }
+                    return result;
                 }
 
                 if (!_cts.Token.IsCancellationRequested)
@@ -1303,11 +1340,23 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpComplete = true;
 
                     // BulkCopyEndedOn will be set after restore completes, not here
+                    
+                    // Only trigger restore if not paused
+                    if (!_controlledPauseRequested)
+                    {
+                        _log.WriteLine($"{dbName}.{colName} dump complete, immediately starting restore");
+                        MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                        _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
+                    }
+                    else
+                    {
+                        _log.WriteLine($"{dbName}.{colName} dump complete, but controlled pause active - restore will not start automatically");
+                    }
                 }
             }
             else if (mu.DumpComplete && !mu.RestoreComplete && !_cts.Token.IsCancellationRequested)
             {
-                _log.WriteLine($"{dbName}.{colName} added to upload queue");
+                _log.WriteLine($"{dbName}.{colName} added to upload queue (resume scenario)");
 
                 MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
                 _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
@@ -1361,6 +1410,51 @@ namespace OnlineMongoMigrationProcessor
         // Core restore loop: iterates until all chunks are restored or cancellation/simulation stops it
         private void ProcessRestoreLoop(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
         {
+            // Handle simulation mode - use parallel restore infrastructure for consistency
+            if (_job.IsSimulatedRun && !mu.RestoreComplete && mu.DumpComplete)
+            {
+                _log.WriteLine($"Simulation mode: Simulating parallel restore for {dbName}.{colName} with {_restorePool!.MaxWorkers} workers");
+                
+                // Calculate initial progress based on already restored chunks
+                int alreadyRestored = mu.MigrationChunks.Count(c => c.IsUploaded == true);
+                if (alreadyRestored > 0)
+                {
+                    mu.RestorePercent = ((double)alreadyRestored / mu.MigrationChunks.Count) * 100;
+                    _log.WriteLine($"Simulation mode: Starting from {alreadyRestored}/{mu.MigrationChunks.Count} chunks already restored ({mu.RestorePercent:F2}%)");
+                }
+                else
+                {
+                    mu.RestorePercent = 0;
+                }
+                
+                // Use the parallel restore infrastructure even in simulation mode
+                var result = ParallelRestoreChunksAsync(
+                    mu,
+                    folder,
+                    targetConnectionString,
+                    dbName,
+                    colName
+                ).GetAwaiter().GetResult();
+                
+                // Mark as complete
+                mu.RestorePercent = 100;
+                mu.RestoreComplete = true;
+                mu.RestoreGap = 0; // Assume perfect simulation
+                
+                _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - {result.RestoredChunks} chunks, {result.RestoredDocs} docs");
+                
+                if (mu.DumpComplete && mu.RestoreComplete)
+                {
+                    if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
+                    {
+                        mu.BulkCopyEndedOn = DateTime.UtcNow;
+                    }
+                }
+                
+                _jobList?.Save();
+                _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
+                return;
+            }
 
             while (ShouldContinueUploadLoop(mu, folder))
             {
@@ -1439,73 +1533,25 @@ namespace OnlineMongoMigrationProcessor
             restoredChunks = 0;
             restoredDocs = 0;
 
-            // Use parallel restore if enabled and multiple instances configured
-            if (_maxParallelRestoreInstances > 1)
-            {
-                _log.WriteLine($"Using parallel restore with {_maxParallelRestoreInstances} instances");
-                
-                var result = ParallelRestoreChunksAsync(
-                    mu,
-                    folder,
-                    targetConnectionString,
-                    dbName,
-                    colName
-                ).GetAwaiter().GetResult();
-                
-                restoredChunks = result.RestoredChunks;
-                restoredDocs = result.RestoredDocs;
-                
-                if (result.Result == TaskResult.Abort || result.Result == TaskResult.FailedAfterRetries)
-                {
-                    _log.WriteLine($"Parallel restore operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
-                    StopProcessing();
-                    return;
-                }
-                
-                return;
-            }
+            // Always use parallel restore infrastructure (supports dynamic worker scaling)
+            _log.WriteLine($"Starting restore with {_restorePool!.MaxWorkers} worker(s)");
             
-            // Sequential restore (original logic)
-            _log.WriteLine($"Using sequential restore");
-
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
+            var result = ParallelRestoreChunksAsync(
+                mu,
+                folder,
+                targetConnectionString,
+                dbName,
+                colName
+            ).GetAwaiter().GetResult();
+            
+            restoredChunks = result.RestoredChunks;
+            restoredDocs = result.RestoredDocs;
+            
+            if (result.Result == TaskResult.Abort || result.Result == TaskResult.FailedAfterRetries)
             {
-                _cts.Token.ThrowIfCancellationRequested();
-
-                if (!mu.MigrationChunks[i].IsUploaded == true && mu.MigrationChunks[i].IsDownloaded == true)
-                {
-                    double initialPercent = ((double)100 / mu.MigrationChunks.Count) * i;
-                    double contributionFactor = (double)mu.MigrationChunks[i].DumpQueryDocCount / Helper.GetMigrationUnitDocCount(mu);
-                    if (mu.MigrationChunks.Count == 1) contributionFactor = 1;
-
-                    _log.WriteLine($"{dbName}.{colName}[{i}] uploader processing");
-
-                    var restoreResult = new RetryHelper()
-                        .ExecuteTask(
-                            () => RestoreChunkAsync(mu, i, folder, targetConnectionString, initialPercent, contributionFactor, dbName, colName),
-                            (ex, attemptCount, currentBackoff) => RestoreChunk_ExceptionHandler(ex, attemptCount, "Restore Executor", dbName, colName, i, currentBackoff),
-                            _log
-                        )
-                        .GetAwaiter().GetResult();
-
-                    if (restoreResult == TaskResult.Abort || restoreResult == TaskResult.FailedAfterRetries)
-                    {
-                        _log.WriteLine($"Restore operation for {dbName}.{colName}[{i}] failed after multiple attempts.", LogType.Error);
-                        StopProcessing();
-                        return;
-                    }
-
-                    if (restoreResult == TaskResult.Success)
-                    {
-                        restoredChunks++;
-                        restoredDocs += Math.Max(mu.MigrationChunks[i].RestoredSuccessDocCount, mu.MigrationChunks[i].DocCountInTarget);
-                    }
-                }
-                else if (mu.MigrationChunks[i].IsUploaded == true)
-                {
-                    restoredChunks++;
-                    restoredDocs += mu.MigrationChunks[i].RestoredSuccessDocCount;
-                }
+                _log.WriteLine($"Restore operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
+                StopProcessing();
+                return;
             }
         }
 
@@ -1545,9 +1591,18 @@ namespace OnlineMongoMigrationProcessor
                 if (migrationJob != null)
                 {
                     if (!Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(migrationJob))
-                    {                        
-                        _log.WriteLine($"Job {migrationJob.Id} Completed");
-                        migrationJob.IsCompleted = true;
+                    {
+                        // Don't mark as completed if this is a controlled pause
+                        if (!_controlledPauseRequested)
+                        {
+                            _log.WriteLine($"Job {migrationJob.Id} Completed");
+                            migrationJob.IsCompleted = true;
+                        }
+                        else
+                        {
+                            _log.WriteLine($"Job {migrationJob.Id} paused (controlled pause) - can be resumed");
+                        }
+                        
                         StopProcessing();
                     }
                     else
@@ -1557,6 +1612,17 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
         }
+        
+        /// <summary>
+        /// Override to handle controlled pause for DumpRestoreProcessor
+        /// </summary>
+        public override void InitiateControlledPause()
+        {
+            base.InitiateControlledPause();
+            _log.WriteLine("DumpRestoreProcessor: Controlled pause - no new chunks will be queued");
+            // Don't cancel _cts - let workers complete naturally
+        }
+        
         public new void StopProcessing(bool updateStatus = true)
         {
             _log.WriteLine("Stopping DumpRestoreProcessor...");
@@ -1564,20 +1630,9 @@ namespace OnlineMongoMigrationProcessor
             // Kill all active processes first
             KillAllActiveProcesses();
             
-            // Cancel and dispose blocker tasks
-            _dumpBlockerCts?.Cancel();
-            _dumpBlockerCts?.Dispose();
-            _dumpBlockerCts = null;
-            
-            _restoreBlockerCts?.Cancel();
-            _restoreBlockerCts?.Dispose();
-            _restoreBlockerCts = null;
-            
-            // Dispose semaphores
-            _dumpSemaphore?.Dispose();
-            _restoreSemaphore?.Dispose();
-            _dumpSemaphore = null;
-            _restoreSemaphore = null;
+            // Dispose worker pools (handles semaphores and blocker tasks)
+            _dumpPool?.Dispose();
+            _restorePool?.Dispose();
             
             // Clear queues
             while (_dumpQueue.TryDequeue(out _)) { }

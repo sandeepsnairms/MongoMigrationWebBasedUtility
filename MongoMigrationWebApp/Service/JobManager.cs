@@ -172,6 +172,31 @@ namespace MongoMigrationWebApp.Service
             MigrationWorker?.StopMigration();
         }
 
+        /// <summary>
+        /// Initiates controlled pause - stops accepting new chunks but allows current chunks to complete
+        /// </summary>
+        public void ControlledPauseMigration()
+        {
+            MigrationWorker?.ControlledPauseMigration();
+        }
+
+        /// <summary>
+        /// Checks if controlled pause is applicable for the given job type
+        /// </summary>
+        public bool IsControlledPauseApplicable(OnlineMongoMigrationProcessor.Models.JobType jobType)
+        {
+            return jobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore ||
+                   jobType == OnlineMongoMigrationProcessor.Models.JobType.MongoDriver;
+        }
+
+        /// <summary>
+        /// Gets whether controlled pause is currently requested
+        /// </summary>
+        public bool IsControlledPauseRequested()
+        {
+            return MigrationWorker?.ControlledPauseRequested ?? false;
+        }
+
         public Task CancelMigration(string id)
         {
             var list = EnsureJobList().MigrationJobs;
