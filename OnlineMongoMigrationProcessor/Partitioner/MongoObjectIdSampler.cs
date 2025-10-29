@@ -245,7 +245,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
                     Builders<BsonDocument>.Filter.Lt("_id", endId)
                 );
                 
-                var count = await _collection.CountDocumentsAsync(rangeFilter, cancellationToken: cancellationToken);
+                var count = await _collection.CountAsync(rangeFilter, cancellationToken: cancellationToken);
                 rangeStats.Add((startId, endId, count));
             }
 
