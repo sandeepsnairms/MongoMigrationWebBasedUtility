@@ -37,7 +37,31 @@
 
         @if (IsPauseEnabled() && !_isLoadingCollections)
         {
-            <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJob">Pause Job</button>
+            @* Pause Job - with dropdown for controlled pause if applicable *@
+            @if (MigrationJob != null && JobManager.IsControlledPauseApplicable(MigrationJob.JobType))
+            {
+                <div class="btn-group mx-2">
+                    <button class="btn btn-primary dropdown-toggle" type="button" id="pauseJobDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Choose pause method">
+                        Pause Job
+                    </button>
+                    <ul class="dropdown-menu" aria-labelledby="pauseJobDropdown">
+                        <li><a class="dropdown-item" @onclick="PauseJobControlled" title="Stops accepting new chunks but allows active chunks to complete"><i class="bi bi-pause-circle"></i> Controlled Pause (Graceful)</a></li>
+                        <li><a class="dropdown-item" @onclick="PauseJobImmediate" title="Immediately cancels all operations"><i class="bi bi-stop-circle"></i> Immediate Stop</a></li>
+                    </ul>
+                </div>
+            }
+            else
+            {
+                <button class="btn btn-primary mx-2" title="Pause Job" @onclick="PauseJobImmediate">Pause Job</button>
+            }
+            
+            @* Display controlled pause status *@
+            @if (JobManager.IsControlledPauseRequested())
+            {
+                <span class="badge bg-warning text-dark mx-2" title="Controlled pause in progress - waiting for active chunks to complete">
+                    <i class="bi bi-hourglass-split"></i> Pausing...
+                </span>
+            }
             
             @* Worker adjustment dropdown - only for DumpAndRestore jobs with parallel processing enabled *@
             @if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore && 
@@ -1398,13 +1422,21 @@ else if (@_showLogBackupFile)
         }
     }
 
-    private void PauseJob()
+    private void PauseJobImmediate()
     {
         _errorMessage = string.Empty;
         JobManager.StopMigration();
-        // MigrationJob.CurrentlyActive = false;
+        
         if (!SaveJobs()) return;
         _refreshTimer = null;
+    }
+
+    private void PauseJobControlled()
+    {
+        _errorMessage = string.Empty;
+        JobManager.ControlledPauseMigration();
+        
+        if (!SaveJobs()) return;
     }
 
     private void IncreaseDumpWorkers()
