@@ -22,6 +22,7 @@ namespace OnlineMongoMigrationProcessor.Workers
     public class MigrationWorker
     {
         public bool ProcessRunning { get; set; }
+        public bool ControlledPauseRequested { get; private set; } = false;
 
         private string _toolsDestinationFolder = $"{Helper.GetWorkingFolder()}mongo-tools";
         private string _toolsLaunchFolder = string.Empty;
@@ -104,8 +105,21 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _migrationProcessor?.StopProcessing();
                 ProcessRunning = false;
                 _migrationProcessor = null;
+                ControlledPauseRequested = false; // Reset controlled pause flag
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Initiates controlled pause - stops accepting new chunks but allows current chunks to complete
+        /// </summary>
+        public void ControlledPauseMigration()
+        {
+            _log.WriteLine("Controlled pause requested - will stop after current chunks complete");
+            
+            ControlledPauseRequested = true;
+            
+            _migrationProcessor?.InitiateControlledPause();
         }
 
         /// <summary>
@@ -666,6 +680,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             LoadConfig();
 
             _migrationCancelled = false;
+            
+            // Reset controlled pause flag when resuming/starting job
+            ControlledPauseRequested = false;
+            
             _cts = new CancellationTokenSource();
 
             if (string.IsNullOrWhiteSpace(_job.Id)) _job.Id = Guid.NewGuid().ToString("N");
@@ -778,7 +796,16 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!Helper.IsOnline(_job))
                     {
-                        _job.IsCompleted = true;
+                        // Don't mark as completed if this is a controlled pause
+                        if (!ControlledPauseRequested)
+                        {
+                            _job.IsCompleted = true;
+                        }
+                        else
+                        {
+                            _log.WriteLine($"Job {_job.Id} paused (controlled pause) - can be resumed");
+                        }
+                        
                         _jobList.Save();
                     }
                 }
