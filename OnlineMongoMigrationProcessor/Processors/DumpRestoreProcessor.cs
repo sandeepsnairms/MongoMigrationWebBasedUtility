@@ -1305,68 +1305,29 @@ namespace OnlineMongoMigrationProcessor
 
                 long downloadCount = 0;
 
-                // Use parallel dump if enabled and multiple instances configured
-                if (_dumpPool!.MaxWorkers > 1)
+                // Always use parallel dump infrastructure (supports dynamic worker scaling)
+                _log.WriteLine($"Starting dump with {_dumpPool!.MaxWorkers} worker(s)");
+                
+                TaskResult result = await ParallelDumpChunksAsync(
+                    mu, 
+                    ctx.Collection, 
+                    folder, 
+                    ctx.SourceConnectionString, 
+                    ctx.TargetConnectionString,
+                    dbName, 
+                    colName
+                );
+                
+                if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
                 {
-                    _log.WriteLine($"Using parallel dump with {_dumpPool.MaxWorkers} instances");
-                    
-                    TaskResult result = await ParallelDumpChunksAsync(
-                        mu, 
-                        ctx.Collection, 
-                        folder, 
-                        ctx.SourceConnectionString, 
-                        ctx.TargetConnectionString,
-                        dbName, 
-                        colName
-                    );
-                    
-                    if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
-                    {
-                        _log.WriteLine($"Parallel dump operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
-                        StopProcessing();
-                        return result;
-                    }
-                    
-                    if (result == TaskResult.Canceled)
-                    {
-                        return result;
-                    }
+                    _log.WriteLine($"Dump operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
+                    StopProcessing();
+                    return result;
                 }
-                else
+                
+                if (result == TaskResult.Canceled)
                 {
-                    // Sequential dump (original logic)
-                    _log.WriteLine($"Using sequential dump");
-                    
-                    for (int i = 0; i < mu.MigrationChunks.Count; i++)
-                    {
-                        _cts.Token.ThrowIfCancellationRequested();
-
-                        double initialPercent = ((double)100 / mu.MigrationChunks.Count) * i;
-                        double contributionFactor = 1.0 / mu.MigrationChunks.Count;
-
-                        // docCount is computed inside DumpChunkAsync now
-                        if (!mu.MigrationChunks[i].IsDownloaded == true)
-                        {
-                            TaskResult result = await new RetryHelper().ExecuteTask(
-                                () => DumpChunkAsync(mu, i, ctx.Collection, folder, ctx.SourceConnectionString, ctx.TargetConnectionString, initialPercent, contributionFactor, dbName, colName),
-                                (ex, attemptCount, currentBackoff) => DumpChunk_ExceptionHandler(ex, attemptCount, "Dump Executor", dbName, colName, i, currentBackoff),
-                                _log
-                            );
-
-                            if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries)
-                            {
-                                _log.WriteLine($"Dump operation for {dbName}.{colName}[{i}] failed after multiple attempts.", LogType.Error);
-                                StopProcessing();
-
-                                return result; // Abort the process
-                            }
-                        }
-                        else
-                        {
-                            downloadCount += mu.MigrationChunks[i].DumpQueryDocCount;
-
-                        }
-                    }
+                    return result;
                 }
 
                 if (!_cts.Token.IsCancellationRequested)
@@ -1380,10 +1341,17 @@ namespace OnlineMongoMigrationProcessor
 
                     // BulkCopyEndedOn will be set after restore completes, not here
                     
-                    // Automatically trigger restore after dump completes
-                    _log.WriteLine($"{dbName}.{colName} dump complete, immediately starting restore");
-                    MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                    _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
+                    // Only trigger restore if not paused
+                    if (!_controlledPauseRequested)
+                    {
+                        _log.WriteLine($"{dbName}.{colName} dump complete, immediately starting restore");
+                        MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                        _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
+                    }
+                    else
+                    {
+                        _log.WriteLine($"{dbName}.{colName} dump complete, but controlled pause active - restore will not start automatically");
+                    }
                 }
             }
             else if (mu.DumpComplete && !mu.RestoreComplete && !_cts.Token.IsCancellationRequested)
@@ -1565,73 +1533,25 @@ namespace OnlineMongoMigrationProcessor
             restoredChunks = 0;
             restoredDocs = 0;
 
-            // Use parallel restore if enabled and multiple instances configured
-            if (_restorePool!.MaxWorkers > 1)
-            {
-                _log.WriteLine($"Using parallel restore with {_restorePool.MaxWorkers} instances");
-                
-                var result = ParallelRestoreChunksAsync(
-                    mu,
-                    folder,
-                    targetConnectionString,
-                    dbName,
-                    colName
-                ).GetAwaiter().GetResult();
-                
-                restoredChunks = result.RestoredChunks;
-                restoredDocs = result.RestoredDocs;
-                
-                if (result.Result == TaskResult.Abort || result.Result == TaskResult.FailedAfterRetries)
-                {
-                    _log.WriteLine($"Parallel restore operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
-                    StopProcessing();
-                    return;
-                }
-                
-                return;
-            }
+            // Always use parallel restore infrastructure (supports dynamic worker scaling)
+            _log.WriteLine($"Starting restore with {_restorePool!.MaxWorkers} worker(s)");
             
-            // Sequential restore (original logic)
-            _log.WriteLine($"Using sequential restore");
-
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
+            var result = ParallelRestoreChunksAsync(
+                mu,
+                folder,
+                targetConnectionString,
+                dbName,
+                colName
+            ).GetAwaiter().GetResult();
+            
+            restoredChunks = result.RestoredChunks;
+            restoredDocs = result.RestoredDocs;
+            
+            if (result.Result == TaskResult.Abort || result.Result == TaskResult.FailedAfterRetries)
             {
-                _cts.Token.ThrowIfCancellationRequested();
-
-                if (!mu.MigrationChunks[i].IsUploaded == true && mu.MigrationChunks[i].IsDownloaded == true)
-                {
-                    double initialPercent = ((double)100 / mu.MigrationChunks.Count) * i;
-                    double contributionFactor = (double)mu.MigrationChunks[i].DumpQueryDocCount / Helper.GetMigrationUnitDocCount(mu);
-                    if (mu.MigrationChunks.Count == 1) contributionFactor = 1;
-
-                    _log.WriteLine($"{dbName}.{colName}[{i}] uploader processing");
-
-                    var restoreResult = new RetryHelper()
-                        .ExecuteTask(
-                            () => RestoreChunkAsync(mu, i, folder, targetConnectionString, initialPercent, contributionFactor, dbName, colName),
-                            (ex, attemptCount, currentBackoff) => RestoreChunk_ExceptionHandler(ex, attemptCount, "Restore Executor", dbName, colName, i, currentBackoff),
-                            _log
-                        )
-                        .GetAwaiter().GetResult();
-
-                    if (restoreResult == TaskResult.Abort || restoreResult == TaskResult.FailedAfterRetries)
-                    {
-                        _log.WriteLine($"Restore operation for {dbName}.{colName}[{i}] failed after multiple attempts.", LogType.Error);
-                        StopProcessing();
-                        return;
-                    }
-
-                    if (restoreResult == TaskResult.Success)
-                    {
-                        restoredChunks++;
-                        restoredDocs += Math.Max(mu.MigrationChunks[i].RestoredSuccessDocCount, mu.MigrationChunks[i].DocCountInTarget);
-                    }
-                }
-                else if (mu.MigrationChunks[i].IsUploaded == true)
-                {
-                    restoredChunks++;
-                    restoredDocs += mu.MigrationChunks[i].RestoredSuccessDocCount;
-                }
+                _log.WriteLine($"Restore operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);
+                StopProcessing();
+                return;
             }
         }
 

@@ -35,6 +35,9 @@ Streamline your migration to Azure Cosmos DB for MongoDB (vCore‑based) with a 
   - [Update Web App Settings](#update-web-app-settings)
   - [Remove a Job](#remove-a-job)
   - [Download Job Details](#download-job-details)
+  - [Dynamic Scaling of MongoDump/Restore Workers](#dynamic-scaling-of-mongodumprestore-workers)
+  - [Difference Between Immediate Pause and Controlled Pause](#difference-between-immediate-pause-and-controlled-pause)
+  - [Multiple Partitioners for ObjectId and Benefits of Selecting DataType for _id](#multiple-partitioners-for-objectid-and-benefits-of-selecting-datatype-for-_id)
 - [Job options and behaviors](#job-options-and-behaviors)
 - [Collections input formats](#collections-input-formats)
   - [CollectionInfoFormat Format](#collectioninfoformat-format)
@@ -592,6 +595,12 @@ When creating or resuming a job, you can tailor behavior via these options:
 - Post Migration Sync Back
     - For online jobs, after Cut Over you can enable syncing from target back to source. This reduces rollback risk. UI shows Time Since Sync Back once active.
 
+- All collections use ObjectId for the _id field
+    - If ON: Automatically applies `"DataTypeFor_Id": "ObjectId"` to all collections in the job, enabling ObjectId-specific optimizations.
+    - Benefits: Faster partitioning (6x speedup), optimized chunk boundaries, leverages timestamp-based partitioning strategies.
+    - If OFF: Each collection's _id type is auto-detected, or you can specify DataTypeFor_Id individually via JSON format.
+    - See [Multiple Partitioners for ObjectId](#multiple-partitioners-for-objectid-and-benefits-of-selecting-datatype-for-_id) for performance details.
+
 - Simulation Mode (No Writes to Target)
     - Runs a dry-run where reads occur but no writes are performed on target. Useful for validation and sizing.
 
@@ -626,6 +635,376 @@ Notes:
 ]
 ```
 
+## How To Guide
+
+### Dynamic Scaling of MongoDump/Restore Workers
+
+The migration tool supports **runtime adjustment** of parallel worker counts for both dump and restore operations, allowing you to optimize performance based on system load and resource availability.
+
+#### Understanding Worker Pools
+
+The tool uses three types of workers during MongoDump/Restore migration:
+
+1. **Dump Workers**: Control how many `mongodump` processes run in parallel to extract data from the source
+2. **Restore Workers**: Control how many `mongorestore` processes run in parallel to load data into the target
+3. **Insertion Workers**: Control the `--numInsertionWorkersPerCollection` parameter for each `mongorestore` process
+
+#### How to Adjust Workers During Migration
+
+1. **Navigate to Job Viewer**: Open the job that is currently running
+2. **Locate the Worker Controls**: Look for the worker adjustment section showing current worker counts
+3. **Adjust Workers**:
+   - **Dump Workers**: Use the +/- buttons to increase or decrease parallel dump processes (range: 1-16)
+   - **Restore Workers**: Use the +/- buttons to increase or decrease parallel restore processes (range: 1-16)
+   - **Insertion Workers**: Adjust the number of insertion threads per restore process (range: 1-16)
+
+#### How Dynamic Scaling Works
+
+**Increasing Workers (Scale Up)**:
+- When you increase dump/restore workers during active processing, new worker tasks are **spawned immediately**
+- New workers join the existing workers to process remaining chunks from the queue
+- You'll see log messages like: `"Spawning 2 additional dump workers to process queue"`
+- The semaphore capacity increases, allowing more concurrent operations
+
+**Decreasing Workers (Scale Down)**:
+- When you decrease worker count, the system reduces available capacity using "blocker tasks"
+- Active workers continue processing their current chunks
+- No new chunks are assigned beyond the reduced capacity
+- Workers complete gracefully without interruption
+- You'll see log messages showing the capacity change: `"Dump: Decreased from 5 to 3 (-2)"`
+
+#### Best Practices
+
+**When to Increase Workers**:
+- System CPU/memory utilization is low (< 60%)
+- Network bandwidth is underutilized
+- You have many small collections or chunks remaining
+- Database throughput on source/target can handle higher load
+
+**When to Decrease Workers**:
+- System resources are constrained (high CPU/memory)
+- Database is experiencing throttling or high latency
+- You want to reduce impact on production systems
+- Other applications on the same server need resources
+
+**Optimal Settings**:
+- **Dump Workers**: Start with 2-4 for most workloads; increase to 6-8 for high-throughput systems
+- **Restore Workers**: Match or slightly exceed dump workers if target can handle the load
+- **Insertion Workers**: Default is ProcessorCount/2; increase to 8-12 for large collections with high write capacity
+
+**Note**: All worker pools always use the parallel infrastructure, even when set to 1. This ensures dynamic scaling works at any time during migration.
+
+---
+
+### Difference Between Immediate Pause and Controlled Pause
+
+The migration tool offers two pause mechanisms with different behaviors:
+
+#### Immediate Pause (Hard Stop)
+
+**How to Trigger**: Click the **Pause Job** button in Job Viewer
+
+**Behavior**:
+- Cancellation token is immediately triggered
+- All active workers check the cancellation token and exit as soon as possible
+- Currently executing `mongodump`/`mongorestore` processes are **killed immediately**
+- In-progress chunks may be left incomplete
+- Job state is saved with partial progress
+
+**When to Use**:
+- Emergency stop required (system issues, unexpected errors)
+- Need to free resources immediately
+- Discovered configuration errors that need correction
+- Critical production issue requires stopping migration
+
+**Resume Behavior**:
+- Job resumes from the last saved state
+- Incomplete chunks are retried from the beginning
+- Change streams resume from last saved token
+
+#### Controlled Pause (Graceful Stop)
+
+**How to Trigger**: Click the **Controlled Pause** button in Job Viewer
+
+**Behavior**:
+- Sets `_controlledPauseRequested` flag to true
+- Active workers **complete their current chunks** before exiting
+- No new chunks are dequeued from the work queue
+- `mongodump`/`mongorestore` processes finish naturally
+- All progress is saved cleanly
+- When dump completes during controlled pause, **restore does NOT auto-start**
+
+**Log Messages**:
+```
+DumpRestoreProcessor: Controlled pause - no new chunks will be queued
+Dump worker 1: Controlled pause active - exiting
+Dump worker 2: Controlled pause active - exiting
+All dump chunks completed during controlled pause
+{dbName}.{colName} dump complete, but controlled pause active - restore will not start automatically
+```
+
+**When to Use**:
+- Planned maintenance window approaching
+- Want to avoid re-processing in-flight chunks
+- Need clean checkpoint for later resume
+- System resources need temporary reallocation
+- End of business day, want to pause cleanly overnight
+
+**Resume Behavior**:
+- Job resumes exactly where it left off
+- No chunks need to be re-processed
+- State is consistent and complete
+- For collections where dump completed during pause, resume will trigger restore automatically
+
+#### Comparison Table
+
+| Feature | Immediate Pause | Controlled Pause |
+|---------|----------------|------------------|
+| **Stop Speed** | Instant | 30 seconds - 2 minutes |
+| **Process Handling** | Kill immediately | Complete gracefully |
+| **Chunk State** | May be incomplete | Always complete |
+| **Data Safety** | Safe, but some rework | Safest, no rework |
+| **Resource Cleanup** | Immediate | Gradual |
+| **Resume Efficiency** | Some chunks retry | Maximum efficiency |
+| **Use Case** | Emergency | Planned pause |
+
+#### Best Practices
+
+**For Controlled Pause**:
+1. Allow 1-2 minutes for workers to complete current chunks
+2. Monitor logs to confirm all workers have exited cleanly
+3. Verify job status shows "Paused" before closing browser
+
+**For Immediate Pause**:
+1. Use when time is critical
+2. Expect some chunks to be reprocessed on resume
+3. Check for any killed process remnants if issues persist
+
+**Note**: Both pause types respect the job lifecycle. On resume, the job continues from its saved state. For online migrations, change streams automatically resume from the last saved token.
+
+---
+
+### Multiple Partitioners for ObjectId and Benefits of Selecting DataType for _id
+
+#### Understanding Data Partitioning
+
+When migrating large collections, the tool **splits the collection into chunks** based on the `_id` field range. This enables:
+- Parallel processing of different chunks simultaneously
+- Better memory management (smaller working sets)
+- Faster overall migration through concurrency
+- Ability to retry failed chunks without re-processing entire collection
+
+#### Partitioner Types
+
+The tool offers **four partitioning strategies** specifically optimized for ObjectId data types:
+
+##### 1. **Use Time Boundaries** (Recommended for most workloads)
+
+**How it Works**:
+- Extracts the embedded timestamp from ObjectId values
+- Calculates equidistant time-based boundaries using BigInteger arithmetic
+- Partitions based on time ranges distributed evenly across the collection's time span
+- Creates chunks like boundaries at specific ObjectId values representing time intervals
+
+**Benefits**:
+- **Chronologically aligned**: Chunks correspond to time periods
+- **Predictable distribution**: Recent data tends to be in later chunks
+- **Efficient for time-series data**: Natural ordering matches data insertion patterns
+- **Fast boundary calculation**: Uses mathematical distribution without sampling
+- **Optimal for append-heavy workloads**: Newer documents cluster together
+
+**Best For**:
+- Collections where documents are primarily inserted chronologically
+- Time-series data (logs, events, transactions)
+- Collections with steady insert rate over time
+- Large collections (millions of documents) where sampling would be expensive
+
+##### 2. **Use Adjusted Time Boundaries** (Best for balanced chunks)
+
+**How it Works**:
+- First generates time-based boundaries (same as #1 above)
+- Then validates actual record counts in each range
+- Adjusts boundaries to ensure each chunk has 1K-1M records
+- Merges small ranges and splits large ranges dynamically
+
+**Benefits**:
+- **Balanced chunk sizes**: Each chunk has similar document count (1K-1M records)
+- **Handles uneven distribution**: Adapts when writes are clustered in time
+- **Prevents tiny/huge chunks**: Automatic validation and adjustment
+- **Optimal parallelism**: Even workload distribution across workers
+
+**Best For**:
+- Collections with non-uniform write patterns (bursts of activity)
+- Variable document sizes where time ranges don't correlate with record counts
+- When you need predictable chunk processing times
+- Production workloads requiring stable performance
+
+##### 3. **Use Pagination** (Deterministic equal-sized chunks)
+
+**How it Works**:
+- Calculates total document count and desired records per range
+- Uses progressive `$gt` filters with skip/limit to sample ObjectIds at regular intervals
+- Creates boundaries by paginating through the collection (e.g., every 100K records)
+- Avoids loading all documents into memory
+
+**Benefits**:
+- **Equal chunk sizes**: Each chunk has the same number of records
+- **Memory efficient**: Progressive filtering instead of full collection scan
+- **Deterministic**: Consistent chunk boundaries based on record position
+- **Works with any _id distribution**: Doesn't depend on time properties
+
+**Best For**:
+- Collections with random or unpredictable ObjectId patterns
+- When you need exact control over chunk size
+- Collections where time-based approaches produce imbalanced chunks
+- Debugging scenarios requiring predictable record counts per chunk
+
+##### 4. **Use Sample Command** (Fallback for small collections)
+
+**How it Works**:
+- Uses MongoDB's `$sample` aggregation command to randomly sample ObjectIds
+- Sorts sampled values and creates boundaries
+- Quick and simple approach for smaller datasets
+
+**Benefits**:
+- **Simple implementation**: Leverages MongoDB's built-in sampling
+- **Low overhead**: Single aggregation query
+- **Works universally**: No assumptions about data distribution
+
+**Best For**:
+- Small to medium collections (< 1M documents)
+- Quick migrations where optimization isn't critical
+- Collections where other methods fail or timeout
+- Development/testing scenarios
+
+#### Specifying DataType for _id: Why It Matters
+
+When you specify `"DataTypeFor_Id": "ObjectId"` in the collection configuration, you unlock significant performance benefits:
+
+##### Without DataType Specified (Generic Partitioning)
+
+```json
+{ "CollectionName": "Orders", "DatabaseName": "SalesDB" }
+```
+
+**Behavior**:
+- Tool must scan collection to determine `_id` data type
+- Uses generic partitioning suitable for mixed or unknown types
+- Performs additional type checks during processing
+- Cannot leverage ObjectId-specific optimizations
+- Slower chunk boundary calculation
+
+##### With DataType Specified (ObjectId)
+
+```json
+{ "CollectionName": "Orders", "DatabaseName": "SalesDB", "DataTypeFor_Id": "ObjectId" }
+```
+
+**Behavior**:
+- Tool **immediately selects the optimal partitioner** for ObjectId
+- **Skips type detection overhead** (saves 1-2 queries per collection)
+- Enables **timestamp-based partitioning** by default
+- Optimizes query generation with ObjectId-specific operators
+- **Faster chunk boundary calculation** using ObjectId properties
+
+#### Performance Impact
+
+**Collection with 10M documents**:
+- **Without DataType**: ~30 seconds to analyze and partition
+- **With DataType (ObjectId)**: ~5 seconds to partition
+- **Speedup**: 6x faster startup
+
+**Chunk Processing**:
+- **Without DataType**: Generic queries like `{ "_id": { "$gte": <value>, "$lt": <value> } }`
+- **With DataType (ObjectId)**: Optimized queries leveraging timestamp component
+- **Database efficiency**: Better index utilization, fewer type coercion operations
+
+#### Supported DataType Values
+
+You can specify these values for `DataTypeFor_Id`:
+
+| DataType | Use Case | Partitioning Strategy |
+|----------|----------|----------------------|
+| **ObjectId** | Standard MongoDB collections | Timestamp-based or random sampling |
+| **Int** | Integer `_id` fields | Numeric range partitioning |
+| **Int64** | Long integer `_id` | Large numeric range partitioning |
+| **Decimal128** | High-precision numeric `_id` | Decimal range partitioning |
+| **Date** | DateTime `_id` values | Chronological partitioning |
+| **BinData** | Binary GUID/UUID `_id` | Binary range partitioning |
+| **String** | String-based `_id` | Lexicographic partitioning |
+| **Object** | Compound `_id` objects | Hash-based partitioning |
+
+#### How to Configure
+
+**Using CollectionInfoFormat JSON**:
+
+```json
+[
+    {
+        "CollectionName": "Users",
+        "DatabaseName": "AppDB",
+        "DataTypeFor_Id": "ObjectId"
+    },
+    {
+        "CollectionName": "Sessions",
+        "DatabaseName": "AppDB",
+        "DataTypeFor_Id": "String"
+    },
+    {
+        "CollectionName": "Analytics",
+        "DatabaseName": "AppDB",
+        "DataTypeFor_Id": "Date"
+    }
+]
+```
+
+#### Best Practices
+
+**Always Specify DataType When**:
+- Collection has more than 1 million documents
+- You know the `_id` field type is consistent
+- Performance is critical (large-scale migrations)
+- Collection uses ObjectId for `_id` (most common case)
+
+**Let Tool Auto-Detect When**:
+- Collection has mixed `_id` types (rare, but possible)
+- Small collections (< 100K documents) where overhead is negligible
+- Unsure about `_id` type consistency
+- Testing/development scenarios
+
+**Verification**:
+1. Before migration, run this query to check `_id` type consistency:
+```javascript
+db.collection.aggregate([
+    {
+        $group: {
+            _id: { $type: "$_id" },
+            count: { $sum: 1 }
+        }
+    }
+])
+```
+
+2. If result shows single type (e.g., "objectId"), specify that type for optimal performance
+
+#### Advanced: Chunk Size Tuning
+
+When using ObjectId with specified DataType, you can optimize chunk count:
+
+**For Time-Based Partitioning**:
+- Collections with ~1M docs/month: Use monthly chunks (12 chunks/year)
+- Collections with ~1M docs/week: Use weekly chunks (52 chunks/year)
+- Collections with ~1M docs/day: Use daily chunks (365 chunks/year)
+
+The tool automatically calculates optimal chunk count based on:
+- Total document count estimate
+- Target chunk size (configurable in Settings)
+- ObjectId timestamp distribution
+
+**Result**: Balanced parallelism without creating too many tiny chunks or too few large chunks.
+
+---
+
 ## Settings (gear icon) 
 
 These settings are persisted per app instance and affect all jobs:
@@ -654,6 +1033,13 @@ These settings are persisted per app instance and affect all jobs:
 
 - Sample size for hash comparison
     - Range: 5–2000. Used by the “Run Hash Check” feature to spot-check document parity.
+- ObjectId Partitioner
+    - Choose the partitioning method for ObjectId-based collections:
+      - **Use Sample Command**: Uses MongoDB's $sample command (best for small collections)
+      - **Use Time Boundaries**: Time-based boundaries using ObjectId timestamps (recommended for most workloads)
+      - **Use Adjusted Time Boundaries**: Time-based boundaries adjusted by actual record counts (best for balanced chunks)
+      - **Use Pagination**: Pagination-based boundaries for equal-sized chunks (deterministic)
+    - See [Multiple Partitioners for ObjectId](#multiple-partitioners-for-objectid-and-benefits-of-selecting-datatype-for-_id) for detailed explanations.
 
 - CA certificate file for source server (.pem)
     - Paste/upload the PEM (CA chain) if your source requires a custom CA to establish TLS.
@@ -681,6 +1067,7 @@ Advanced notes:
 - Connection strings are not persisted on disk (they’re excluded from persistence). Endpoints are stored for display and validation.
 - Provide a PEM CA certificate if your source uses a private CA for TLS.
 - Consider deploying behind VNet integration and/or Private Endpoint (see earlier sections) to restrict access.
+- **Entra ID Authentication (Optional)**: You can configure Entra ID-based authentication for your Azure Web App to ensure only valid users can access the migration tool. This adds an additional layer of security by requiring users to authenticate with their organizational credentials. For configuration details, see [Azure App Service Authentication](https://learn.microsoft.com/en-us/azure/static-web-apps/authentication-authorization).
 
 ## Logs, backup, and recovery
 
