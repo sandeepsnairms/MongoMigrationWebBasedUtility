@@ -1,7 +1,8 @@
 ﻿@page "/migrationjobviewer/{jobId}"
-@using OnlineMongoMigrationProcessor;
+@using OnlineMongoMigrationProcessor
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
+@using MigrationJobType = OnlineMongoMigrationProcessor.MigrationJob
 @inject Service.JobManager JobManager
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JS
@@ -38,7 +39,7 @@
         @if (IsPauseEnabled() && !_isLoadingCollections)
         {
             @* Pause Job - with dropdown for controlled pause if applicable *@
-            @if (MigrationJob != null && JobManager.IsControlledPauseApplicable(MigrationJob.JobType))
+            @if (MigrationJob != null && JobManager.IsControlledPauseApplicable(MigrationJob.JobType, MigrationJob))
             {
                 <div class="btn-group mx-2">
                     <button class="btn btn-primary dropdown-toggle" type="button" id="pauseJobDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Choose pause method">
@@ -440,7 +441,7 @@
                 <option value="@LogType.Warning">Warning + Error</option>
                 <option value="@LogType.Info">Info + Warning + Error</option>
                 <option value="@LogType.Debug">Debug + Info + Warning + Error</option>
-                <option value="@LogType.Debug">All (Verbose)</option>
+                <option value="@LogType.Verbose">All (Verbose)</option>
             </select>
         </div>
     </div>
@@ -640,7 +641,7 @@ else if (@_showLogBackupFile)
 
     #region Sorting Methods
 
-    private void SortBy(string columnName)
+    private async Task SortBy(string columnName)
     {
         if (_sortColumn == columnName)
         {
@@ -653,7 +654,7 @@ else if (@_showLogBackupFile)
         }
         
         _currentPage = 1; // Reset to first page when sorting changes
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     private string GetSortIcon(string columnName)
@@ -817,32 +818,32 @@ else if (@_showLogBackupFile)
         return _paginationHelper.GetEndPage();
     }
 
-    private void GoToPage(int pageNumber)
+    private async Task GoToPage(int pageNumber)
     {
         _currentPage = pageNumber;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private void OnFilterChanged()
+    private async Task OnFilterChanged()
     {
         _currentPage = 1; // Reset to first page when filter changes
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private void ClearFilter()
+    private async Task ClearFilter()
     {
         _filterText = string.Empty;
         _currentPage = 1;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private void OnPageSizeChanged()
+    private async Task OnPageSizeChanged()
     {
         _currentPage = 1; // Reset to first page when page size changes
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
-    private void OnLogLevelChanged()
+    private async Task OnLogLevelChanged()
     {
         // Save the job when log level changes
         JobManager.SaveJobs(out string errorMessage);
@@ -850,7 +851,7 @@ else if (@_showLogBackupFile)
         {
             _errorMessage = errorMessage;
         }
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
     #endregion
 
@@ -919,7 +920,10 @@ else if (@_showLogBackupFile)
         {
             _errorMessage = errorMessage;
         }
-        return list ?? new List<MigrationJob>();
+        // Return a snapshot copy to prevent cross-thread access issues
+        // The original list can be modified by background threads (migration workers, timers)
+        // while the UI thread iterates over it, causing casting/enumeration exceptions
+        return list != null ? new List<MigrationJob>(list) : new List<MigrationJob>();
     }
 
     private async Task DownloadLogBackupFile()
@@ -967,40 +971,41 @@ else if (@_showLogBackupFile)
 
     private void Refresh(object? state)
     {
-
-        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
-        if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
+        // Marshal ALL component state changes to the UI thread to prevent cross-thread access issues
+        InvokeAsync(() =>
         {
-            // Check if we should hide loading spinner
-            if (_isLoadingCollections && MigrationJob.MigrationUnits != null && MigrationJob.MigrationUnits.Count > 0)
+            MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+            if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
             {
-                _isLoadingCollections = false;
-            }
+                // Check if we should hide loading spinner
+                if (_isLoadingCollections && MigrationJob.MigrationUnits != null && MigrationJob.MigrationUnits.Count > 0)
+                {
+                    _isLoadingCollections = false;
+                }
 
-            LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
-            if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
-                _logBackupFile = logBackup;
+                LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+                if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                    _logBackupFile = logBackup;
 
-            VerboseMessages = JobManager.GetMonitorMessages(JobId ?? string.Empty);
-            //Console.WriteLine($"Refresh called for {JobId}");
+                VerboseMessages = JobManager.GetMonitorMessages(JobId ?? string.Empty);
+                //Console.WriteLine($"Refresh called for {JobId}");
 
-            if (!string.IsNullOrEmpty(_logBackupFile))
-            {
-                _refreshTimer?.Dispose();
-                _refreshTimer = null;
-                _showLogBackupFile = true;
+                if (!string.IsNullOrEmpty(_logBackupFile))
+                {
+                    _refreshTimer?.Dispose();
+                    _refreshTimer = null;
+                    _showLogBackupFile = true;
+                }
+                else
+                    _showLogBackupFile = false;
+
+                StateHasChanged();
             }
             else
-                _showLogBackupFile = false;
-
-            InvokeAsync(StateHasChanged); // Ensure UI updates on the main thread
-        }
-        else
-        {    
-            _refreshTimer?.Dispose();
-
-        }
-
+            {    
+                _refreshTimer?.Dispose();
+            }
+        });
     }
 
     private async Task UpdateTimerStatus(string id, int seconds)
@@ -1151,7 +1156,7 @@ else if (@_showLogBackupFile)
             if (mj.MigrationUnits == null || mj.MigrationUnits.Count == 0)
             {
                 _isLoadingCollections = true;
-                StateHasChanged();
+                await InvokeAsync(StateHasChanged);
             }
 
             // Run the long task on a separate thread
@@ -1439,63 +1444,63 @@ else if (@_showLogBackupFile)
         if (!SaveJobs()) return;
     }
 
-    private void IncreaseDumpWorkers()
+    private async Task IncreaseDumpWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentDumpWorkers < 16)
         {
             int newCount = MigrationJob.CurrentDumpWorkers + 1;
             JobManager.AdjustDumpWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void DecreaseDumpWorkers()
+    private async Task DecreaseDumpWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentDumpWorkers > 1)
         {
             int newCount = MigrationJob.CurrentDumpWorkers - 1;
             JobManager.AdjustDumpWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void IncreaseRestoreWorkers()
+    private async Task IncreaseRestoreWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentRestoreWorkers < 16)
         {
             int newCount = MigrationJob.CurrentRestoreWorkers + 1;
             JobManager.AdjustRestoreWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void DecreaseRestoreWorkers()
+    private async Task DecreaseRestoreWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentRestoreWorkers > 1)
         {
             int newCount = MigrationJob.CurrentRestoreWorkers - 1;
             JobManager.AdjustRestoreWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void IncreaseInsertionWorkers()
+    private async Task IncreaseInsertionWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentInsertionWorkers < 16)
         {
             int newCount = MigrationJob.CurrentInsertionWorkers + 1;
             JobManager.AdjustInsertionWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
-    private void DecreaseInsertionWorkers()
+    private async Task DecreaseInsertionWorkers()
     {
         if (MigrationJob != null && MigrationJob.CurrentInsertionWorkers > 1)
         {
             int newCount = MigrationJob.CurrentInsertionWorkers - 1;
             JobManager.AdjustInsertionWorkers(newCount);
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
     }
 

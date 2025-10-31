@@ -1430,7 +1430,7 @@ namespace OnlineMongoMigrationProcessor
                 // Use the parallel restore infrastructure even in simulation mode
                 var result = ParallelRestoreChunksAsync(
                     mu,
-                    folder,
+                    folder,///////
                     targetConnectionString,
                     dbName,
                     colName

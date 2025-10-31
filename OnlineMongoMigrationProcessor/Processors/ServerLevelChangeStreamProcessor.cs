@@ -147,6 +147,13 @@ namespace OnlineMongoMigrationProcessor
                     if (!AutoReplayFirstChangeInResumeToken())
                     {
                         _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for server-level change stream. Skipping server-level processing.", LogType.Error);
+                        
+                        // Reset CSUpdatesInLastBatch before early return to prevent stale values
+                        foreach (var kvp in _migrationUnitsToProcess)
+                        {
+                            kvp.Value.CSUpdatesInLastBatch = 0;
+                        }
+                        _jobList?.Save();
                         return;
                     }
                     SetInitialDocumentReplayedStatus(true);
@@ -191,11 +198,11 @@ namespace OnlineMongoMigrationProcessor
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (ExecutionCancelled) break;
 
                         var result = await ProcessChange(change, changeStreamDocuments, counter);
                         if (!result.success)
-                            return;
+                            break;
                         counter = result.counter;
                     }
                 }
@@ -204,7 +211,7 @@ namespace OnlineMongoMigrationProcessor
                     while (cursor.MoveNext(cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (ExecutionCancelled) break;
 
                         foreach (var change in cursor.Current)
                         {
@@ -212,16 +219,16 @@ namespace OnlineMongoMigrationProcessor
                             collectionKey = change.CollectionNamespace.ToString();
 
                             cancellationToken.ThrowIfCancellationRequested();
-                            if (ExecutionCancelled) return;
+                            if (ExecutionCancelled) break;
 
                             var result = await ProcessChange(change, changeStreamDocuments, counter);
                             if (!result.success)
-                                return;
+                                break;
                             counter = result.counter;
                         }
 
                         if (ExecutionCancelled)
-                            return;
+                            break;
                     }
                 }
             }
