@@ -344,7 +344,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var item in loadedObject)
                 {
-                    var tmpList = await PopulateJobCollectionsFromCSVAsync($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString);
+                    
+                    var tmpList = await PopulateJobCollectionsFromCSVAsync($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString,false);
                     if (tmpList.Count > 0)
                     {
                         foreach (var mu in tmpList)
@@ -409,14 +410,22 @@ namespace OnlineMongoMigrationProcessor
             job.MigrationUnits.Add(mu);
         }
 
-        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(string namespacesToMigrate, string connectionString)
+        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(string namespacesToMigrate, string connectionString, bool split=true)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
 
-            string[] collectionsInput = namespacesToMigrate
-                .Split(',')
-                .Select(mu => mu.Trim())
-                .ToArray();
+            string[] collectionsInput;
+            if (split)
+            {
+                collectionsInput = namespacesToMigrate
+                    .Split(',')
+                    .Select(mu => mu.Trim())
+                    .ToArray();
+            }
+            else
+            {
+                collectionsInput= new string[] { namespacesToMigrate.Trim() };
+            }
 
             foreach (var fullName in collectionsInput)
             {
@@ -537,7 +546,7 @@ namespace OnlineMongoMigrationProcessor
                         return new Tuple<bool, string, string>(false, string.Empty, errorMessage);
                     }
 
-                    var validationResult = ValidateNamespaceFormatfromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}");
+                    var validationResult = ValidateNamespaceFormatfromCSV($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}",false);
                     if (!validationResult.Item1)
                     {
                         errorMessage = validationResult.Item2;
@@ -551,14 +560,17 @@ namespace OnlineMongoMigrationProcessor
                 return ValidateNamespaceFormatfromCSV(input);
             }
         }
-        private static Tuple<bool, string, string> ValidateNamespaceFormatfromCSV(string input)
+        private static Tuple<bool, string, string> ValidateNamespaceFormatfromCSV(string input, bool split=true)
         {
             // Regular expression pattern to match db1.col1, db2.col2, db3.col4 format, with support for wildcards
             // Allow * for database name or collection name
             string pattern = @"^([^\/\\\.\x00\""\<\>\|\?\s]+|\*)\.{1}([^\/\\\x00\""\<\>\|\?]+|\*)$";
+            string[] items;
 
-            // Split the input by commas
-            string[] items = input.Split(',');
+            if (!split)            
+                items = new string[] { input.Trim() };
+            else
+                items = input.Split(',');
 
             // Use a HashSet to ensure no duplicates
             HashSet<string> validItems = new HashSet<string>();

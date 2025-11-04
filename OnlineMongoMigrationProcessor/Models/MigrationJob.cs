@@ -84,6 +84,12 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public LogType MinimumLogLevel { get; set; } = LogType.Info;
         
+        /// <summary>
+        /// UI auto-refresh enabled state. Default is true. Not persisted - transient UI state only.
+        /// </summary>
+        [JsonIgnore]
+        public bool AutoRefreshEnabled { get; set; } = true;
+        
         // Parallel Processing Configuration
         /// <summary>
         /// Maximum number of parallel mongodump processes. Null = auto-calculate based on CPU cores.

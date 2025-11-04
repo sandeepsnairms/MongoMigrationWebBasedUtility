@@ -127,9 +127,9 @@
 
     private async Task OnPemFileUpload(InputFileChangeEventArgs e)
     {
-    var file = e.File;
-    using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 1024 * 1024));
-    (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForSourceServer = await reader.ReadToEndAsync();
+        var file = e.File;
+        using var reader = new StreamReader(file.OpenReadStream(maxAllowedSize: 1024 * 1024));
+        (_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CACertContentsForSourceServer = await reader.ReadToEndAsync();
     }
 
 

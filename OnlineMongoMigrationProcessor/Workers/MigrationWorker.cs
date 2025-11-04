@@ -1,4 +1,4 @@
-﻿using MongoDB.Bson;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json;
 using OnlineMongoMigrationProcessor.Helpers;
@@ -340,11 +340,23 @@ namespace OnlineMongoMigrationProcessor.Workers
             else
             {
                 _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
-                //run this job async to detect change stream resume token, if no chnage stream is detected, it will not be set and cancel in 5 minutes
-                _ = Task.Run(async () =>
+                
+                try
                 {
-                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, mu, 300, _cts);
-                });
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, mu, 300, _cts);
+                        }
+                        catch
+                        {
+                        }
+                    });
+                }
+                catch
+                {
+                }
             }
            
             return TaskResult.Success;

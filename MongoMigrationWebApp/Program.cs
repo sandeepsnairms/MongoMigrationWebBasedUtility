@@ -4,36 +4,94 @@ using Microsoft.Extensions.DependencyInjection;
 using MongoMigrationWebApp.Service;
 using OnlineMongoMigrationProcessor;
 
+// Helper method for critical error logging that works even under memory pressure
+static void LogCriticalError(string source, Exception? ex, bool isTerminating = false)
+{
+    var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss UTC");
+    var logEntry = $"""
+        ===========================================
+        CRITICAL ERROR - {source}
+        ===========================================
+        Timestamp: {timestamp}
+        Is Terminating: {isTerminating}
+        Exception Type: {ex?.GetType().FullName ?? "Unknown"}
+        Message: {ex?.Message ?? "No message"}
+        Stack Trace:
+        {ex?.StackTrace ?? "No stack trace"}
+        
+        """;
+
+    // Log to console
+    Console.WriteLine(logEntry);
+
+    // Log to file - use try-catch to handle potential file I/O issues under memory pressure
+    try
+    {
+        var logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "critical_errors.log");
+        File.AppendAllText(logFile, logEntry + Environment.NewLine);
+    }
+    catch
+    {
+        // If file logging fails, at least we have console output
+        Console.WriteLine($"WARNING: Failed to write critical error to file at {timestamp}");
+    }
+}
+
 // Global exception handlers
 AppDomain.CurrentDomain.UnhandledException += (sender, eventArgs) =>
 {
     var ex = eventArgs.ExceptionObject as Exception;
-    Console.WriteLine("===========================================");
-    Console.WriteLine("UNHANDLED EXCEPTION in AppDomain");
-    Console.WriteLine("===========================================");
-    Console.WriteLine($"Is Terminating: {eventArgs.IsTerminating}");
-    Console.WriteLine($"Exception: {ex?.GetType().FullName}");
-    Console.WriteLine($"Message: {ex?.Message}");
-    Console.WriteLine($"Stack Trace:\n{ex?.StackTrace}");
-    Console.WriteLine("===========================================");
+    
+    // Special handling for OutOfMemoryException
+    if (ex is OutOfMemoryException)
+    {
+        LogCriticalError("AppDomain - OUT OF MEMORY", ex, eventArgs.IsTerminating);
+        
+        // Try emergency GC before termination
+        try
+        {
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            GC.WaitForPendingFinalizers();
+            Console.WriteLine("Emergency GC completed during OOM handling");
+        }
+        catch
+        {
+            Console.WriteLine("Emergency GC failed during OOM handling");
+        }
+    }
+    else
+    {
+        LogCriticalError("AppDomain - UNHANDLED EXCEPTION", ex, eventArgs.IsTerminating);
+    }
 };
 
 TaskScheduler.UnobservedTaskException += (sender, eventArgs) =>
 {
-    Console.WriteLine("===========================================");
-    Console.WriteLine("UNOBSERVED TASK EXCEPTION");
-    Console.WriteLine("===========================================");
-    Console.WriteLine($"Exception: {eventArgs.Exception.GetType().FullName}");
-    Console.WriteLine($"Message: {eventArgs.Exception.Message}");
+    var ex = eventArgs.Exception;
     
-    foreach (var innerEx in eventArgs.Exception.InnerExceptions)
+    // Check for OutOfMemoryException in the aggregate
+    bool hasOOM = ex.InnerExceptions.Any(innerEx => innerEx is OutOfMemoryException);
+    
+    if (hasOOM)
     {
-        Console.WriteLine($"\nInner Exception:");
-        Console.WriteLine($"  Type: {innerEx.GetType().FullName}");
-        Console.WriteLine($"  Message: {innerEx.Message}");
-        Console.WriteLine($"  Stack Trace:\n{innerEx.StackTrace}");
+        LogCriticalError("TaskScheduler - OUT OF MEMORY DETECTED", ex);
+        
+        // Try emergency GC
+        try
+        {
+            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+            GC.WaitForPendingFinalizers();
+            Console.WriteLine("Emergency GC completed during Task OOM handling");
+        }
+        catch
+        {
+            Console.WriteLine("Emergency GC failed during Task OOM handling");
+        }
     }
-    Console.WriteLine("===========================================");
+    else
+    {
+        LogCriticalError("TaskScheduler - UNOBSERVED TASK EXCEPTION", ex);
+    }
     
     // Mark as observed to prevent process termination
     eventArgs.SetObserved();
@@ -89,41 +147,45 @@ app.MapFallbackToPage("/_Host");
 app.MapControllers(); // Ensure controllers are mapped
 
     Console.WriteLine("Application starting...");
+    
+    // Log initial memory state
+    try
+    {
+        var gcMemory = GC.GetTotalMemory(false);
+        var workingSet = Environment.WorkingSet;
+        Console.WriteLine($"STARTUP MEMORY: GC={gcMemory / 1024 / 1024}MB, WorkingSet={workingSet / 1024 / 1024}MB");
+    }
+    catch
+    {
+        Console.WriteLine("Failed to log startup memory diagnostics");
+    }
+    
     app.Run();
     Console.WriteLine("Application stopped gracefully.");
 }
 catch (Exception ex)
 {
-    Console.WriteLine("===========================================");
-    Console.WriteLine("FATAL ERROR - Application crashed!");
-    Console.WriteLine("===========================================");
-    Console.WriteLine($"Exception Type: {ex.GetType().FullName}");
-    Console.WriteLine($"Message: {ex.Message}");
-    Console.WriteLine($"Stack Trace:\n{ex.StackTrace}");
-    
-    if (ex.InnerException != null)
+    // Special handling for OutOfMemoryException
+    if (ex is OutOfMemoryException)
     {
-        Console.WriteLine("\n--- Inner Exception ---");
-        Console.WriteLine($"Type: {ex.InnerException.GetType().FullName}");
-        Console.WriteLine($"Message: {ex.InnerException.Message}");
-        Console.WriteLine($"Stack Trace:\n{ex.InnerException.StackTrace}");
-    }
-    
-    // Check for AggregateException
-    if (ex is AggregateException aggEx)
-    {
-        Console.WriteLine($"\n--- AggregateException with {aggEx.InnerExceptions.Count} inner exceptions ---");
-        int i = 0;
-        foreach (var innerEx in aggEx.InnerExceptions)
+        LogCriticalError("MAIN - OUT OF MEMORY APPLICATION CRASH", ex);
+        
+        // Log memory diagnostics if possible
+        try
         {
-            Console.WriteLine($"\nInner Exception {++i}:");
-            Console.WriteLine($"  Type: {innerEx.GetType().FullName}");
-            Console.WriteLine($"  Message: {innerEx.Message}");
-            Console.WriteLine($"  Stack Trace:\n{innerEx.StackTrace}");
+            var gcMemory = GC.GetTotalMemory(false);
+            var workingSet = Environment.WorkingSet;
+            Console.WriteLine($"MEMORY DIAGNOSTICS: GC={gcMemory:N0} bytes, WorkingSet={workingSet:N0} bytes");
+        }
+        catch
+        {
+            Console.WriteLine("Failed to get memory diagnostics during OOM");
         }
     }
-    
-    Console.WriteLine("===========================================");
+    else
+    {
+        LogCriticalError("MAIN - FATAL APPLICATION CRASH", ex);
+    }
     
     // Re-throw to ensure the process exits with error code
     throw;

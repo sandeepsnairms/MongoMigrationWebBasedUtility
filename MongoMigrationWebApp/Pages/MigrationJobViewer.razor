@@ -8,19 +8,19 @@
 @inject IJSRuntime JS
 @inject Service.FileService FileService
 @inject HttpClient HttpClient
+@implements IDisposable
 
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>
         <button class="btn btn-light" @onclick="GoBack" title="Back to Job List" style="border: none; background: transparent;">
             <i class="bi bi-arrow-left"></i>
-        </button> @MigrationJob?.Name - Job Status
+        </button>
+        @MigrationJob?.Name - Job Status
     </h3>
     <div class="d-flex align-items-center mb-3">
 
-        
-
-        @if (IsResumeEnabled() && !_isLoadingCollections)
+                @if (IsResumeEnabled() && !_isLoadingCollections)
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -65,8 +65,8 @@
             }
             
             @* Worker adjustment dropdown - only for DumpAndRestore jobs with parallel processing enabled *@
-            @if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore && 
-                    MigrationJob?.EnableParallelProcessing == true)
+            @if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore &&
+                    MigrationJob?.EnableParallelProcessing == true && !CheckCutoverReadiness())
             {
                 <div class="btn-group mx-2">
                     <button class="btn btn-outline-secondary dropdown-toggle" type="button" id="workerAdjustmentDropdown" data-bs-toggle="dropdown" aria-expanded="false" title="Adjust parallel processing workers. D=Dump processes, R=Restore processes, I=Insertion workers per restore process">
@@ -105,6 +105,13 @@
 
             <button class="btn btn-toolbar" title="Refresh" @onclick="Refresh">
                 <i class="bi bi-arrow-repeat"></i>
+            </button>
+
+            <button class="btn btn-sm @((MigrationJob?.AutoRefreshEnabled ?? true) ? "btn-outline-success" : "btn-outline-secondary") ms-2" 
+                    @onclick="ToggleAutoRefresh" 
+                    title="@((MigrationJob?.AutoRefreshEnabled ?? true) ? "Auto-refresh is ON - Click to pause UI updates" : "Auto-refresh is OFF - Click to resume UI updates")"
+                    style="border: 1px solid;">
+                <i class="bi @((MigrationJob?.AutoRefreshEnabled ?? true) ? "bi-play-fill" : "bi-pause-fill")"></i>
             </button>
         }
 
@@ -398,7 +405,7 @@
     </div>
 }
 
-@if (LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !_showLogBackupFile)
+@if ((MigrationJob?.AutoRefreshEnabled ?? true) && LogBucket != null && VerboseMessages != null && VerboseMessages.Count > 0 && !_showLogBackupFile)
 {
     <h5 class="pt-4">
         Monitor
@@ -546,7 +553,7 @@ else if (@_showLogBackupFile)
     // Pagination and filtering properties (kept for UI binding compatibility)
     private string _filterText = string.Empty;
     private int _currentPage = 1;
-    private int _pageSize = 25;
+    private int _pageSize = 50;
 
     // Sorting properties
     private string _sortColumn = "DatabaseName";
@@ -557,6 +564,18 @@ else if (@_showLogBackupFile)
         new List<MigrationUnit>(),
         (unit, filterText) => true // Simple predicate, will be updated in UpdatePaginationHelper
     );
+    
+    // Cache to prevent re-sorting/filtering on every render
+    private List<MigrationUnit>? _cachedFilteredAndPagedUnits = null;
+    private int _cachedFilteredItemsCount = 0;
+    private string _cachedDisplayedItemsInfo = string.Empty;
+    private int _cachedTotalPages = 0;
+    private int _lastMigrationUnitsCount = 0;
+    private string _lastSortColumn = string.Empty;
+    private bool _lastSortAscending = true;
+    private string _lastFilterText = string.Empty;
+    private int _lastPageSize = 0;
+    private int _lastCurrentPage = 0;
 
     private Func<MigrationUnit, string, bool> GetFilterPredicate()
     {
@@ -741,18 +760,33 @@ else if (@_showLogBackupFile)
 
     private void UpdatePaginationHelper()
     {
+        // Check if we need to invalidate the cache
+        var currentUnitsCount = MigrationJob?.MigrationUnits?.Count ?? 0;
+        bool needsUpdate = _cachedFilteredAndPagedUnits == null ||
+                          currentUnitsCount != _lastMigrationUnitsCount ||
+                          _sortColumn != _lastSortColumn ||
+                          _sortAscending != _lastSortAscending ||
+                          _filterText != _lastFilterText ||
+                          _pageSize != _lastPageSize ||
+                          _currentPage != _lastCurrentPage;
+        
+        if (!needsUpdate)
+        {
+            return; // Use cached data
+        }
+        
         var currentUnits = MigrationJob?.MigrationUnits ?? new List<MigrationUnit>();
         
         // Apply sorting before pagination
         currentUnits = ApplySorting(currentUnits);
         
-        // Always recreate the pagination helper with sorted data
+        // Recreate the pagination helper only when needed
         _paginationHelper = new PaginationHelper<MigrationUnit>(
             currentUnits,
             GetFilterPredicate()
         );
         
-        // Always update the helper with current component state
+        // Update the helper with current component state
         _paginationHelper.FilterText = _filterText;
         _paginationHelper.PageSize = _pageSize;
         
@@ -763,12 +797,26 @@ else if (@_showLogBackupFile)
             _currentPage = Math.Max(1, totalPages);
         }
         _paginationHelper.CurrentPage = _currentPage;
+        
+        // Cache the results to prevent redundant GetFilteredItems() calls
+        _cachedFilteredAndPagedUnits = _paginationHelper.GetPagedItems();
+        _cachedFilteredItemsCount = _paginationHelper.GetFilteredItemsCount();
+        _cachedDisplayedItemsInfo = _paginationHelper.GetDisplayedItemsInfo();
+        _cachedTotalPages = _paginationHelper.GetTotalPages();
+        
+        // Update tracking variables
+        _lastMigrationUnitsCount = currentUnitsCount;
+        _lastSortColumn = _sortColumn;
+        _lastSortAscending = _sortAscending;
+        _lastFilterText = _filterText;
+        _lastPageSize = _pageSize;
+        _lastCurrentPage = _currentPage;
     }
 
     private List<MigrationUnit> GetFilteredAndPagedUnits()
     {
         UpdatePaginationHelper();
-        return _paginationHelper.GetPagedItems();
+        return _cachedFilteredAndPagedUnits ?? new List<MigrationUnit>();
     }
 
     private int GetTotalItemsCount()
@@ -779,19 +827,19 @@ else if (@_showLogBackupFile)
     private int GetFilteredItemsCount()
     {
         UpdatePaginationHelper();
-        return _paginationHelper.GetFilteredItemsCount();
+        return _cachedFilteredItemsCount;
     }
 
     private string GetDisplayedItemsInfo()
     {
         UpdatePaginationHelper();
-        return _paginationHelper.GetDisplayedItemsInfo();
+        return _cachedDisplayedItemsInfo;
     }
 
     private int GetTotalPages()
     {
         UpdatePaginationHelper();
-        return _paginationHelper.GetTotalPages();
+        return _cachedTotalPages;
     }
 
     private bool IsFirstPage() 
@@ -894,6 +942,49 @@ else if (@_showLogBackupFile)
         NavigationManager.NavigateTo("/"); // Navigate back to the previous page
     }
 
+    private async Task ToggleAutoRefresh()
+    {
+        await InvokeAsync(() =>
+        {
+            if (MigrationJob == null) return;
+            
+            MigrationJob.AutoRefreshEnabled = !MigrationJob.AutoRefreshEnabled;
+            
+            if (MigrationJob.AutoRefreshEnabled)
+            {
+                // Re-enable: Start the timer and do an immediate refresh
+                if (_refreshTimer == null)
+                {
+                    _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 5 seconds
+                }
+                
+                // Trigger immediate refresh
+                MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+                if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
+                {
+                    if (_isLoadingCollections && MigrationJob.MigrationUnits != null && MigrationJob.MigrationUnits.Count > 0)
+                    {
+                        _isLoadingCollections = false;
+                    }
+
+                    LogBucket = JobManager.GetLogBucket(JobId, out string logBackup, out bool isLive);
+                    if (!string.IsNullOrEmpty(logBackup) && logBackup != JobId)
+                        _logBackupFile = logBackup;
+
+                    VerboseMessages = JobManager.GetMonitorMessages(JobId ?? string.Empty);
+                }
+            }
+            else
+            {
+                // Disable: Stop and dispose the timer
+                _refreshTimer?.Dispose();
+                _refreshTimer = null;
+            }
+            
+            StateHasChanged();
+        });
+    }
+
     private void StartAutoRefresh()
     {
         _showLogBackupFile = false;
@@ -901,7 +992,11 @@ else if (@_showLogBackupFile)
         MigrationJob = GetMigrations().Find(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
-            _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 5 seconds
+            // Only start timer if AutoRefreshEnabled is true (default)
+            if (MigrationJob.AutoRefreshEnabled)
+            {
+                _refreshTimer = new Timer(Refresh, null, 0, 5000); // Update every 5 seconds
+            }
             ScheduleUpdateTimerStatus(JobId, 30); // check to set the timer status based on whether the job is live or not
         }
 
@@ -998,6 +1093,12 @@ else if (@_showLogBackupFile)
                 }
                 else
                     _showLogBackupFile = false;
+
+                // Invalidate all pagination caches when data refreshes
+                _cachedFilteredAndPagedUnits = null;
+                _cachedFilteredItemsCount = 0;
+                _cachedDisplayedItemsInfo = string.Empty;
+                _cachedTotalPages = 0;
 
                 StateHasChanged();
             }
@@ -1536,6 +1637,12 @@ else if (@_showLogBackupFile)
             return true;
         }
         return false;
+    }
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        _refreshTimer = null;
     }
 }
 

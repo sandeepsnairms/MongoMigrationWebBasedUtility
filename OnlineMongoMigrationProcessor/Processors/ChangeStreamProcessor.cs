@@ -52,7 +52,7 @@ namespace OnlineMongoMigrationProcessor
         protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
         protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
-        protected const int MEMORY_THRESHOLD_PERCENT = 80;
+        protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
 
         // UI update throttling to prevent Blazor rendering OOM (max 1 update per second per collection)
         protected readonly ConcurrentDictionary<string, DateTime> _lastUIUpdateTime = new ConcurrentDictionary<string, DateTime>();
@@ -140,18 +140,25 @@ namespace OnlineMongoMigrationProcessor
                         {
                             string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
                             _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Verbose);
-                            _ = Task.Run(async () => 
+                            
+                            try
                             {
-                                try
+                                _ = Task.Run(async () => 
                                 {
-                                    await CleanupAggressiveCSAsync(migrationUnit);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
-                                    // Don't re-throw for fire-and-forget tasks
-                                }
-                            });
+                                    try
+                                    {
+                                        await CleanupAggressiveCSAsync(migrationUnit);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
+                                        // Don't re-throw for fire-and-forget tasks
+                                    }
+                                });
+                            }
+                            catch
+                            {
+                            }
                         }
                     }
                 }
@@ -644,33 +651,41 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         protected void TrackBackgroundTask(Task task)
         {
-            var monitoredTask = Task.Run(async () =>
+            
+            try
             {
-                try
+                var monitoredTask = Task.Run(async () =>
                 {
-                    await task;
-                }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
-                {
-                    _criticalFailureDetected = true;
-                    _criticalFailureException = ex;
-                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
-                }
-                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
-                {
-                    var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
-                    _criticalFailureDetected = true;
-                    _criticalFailureException = criticalEx;
-                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
-                }
-            });
+                    try
+                    {
+                        await task;
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                    {
+                        _criticalFailureDetected = true;
+                        _criticalFailureException = ex;
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
+                    }
+                    catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+                    {
+                        var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                        _criticalFailureDetected = true;
+                        _criticalFailureException = criticalEx;
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
+                    }
+                });
 
-            _backgroundProcessingTasks.Add(monitoredTask);
-            PruneCompletedBackgroundTasks();
+                _backgroundProcessingTasks.Add(monitoredTask);
+                PruneCompletedBackgroundTasks();
+            }
+            catch
+            {
+                throw;
+            }
         }
 
         /// <summary>

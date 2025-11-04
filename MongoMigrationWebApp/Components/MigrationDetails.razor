@@ -1,17 +1,19 @@
 ﻿@inject Service.JobManager JobManager
 @inject IConfiguration Configuration
+@inject IJSRuntime JSRuntime
 
 @using OnlineMongoMigrationProcessor
 @using OnlineMongoMigrationProcessor.Models
+@using Microsoft.JSInterop
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
     <div class="modal-dialog bg-dark">
         <div class="modal-content">
             <div class="modal-header">
-                <h4 class="modal-title">@(NewMode ? "New Job Details" : "Update Connections Strings")</h4>
-                <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
-            </div>
-            <div class="modal-body">
+       <h4 class="modal-title">@(NewMode ? "New Job Details" : "Update Connections Strings")</h4>
+           <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
+ </div>
+       <div class="modal-body">
                 <div class="mb-3">
                     <label for="name" class="form-label">Name</label>
                     <input type="text" id="name" class="form-control" disabled="@(!NewMode)" @bind="name" />
@@ -86,8 +88,33 @@
                 </div>
 
                 <div class="mb-3">
-                    <label for="nameSpaces" class="form-label">Collections To Migrate</label>
-                    <textarea id="nameSpaces" disabled="@(!NewMode)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme" class="form-control" @bind="namespaces"></textarea>
+                 <label for="nameSpaces" class="form-label">Collections To Migrate</label>
+                    <textarea id="nameSpaces" disabled="@(!NewMode || isFileUploaded)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme. Max 1000 characters, use 'Upload File' for larger text." class="form-control" @bind="namespaces" @oninput="OnTextAreaInput"></textarea>                  @if (NewMode)
+                    {
+                        <div class="mt-2">
+                            <label for="fileUpload" class="btn btn-sm btn-outline-secondary" style="cursor: pointer;">
+                                <i class="bi bi-upload"></i> Upload File
+                            </label>
+                            <InputFile id="fileUpload" OnChange="HandleFileUpload" class="d-none" disabled="@isTextAreaUsed" accept=".txt,.json" />
+                            @if (isFileUploaded)
+                            {
+                                <span class="ms-2 text-success">
+                                    <i class="bi bi-check-circle"></i> @uploadedFileName
+                                    </span>
+                                <button type="button" class="btn btn-sm btn-link text-danger" @onclick="ClearFileUpload">
+                                    <i class="bi bi-x-circle"></i> Clear
+                                </button>
+                            }
+                        </div>
+                        @if (isTextAreaUsed && !isFileUploaded)
+                        {
+                            <small class="text-muted">File upload is disabled when text is entered manually.</small>
+                        }
+                        else if (isFileUploaded)
+                        {
+                            <small class="text-muted">Text area is disabled when a file is uploaded.</small>
+                        }
+                    }
                 </div>
                 <div class="mb-3 checkbox-container">
                     <div class="checkbox-group">
@@ -179,6 +206,61 @@
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
+    
+    // File upload state
+    private bool isFileUploaded = false;
+    private bool isTextAreaUsed = false;
+    private string uploadedFileName = string.Empty;
+
+    private void OnTextAreaInput(ChangeEventArgs e)
+{
+        var value = e?.Value?.ToString() ?? string.Empty;
+        isTextAreaUsed = !string.IsNullOrWhiteSpace(value);
+    }
+
+    private async Task HandleFileUpload(InputFileChangeEventArgs e)
+    {
+     try
+        {
+   var file = e.File;
+    
+          if (file == null)
+ {
+           return;
+     }
+
+            // Limit file size to 10MB
+            const long maxFileSize = 10 * 1024 * 1024;
+            if (file.Size > maxFileSize)
+          {
+              errorMessage = "File size exceeds 10MB limit.";
+                return;
+     }
+
+            using var stream = file.OpenReadStream(maxFileSize);
+using var reader = new StreamReader(stream);
+            namespaces = await reader.ReadToEndAsync();
+
+            isFileUploaded = true;
+ uploadedFileName = file.Name;
+      isTextAreaUsed = false; // Reset text area flag when file is uploaded
+          errorMessage = string.Empty;
+          StateHasChanged();
+        }
+catch (Exception ex)
+        {
+  errorMessage = $"Error reading file: {ex.Message}";
+        }
+    }
+
+    private void ClearFileUpload()
+    {
+        isFileUploaded = false;
+        uploadedFileName = string.Empty;
+    namespaces = string.Empty;
+    StateHasChanged();
+    }
+
     private void OnModeSelectionChanged(ChangeEventArgs e)
     {
         var val = e?.Value?.ToString() ?? string.Empty;
@@ -268,10 +350,13 @@
             SelectedChangeStreamMode = "Delayed"; // Default to Delayed
             SelectedChangeStreamScope = "Collection"; // Default to Collection
             changeStreamLevel = ChangeStreamLevel.Collection; // Default to Collection
+            isFileUploaded = false;
+            isTextAreaUsed = false;
+            uploadedFileName = string.Empty;
         }
         else
-        {
-            name = Job?.Name ?? string.Empty;
+     {
+       name = Job?.Name ?? string.Empty;
             sourceConnectionString = Job?.SourceConnectionString ?? string.Empty;
             targetConnectionString = Job?.TargetConnectionString ?? string.Empty;
             namespaces = Job?.NameSpaces ?? string.Empty;
@@ -328,6 +413,7 @@
             };
         }
     }
+
     private async void HandleSubmit()
     {
         if (ShowWarning() && !overwrite)

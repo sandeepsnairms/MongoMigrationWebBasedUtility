@@ -70,6 +70,8 @@ namespace OnlineMongoMigrationProcessor
 
                     int seconds = GetBatchDurationInSeconds(timeFactor);
                     _log.WriteLine($"{_syncBackPrefix}Batch duration computed - Seconds: {seconds}, Collections: {batchKeys.Count}", LogType.Debug);
+                    
+                    
                     foreach (var key in batchKeys)
                     {
                         if (_migrationUnitsToProcess.TryGetValue(key, out var unit))
@@ -78,23 +80,36 @@ namespace OnlineMongoMigrationProcessor
                             unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
                             // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside ProcessCollectionChangeStream
                             string collectionName = key; // Capture for closure
-                            var task = Task.Run(async () =>
+                            
+                            
+                            try
                             {
-                                try
+                                var task = Task.Run(async () =>
                                 {
-                                    await ProcessCollectionChangeStream(unit, true, seconds);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _log.WriteLine($"{_syncBackPrefix}Unhandled exception in Task.Run for collection {collectionName}: {ex}", LogType.Error);
-                                    throw; // Re-throw to ensure Task.WhenAll sees the failure
-                                }
-                            });
-                            tasks.Add(task);
+                                    try
+                                    {
+                                        await ProcessCollectionChangeStream(unit, true, seconds);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _log.WriteLine($"{_syncBackPrefix}Unhandled exception in Task.Run for collection {collectionName}: {ex}", LogType.Error);
+                                        throw; // Re-throw to ensure Task.WhenAll sees the failure
+                                    }
+                                });
+                                
+                                tasks.Add(task);
+                            }
+                            catch
+                            {
+                                throw;
+                            }
                         }
                     }
 
                     _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
+                    
+                    // Log memory stats before batch processing
+                    LogMemoryStats("BeforeBatch");
 
                     try
                     {
@@ -107,14 +122,22 @@ namespace OnlineMongoMigrationProcessor
                         // Log individual task states
                         for (int i = 0; i < tasks.Count; i++)
                         {
-                            var task = tasks[i];
-                            if (task.IsFaulted)
+                            try
                             {
-                                _log.WriteLine($"{_syncBackPrefix}Task {i} FAULTED: {task.Exception?.GetBaseException().Message}", LogType.Error);
+                                var task = tasks[i];
+                                
+                                if (task.IsFaulted)
+                                {
+                                    var baseEx = task.Exception?.GetBaseException();
+                                    _log.WriteLine($"{_syncBackPrefix}Task {i} FAULTED: {baseEx?.Message}", LogType.Error);
+                                }
+                                else if (task.IsCanceled)
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix}Task {i} CANCELED", LogType.Warning);
+                                }
                             }
-                            else if (task.IsCanceled)
+                            catch
                             {
-                                _log.WriteLine($"{_syncBackPrefix}Task {i} CANCELED", LogType.Warning);
                             }
                         }
 
@@ -124,8 +147,16 @@ namespace OnlineMongoMigrationProcessor
 
                     index += _concurrentProcessors;
 
-                    // Pause briefly before next batch
-                    Thread.Sleep(100);
+                    // Pause between batches to allow memory recovery and reduce CPU spikes
+                    // Increased to 5000ms to address OOM issues and server CPU spikes
+                    Thread.Sleep(5000);
+                    
+                    // Force garbage collection between batches to prevent memory buildup
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    GC.WaitForPendingFinalizers();
+                    
+                    // Log memory stats after batch processing and GC
+                    LogMemoryStats("AfterBatch");
                 }
 
                 _log.WriteLine($"{_syncBackPrefix}Completed round {loops + 1} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...");
@@ -305,7 +336,7 @@ namespace OnlineMongoMigrationProcessor
                         mu.ResetChangeStream = false; //reset the start time after setting resume token
                     }
 
-                    var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                    using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                     CancellationToken cancellationToken = cancellationTokenSource.Token;
 
                     _log.ShowInMonitor($"{_syncBackPrefix}Monitoring change stream with new batch for {sourceCollection!.CollectionNamespace}. Batch Duration {seconds} seconds");
@@ -383,6 +414,19 @@ namespace OnlineMongoMigrationProcessor
 
                 var pipelineArray = pipeline.ToArray();
 
+                // OOM PREVENTION: Check memory before creating Watch cursor to prevent crash during allocation
+                if (IsMemoryExhausted(out long memMB, out long memMaxMB, out double memPercent))
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure HIGH before Watch() - {memMB}MB / {memMaxMB}MB ({memPercent:F1}%) - waiting for recovery");
+                    
+                    // Force GC and wait for memory recovery before attempting Watch()
+                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                    await Task.Delay(2000); // Give GC time to complete
+                    
+                    await WaitForMemoryRecoveryAsync(collectionKey);
+                    
+                }
+
                 // Watch timeout should be longer than batch duration to allow full batch processing
                 // Add 30 second buffer to prevent premature timeout when waiting for changes
                 int watchTimeoutSeconds = seconds + 30;
@@ -392,11 +436,29 @@ namespace OnlineMongoMigrationProcessor
                 using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 var watchToken = watchCts.Token;
 
+                
                 var watchTask = Task.Run(() =>
                 {
                     try
                     {
+                        
+                        // Add periodic heartbeat logs to detect if Watch() hangs
+                        using var watchCts = new CancellationTokenSource();
+                        var heartbeatTask = Task.Run(async () =>
+                        {
+                            int seconds = 0;
+                            while (!watchCts.Token.IsCancellationRequested)
+                            {
+                                await Task.Delay(5000, watchCts.Token);
+                                seconds += 5;
+                            }
+                        });
+                        
                         var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, watchToken);
+                        
+                        watchCts.Cancel();
+                        try { heartbeatTask.Wait(1000); } catch { }
+                        
                         return cursor;
                     }
                     catch (OperationCanceledException)
@@ -409,6 +471,7 @@ namespace OnlineMongoMigrationProcessor
                         throw; // Re-throw to let the timeout handler deal with it
                     }
                 }, watchToken);
+                
                 
                 var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds), CancellationToken.None);
 
@@ -445,7 +508,7 @@ namespace OnlineMongoMigrationProcessor
                     _jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
-                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out after {watchTimeoutSeconds}s for {collectionKey} - will retry in next batch", LogType.Info);
+                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out after {watchTimeoutSeconds}s for {collectionKey} - will retry in next batch", LogType.Debug);
                     return; // Skip this collection, will retry in next batch
                 }
                 IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor;
@@ -455,7 +518,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Error);
+                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Verbose);
                     
                     
                     // Clear accumulated data to prevent memory leak
@@ -513,7 +576,7 @@ namespace OnlineMongoMigrationProcessor
                                                   changeStreamDocuments.DocsToBeUpdated.Count +
                                                   changeStreamDocuments.DocsToBeDeleted.Count;
 
-                            if (totalAccumulated >= 5000)
+                            if (totalAccumulated >= 1000) // Reduced from 5000 to prevent OOM with concurrent collections
                             {
                                 _log.WriteLine($"{_syncBackPrefix}Memory safety threshold reached - {totalAccumulated} documents accumulated for {collectionKey}", LogType.Debug);
                                 // BACKPRESSURE: Check global pending writes before adding more load
@@ -567,7 +630,7 @@ namespace OnlineMongoMigrationProcessor
                                     changeStreamDocuments.DocsToBeUpdated.Clear();
                                     changeStreamDocuments.DocsToBeDeleted.Clear();
 
-                                    _log.WriteLine($"{_syncBackPrefix}Memory safety flush completed, memory released for {sourceCollection.CollectionNamespace}", LogType.Info);
+                                    _log.WriteLine($"{_syncBackPrefix}Memory safety flush completed, memory released for {sourceCollection.CollectionNamespace}", LogType.Debug);
                                 }
                                 finally
                                 {
@@ -588,7 +651,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
                             {
-                                _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Info);
+                                _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
                                 break; // Exit loop, let finally block handle cleanup
                             }
 
@@ -608,7 +671,7 @@ namespace OnlineMongoMigrationProcessor
                             catch (OperationCanceledException)
                             {
                                 // Expected when cancellationToken times out
-                                _log.WriteLine($"{_syncBackPrefix}MoveNext cancelled by timeout for {sourceCollection!.CollectionNamespace} - completing batch", LogType.Info);
+                                _log.WriteLine($"{_syncBackPrefix}MoveNext cancelled by timeout for {sourceCollection!.CollectionNamespace} - completing batch", LogType.Debug);
                                 break; // Exit loop, process accumulated batch
                             }
 
@@ -618,8 +681,11 @@ namespace OnlineMongoMigrationProcessor
                                 break;
                             }
 
+                            int changeCount = 0;
                             foreach (var change in cursor.Current)
                             {
+                                changeCount++;
+                                
                                 if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
                                 {
                                     _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
@@ -647,12 +713,12 @@ namespace OnlineMongoMigrationProcessor
                                 _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Error);
                                 break; // Exit loop on exception, let finally block handle cleanup
                             }                                // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                                // Check every 5000 documents to avoid excessive memory buildup
+                                // Check every 1000 documents to avoid excessive memory buildup (reduced from 5000)
                                 int totalAccumulated = changeStreamDocuments.DocsToBeInserted.Count +
                                                       changeStreamDocuments.DocsToBeUpdated.Count +
                                                       changeStreamDocuments.DocsToBeDeleted.Count;
 
-                                if (totalAccumulated >= 5000)
+                                if (totalAccumulated >= 1000) // Reduced from 5000 to prevent OOM with concurrent collections
                                 {
                                     _log.WriteLine($"{_syncBackPrefix}Memory safety threshold reached - {totalAccumulated} documents accumulated for {collectionKey}", LogType.Debug);
                                     // BACKPRESSURE: Check global pending writes before adding more load
@@ -1067,6 +1133,33 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing operation {change.OperationType} on {collNameSpace} with _id {idValue}. Details: {ex}", LogType.Error);
+            }
+        }
+
+        /// <summary>
+        /// Log memory statistics to help identify memory pressure and potential OOM issues
+        /// </summary>
+        private void LogMemoryStats(string context)
+        {
+            try
+            {
+                var gcMemory = GC.GetTotalMemory(false);
+                var workingSet = Environment.WorkingSet;
+                var gcMemoryMB = gcMemory / 1024 / 1024;
+                var workingSetMB = workingSet / 1024 / 1024;
+                
+                _log.WriteLine($"{_syncBackPrefix}MEMORY [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB", LogType.Verbose);
+                
+                // Show warning in monitor if memory usage is high (over 1GB GC memory)
+                if (gcMemoryMB > 1024)
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}HIGH MEMORY WARNING [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Memory logging itself can fail under extreme pressure
+                _log.WriteLine($"{_syncBackPrefix}Failed to log memory stats [{context}]: {ex.Message}", LogType.Debug);
             }
         }
     }
