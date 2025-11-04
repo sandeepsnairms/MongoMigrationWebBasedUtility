@@ -222,34 +222,34 @@
     {
      try
         {
-   var file = e.File;
+            var file = e.File;
     
-          if (file == null)
- {
-           return;
-     }
+            if (file == null)
+            {
+                return;
+            }
 
             // Limit file size to 10MB
             const long maxFileSize = 10 * 1024 * 1024;
             if (file.Size > maxFileSize)
-          {
-              errorMessage = "File size exceeds 10MB limit.";
+            {
+                errorMessage = "File size exceeds 10MB limit.";
                 return;
-     }
+            }
 
             using var stream = file.OpenReadStream(maxFileSize);
-using var reader = new StreamReader(stream);
+            using var reader = new StreamReader(stream);
             namespaces = await reader.ReadToEndAsync();
 
             isFileUploaded = true;
- uploadedFileName = file.Name;
-      isTextAreaUsed = false; // Reset text area flag when file is uploaded
-          errorMessage = string.Empty;
-          StateHasChanged();
+            uploadedFileName = file.Name;
+            isTextAreaUsed = false; // Reset text area flag when file is uploaded
+            errorMessage = string.Empty;
+            StateHasChanged();
         }
-catch (Exception ex)
+        catch (Exception ex)
         {
-  errorMessage = $"Error reading file: {ex.Message}";
+            errorMessage = $"Error reading file: {ex.Message}";
         }
     }
 
@@ -516,7 +516,8 @@ catch (Exception ex)
             CSStartsAfterAllUploads = startCSAfterUploads,
             AggresiveChangeStream = aggressiveCS,
             ChangeStreamLevel = changeStreamLevel,
-            AllCollectionsUseObjectId = allCollectionsUseObjectId  // Transient flag, not persisted
+            AllCollectionsUseObjectId = allCollectionsUseObjectId, // Transient flag, not persisted
+            MigrationUnitIds = new List<string>()
         };
         await OnSubmit.InvokeAsync(job);
     }

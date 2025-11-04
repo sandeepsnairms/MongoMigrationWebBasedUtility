@@ -1649,8 +1649,8 @@ else if (@_showLogBackupFile)
 
     private  bool  IsPauseEnabled()
     {
-    var mj = MigrationJob;
-    return mj != null && !mj.IsCancelled && !mj.IsCompleted && IsJobRunning() && NoOtherActiveJobs();
+        var mj = MigrationJob;
+        return mj != null && !mj.IsCancelled && !mj.IsCompleted && IsJobRunning() && NoOtherActiveJobs();
     }
 
 

@@ -630,6 +630,11 @@ namespace OnlineMongoMigrationProcessor
         public static List<MigrationUnit> GetMigrationUnitToMigrate(JobList joblist,MigrationJob job)
         {
             var unitsForMigrate = new List<MigrationUnit>();
+
+            if(job.MigrationUnitIds==null || job.MigrationUnitIds.Count==0)
+            {
+                return unitsForMigrate;
+            }
             foreach (var id in job.MigrationUnitIds!)
             {
                 var mu = joblist.GetMigrationUnit(job.Id, id);

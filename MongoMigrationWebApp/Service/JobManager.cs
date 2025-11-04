@@ -104,6 +104,8 @@ namespace MongoMigrationWebApp.Service
             return jobs;
         }
 
+
+
         public List<string> GetMigrationIds(out string errorMessage, bool force = false)
         {
             errorMessage = string.Empty;
@@ -133,13 +135,22 @@ namespace MongoMigrationWebApp.Service
 
         public void ClearJobFiles(string jobId)
         {
+            _jobList.MigrationJobIds?.Remove(jobId);
+            _jobList.SaveJobList();
             try
             {
-                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+                Task.Run(() =>
+                {
+                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}", true);
+                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+                    
+                });
             }
             catch
             {
             }
+
+            
         }
 
         #endregion 
