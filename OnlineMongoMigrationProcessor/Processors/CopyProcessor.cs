@@ -124,7 +124,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.MigrationChunks[chunkIndex].IsDownloaded = true;
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
                 }
-                _jobList?.Save(); // Persist state
+                _jobList?.SaveMigrationUnit(mu);
+                //_jobList?.Save(); // Persist state
                 return TaskResult.Success;
             }
             else if(result == TaskResult.Canceled)

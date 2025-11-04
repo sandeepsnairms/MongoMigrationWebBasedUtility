@@ -297,7 +297,7 @@
                 StateHasChanged(); // Update UI to show spinner
 
                 // Use the async method with SourceConnectionString parameter
-                var newunits = await Helper.PopulateJobCollectionsAsync(newCollection, SourceConnectionString ?? string.Empty, allCollectionsUseObjectId);
+                var newunits = await Helper.PopulateJobCollectionsAsync(MigrationJob ,newCollection, SourceConnectionString ?? string.Empty, allCollectionsUseObjectId);
                 
                 foreach (var mu in newunits)
                 {
@@ -307,6 +307,7 @@
                         updatedMigrationUnits.Add(mu);
                     }
                 }
+
 
                 newCollection = string.Empty;
                 

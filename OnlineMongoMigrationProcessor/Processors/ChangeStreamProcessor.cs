@@ -129,8 +129,9 @@ namespace OnlineMongoMigrationProcessor
                 var token = cts.Token;
 
                 _migrationUnitsToProcess.Clear();
-                foreach (var migrationUnit in _job.MigrationUnits)
+                foreach (var id in _job.MigrationUnitIds)
                 {
+                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, id);
                     if (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
                     {
                         _migrationUnitsToProcess[$"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}"] = migrationUnit;
@@ -164,7 +165,8 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 _job.CSPostProcessingStarted = true;
-                _jobList?.Save(); // persist state
+                _jobList?.SaveMigrationJobDefinition(_job); // persist state
+                //_jobList?.Save(); // persist state
 
                 if (_migrationUnitsToProcess.Count == 0)
                 {
@@ -177,7 +179,8 @@ namespace OnlineMongoMigrationProcessor
                 await ProcessChangeStreamsAsync(token);
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
-                _jobList?.Save();
+                //_jobList?.Save();
+                _jobList?.SaveMigrationJobDefinition(_job); // persist state
 
             }
             catch (OperationCanceledException)
@@ -549,7 +552,8 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: No documents to delete");
                 }
                 // Save the updated state
-                _jobList?.Save();
+                //_jobList?.Save();
+                _jobList?.SaveMigrationJobDefinition(_job); // persist state
             }
             catch (Exception ex)
             {
@@ -588,8 +592,9 @@ namespace OnlineMongoMigrationProcessor
                 int processedCount = 0;
                 int skippedCount = 0;
 
-                foreach (var migrationUnit in _job.MigrationUnits ?? new List<MigrationUnit>())
+                foreach (var id in _job.MigrationUnitIds)
                 {
+                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, id);
                     if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
                     {
                         if (!migrationUnit.AggressiveCacheDeleted)

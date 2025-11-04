@@ -127,7 +127,7 @@
     private string GetTootTip(MigrationJob migrationJob)
     {
         return string.Join(",",
-            migrationJob?.MigrationUnits?
+            @JobManager.GetMigrationUnits(migrationJob)?
                 .Select(mu => $"{mu.DatabaseName}.{mu.CollectionName}") ?? Enumerable.Empty<string>());
     }
 
@@ -181,73 +181,73 @@
 
     private async Task RestoreBackup()
     {
-        await Task.Yield();
-        var backupDate = JobManager.GetJobBackupDate();
+        // await Task.Yield();
+        // var backupDate = JobManager.GetJobBackupDate();
 
-        if (backupDate == DateTime.MinValue)
-        {
-            _message = "No backup file found.";
-            _messageDialogOpen = true;
-            return;
-        }
+        // if (backupDate == DateTime.MinValue)
+        // {
+        //     _message = "No backup file found.";
+        //     _messageDialogOpen = true;
+        //     return;
+        // }
 
-        var gap = DateTime.UtcNow - backupDate;
-        string lagString = string.Empty;
+        // var gap = DateTime.UtcNow - backupDate;
+        // string lagString = string.Empty;
 
-        if (gap.TotalSeconds > 0)
-        {
-            lagString = $"from {(int)gap.TotalMinutes} minutes ago";
-        }
+        // if (gap.TotalSeconds > 0)
+        // {
+        //     lagString = $"from {(int)gap.TotalMinutes} minutes ago";
+        // }
 
-        _message = $"Warning: This will stop ongoing jobs and overwrite current migration jobs with a backup {lagString}. Do you wish to proceed?";
-        _recoverDialogOpen = true;
+        // _message = $"Warning: This will stop ongoing jobs and overwrite current migration jobs with a backup {lagString}. Do you wish to proceed?";
+        // _recoverDialogOpen = true;
     }
 
     private void RestoreBackupSubmit(YesNoDialog.YesNoDialogResult result)
     {
-        try
-        {
-            _recoverDialogOpen = false;
-            _loadingComplete = false;
+    //     try
+    //     {
+    //         _recoverDialogOpen = false;
+    //         _loadingComplete = false;
 
-            if (!result.IsConfirmed)
-            {
-                return;
-            }
-
-
-            foreach (var job in GetMigrationsFromManager(true,false))
-            {
-                job.IsCancelled = true;
-                // job.CurrentlyActive = false;
-                job.IsStarted = false;
-                JobManager.CancelMigration(job.Id);
-            }
-            JobManager.StopMigration();
+    //         if (!result.IsConfirmed)
+    //         {
+    //             return;
+    //         }
 
 
+    //         foreach (var job in GetMigrationsFromManager(true,false))
+    //         {
+    //             job.IsCancelled = true;
+    //             // job.CurrentlyActive = false;
+    //             job.IsStarted = false;
+    //             JobManager.CancelMigration(job.Id);
+    //         }
+    //         JobManager.StopMigration();
 
-            bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
-            if (success)
-            {
-                migrationJobs = GetMigrations();               
-            }
-            else
-            {
-                _message = errorMessage;
-                _messageDialogOpen = true;
-            }
-        }
-    catch (Exception)
-        {
-            _message = "Failed to restore backup.";
-            _messageDialogOpen = true;
-        }
-        finally
-        {           
-            _selectedMigrationJob = null;
-            _loadingComplete = true;
-        }
+
+
+    //         bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
+    //         if (success)
+    //         {
+    //             migrationJobs = GetMigrations();               
+    //         }
+    //         else
+    //         {
+    //             _message = errorMessage;
+    //             _messageDialogOpen = true;
+    //         }
+    //     }
+    // catch (Exception)
+    //     {
+    //         _message = "Failed to restore backup.";
+    //         _messageDialogOpen = true;
+    //     }
+    //     finally
+    //     {           
+    //         _selectedMigrationJob = null;
+    //         _loadingComplete = true;
+    //     }
     }
 
     private List<MigrationJob> GetMigrations()
@@ -257,7 +257,8 @@
 
     private List<MigrationJob> GetMigrationsFromManager(bool silent, bool force = false)
     {
-        var result=JobManager.GetMigrations(out string errorMessage, force);
+        var ids = JobManager.GetMigrationIds(out string errorMessage, force);
+        var result = JobManager.GetMigrationJobs(ids);
         if(!string.IsNullOrEmpty(errorMessage) || result==null)
         {
             if (!silent)
@@ -315,11 +316,12 @@
                            {
                                JobManager.ClearJobFiles(jobId);
                            });
-
-                        JobManager.SaveJobs(out string errorMessage);
-                        if (!string.IsNullOrEmpty(errorMessage))
+                         
+                        var jobList = JobManager.GetJobList();
+                        
+                        if (!jobList.SaveJobList())
                         {
-                            _message = errorMessage;
+                            _message = "Failed to save job list."; 
                             _messageDialogOpen = true;
                         }
                     }
@@ -392,12 +394,15 @@
             {
                 GetMigrations().Add(job);
                 job.IsStarted = true;
-                JobManager.SaveJobs(out string errorMessage);
-                if (!string.IsNullOrEmpty(errorMessage))
-                {
-                    _message = errorMessage;
-                    _messageDialogOpen = true;
-                }
+                //JobManager.SaveJobs(out string errorMessage);
+                var jobList = JobManager.GetJobList();
+                jobList.SaveMigrationJobDefinition(job);
+                jobList.SaveJobList();
+                // if (!string.IsNullOrEmpty(errorMessage))
+                // {
+                //     _message = errorMessage;
+                //     _messageDialogOpen = true;
+                // }
                 ViewMigration(job.Id);
             }
         }

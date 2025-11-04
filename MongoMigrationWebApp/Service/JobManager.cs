@@ -10,7 +10,7 @@ namespace MongoMigrationWebApp.Service
 
     public class JobManager
     {
-    private JobList? _jobList;
+        private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
@@ -39,72 +39,96 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Job Management
 
-        private JobList EnsureJobList()
+        public JobList GetJobList()
         {
             return _jobList ??= new JobList();
         }
 
 
-        public DateTime GetJobBackupDate()
+        //public DateTime GetJobBackupDate()
+        //{
+        //    return GetJobList().GetBackupDate();
+        //}
+
+       
+        public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
         {
-            return EnsureJobList().GetBackupDate();
+            return Helper.GetMigrationUnitToMigrate(_jobList, mj);
         }
 
+        //public bool RestoreJobsFromBackup(out string errorMessage)
+        //{
+        //    _jobList = null;
+        //    _jobList = new JobList();
 
-        public bool RestoreJobsFromBackup(out string errorMessage)
+        //    var success = _jobList.LoadJobs(out errorMessage, true);
+        //    if (!success)
+        //    {
+        //        return false;
+        //    }
+
+        //    if (MigrationWorker != null)
+        //    {
+        //        MigrationWorker.StopMigration();
+        //        MigrationWorker = null;
+        //    }
+
+        //    MigrationWorker = new MigrationWorker(_jobList);
+
+        //    errorMessage = string.Empty;
+        //    return success;
+        //}
+
+        //public bool SaveJobs(out string errorMessage)
+        //{
+        //    return GetJobList().Save(out errorMessage);
+        //}
+
+        public MigrationJob? GetMigrationJobById(string id)
         {
-            _jobList = null;
-            _jobList = new JobList();
+            var job = GetJobList().GetMigrationJob(id);
+            return job;
+        }
 
-            var success = _jobList.LoadJobs(out errorMessage, true);
-            if (!success)
+        public List<MigrationJob> GetMigrationJobs(List<string> ids)
+        {
+            List<MigrationJob> jobs = new List<MigrationJob>();
+            foreach (var id in ids)
             {
-                return false;
-            }
-
-            if (MigrationWorker != null)
-            {
-                MigrationWorker.StopMigration();
-                MigrationWorker = null;
-            }
-
-            MigrationWorker = new MigrationWorker(_jobList);
-
-            errorMessage = string.Empty;
-            return success;
+                var job = GetJobList().GetMigrationJob(id);
+                if (job != null)
+                {
+                    jobs.Add(job);
+                }
+            }   
+            return jobs;
         }
 
-        public bool SaveJobs(out string errorMessage)
-        {
-            return EnsureJobList().Save(out errorMessage);
-        }
-
-
-
-        public List<MigrationJob> GetMigrations(out string errorMessage, bool force = false)
+        public List<string> GetMigrationIds(out string errorMessage, bool force = false)
         {
             errorMessage = string.Empty;
             bool isSucess = true;
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                isSucess = _jobList.LoadJobs(out errorMessage, false);
+                isSucess = _jobList.LoadJobList(out errorMessage, false);
             }
             else
             {
                 errorMessage = string.Empty;
-                return _jobList.MigrationJobs ?? new List<MigrationJob>();
+                return _jobList.MigrationJobIds ?? new List<string>();
             }
             // Ensure we always return a non-null list
-            if (_jobList.MigrationJobs == null)
+            if (_jobList.MigrationJobIds == null)
             {
-                _jobList.MigrationJobs = new List<MigrationJob>();
-                if (isSucess || force)
-                {
-                    SaveJobs(out errorMessage);
-                }
+                _jobList.MigrationJobIds = new List<string>();
+                _jobList.SaveJobList();
+                //if (isSucess || force)
+                //{
+                //    SaveJobs(out errorMessage);
+                //}
             }
-            return _jobList.MigrationJobs;
+            return _jobList.MigrationJobIds;
         }
 
         public void ClearJobFiles(string jobId)
@@ -198,7 +222,7 @@ namespace MongoMigrationWebApp.Service
             if (job != null)
             {
                 // If offline job is completed, controlled pause is not applicable
-                if (Helper.IsOfflineJobCompleted(job))
+                if (Helper.IsOfflineJobCompleted(_jobList,job))
                 {
                     return false;
                 }
@@ -217,7 +241,7 @@ namespace MongoMigrationWebApp.Service
 
         public Task CancelMigration(string id)
         {
-            var list = EnsureJobList().MigrationJobs;
+            var list = GetJobList().MigrationJobs;
             if (list != null)
             {
                 var migration = list.Find(m => m.Id == id);
@@ -232,7 +256,7 @@ namespace MongoMigrationWebApp.Service
 
         public Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
+            MigrationWorker = new MigrationWorker(GetJobList());
             // Fire-and-forget: UI should not block on long-running migration
             _ = MigrationWorker?.StartMigrationAsync(job, sourceConnectionString, targetConnectionString, namespacesToMigrate, jobType, trackChangeStreams);
             return Task.CompletedTask;
@@ -241,7 +265,7 @@ namespace MongoMigrationWebApp.Service
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
+            MigrationWorker = new MigrationWorker(GetJobList());
             MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
         }
 

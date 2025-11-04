@@ -1,4 +1,5 @@
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using OnlineMongoMigrationProcessor.Helpers;
 using System;
 using System.Collections.Generic;
@@ -12,14 +13,26 @@ namespace OnlineMongoMigrationProcessor
 {
     public class JobList
     {
+        // Legacy property for backward compatibility - will be removed in future versions
+        // This will only be deserialized if present in JSON, but never serialized
+        [JsonProperty("MigrationJobs")]
+        private List<MigrationJob>? _migrationJobsBackingField
+        {
+            get => null; // Never serialize this property - returns null so JSON.NET won't include it
+            set => MigrationJobs = value; // Allow deserialization - set the public property
+        }
+
+        [JsonIgnore]
+        public List<MigrationJob>? MigrationJobs { get; set; }
+
         public List<string>? MigrationJobIds { get; set; }
         
         // Thread-safe process ID tracking for parallel execution
         public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
         
-        private string _filePath = string.Empty;
-        private string _backupFolderPath = string.Empty;
+        //private string _filePath = string.Empty;
+        //private string _backupFolderPath = string.Empty;
         private static readonly object _fileLock = new object();
         private static readonly object _loadLock = new object();
         private Log _log;
@@ -32,55 +45,171 @@ namespace OnlineMongoMigrationProcessor
 
         public JobList()
         {
-            if (!Directory.Exists($"{Helper.GetWorkingFolder()}migrationjobs"))
-            {
-                Directory.CreateDirectory($"{Helper.GetWorkingFolder()}migrationjobs");
-            }
-            _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
-            _backupFolderPath = $"{Helper.GetWorkingFolder()}migrationjobs\\";
+            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs");
+        }
 
+        private bool CreateFolderIfNotExists(string folderPath)
+        {
+
+            if (!Directory.Exists(folderPath))
+            {
+                Directory.CreateDirectory(folderPath);
+            }
+            return true;
         }
 
         public MigrationJob GetMigrationJob(string jobId)
         {
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
-            string json = File.ReadAllText(filePath);
-            var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
-            return loadedObject;
+            try
+            {
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
+                string json = File.ReadAllText(filePath);
+                var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
+                return loadedObject;
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($" Error Laoding Migration Job. Details:{ex}");
+                return null;
+            }
         }
 
         public MigrationUnit GetMigrationUnit(string jobId, string unitId)
         {
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
-            string json = File.ReadAllText(filePath);
-            var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
-            return loadedObject;
+            try
+            {
+                CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
+                string json = File.ReadAllText(filePath);
+                var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
+                return loadedObject;
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($" Error Laoding Migration Unit. Details:{ex}");
+                return null;
+            }
         }
 
 
-        public bool SaveMigrationUnit(string jobId, MigrationUnit mu)
+        public bool SaveMigrationUnit(MigrationUnit mu)
         {
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{mu.Id}.json";
+            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{mu.JobId}");
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{mu.JobId}\\{mu.Id}.json";
             string json = JsonConvert.SerializeObject(mu, Formatting.Indented);
             File.WriteAllText(filePath, json);
             return true;
         }
 
-        public bool SaveMigrationJob(MigrationJob mj)
+        public bool SaveMigrationJobDefinition(MigrationJob mj)
         {
+            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{mj.Id}");
             var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{mj.Id}\\jobdefinition.json";
             string json = JsonConvert.SerializeObject(mj, Formatting.Indented);
             File.WriteAllText(filePath, json);
             return true;
         }
 
-
+        public bool SaveJobList()
+        {
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+            File.WriteAllText(filePath, json);
+            return true;
+        }
 
         public void SetLog(Log _log)
         {
             this._log = _log;
         }
 
+
+        public bool LoadJobList(out string errorMessage,bool loadBackup = false)
+        {
+            try
+            {
+                var old_filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
+                if (System.IO.File.Exists(old_filePath))
+                {
+                    if (ConvertToNewFormat(old_filePath, out errorMessage))
+                    {
+                        System.IO.File.Move(old_filePath, old_filePath + ".bak");
+                    }
+                }
+                
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+                string json = File.ReadAllText(filePath);
+                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                if (loadedObject != null)
+                {
+                    MigrationJobs = loadedObject.MigrationJobs;
+
+                    MigrationJobIds = loadedObject.MigrationJobIds;
+                    ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
+                    ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
+
+                    errorMessage = string.Empty;
+                    return true;
+                }
+                else
+                {
+                    errorMessage = "Error Loading Job List";
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error loading job list: {ex}";
+                _log?.WriteLine(errorMessage, LogType.Error);
+                return false;
+            }
+
+        }
+
+        private bool ConvertToNewFormat(string old_filePath, out string errorMessage)
+        {
+            try
+            { 
+                string json = File.ReadAllText(old_filePath);
+                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                if (loadedObject != null)
+                {
+                   
+                    //MigrationJobIds = loadedObject.MigrationJobIds;
+                    ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
+                    ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
+
+                    MigrationJobIds = new List<string>();
+                    foreach (var mj in loadedObject.MigrationJobs)
+                    {
+                        SaveMigrationJobDefinition(mj);
+                        mj.MigrationUnitIds = new List<string>();
+                        foreach (var mu in mj.MigrationUnits)
+                        {
+                            mu.Id = Guid.NewGuid().ToString();
+                            mu.JobId = mj.Id;
+                            mj.MigrationUnitIds.Add(mu.Id);
+                            
+                            SaveMigrationUnit(mu);
+                        }                        
+                        SaveMigrationJobDefinition(mj);
+                        MigrationJobIds.Add(mj.Id);
+                    }                    
+                    SaveJobList();
+                }
+                errorMessage= string.Empty; 
+                return true;
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error loading old job list: {ex}";
+                _log?.WriteLine(errorMessage, LogType.Error);
+                return false;
+            }
+        }
+
+
+        /*
         public bool LoadJobs(out string errorMessage, bool loadBackup = false)
         {
             //errorMessage = string.Empty;
@@ -173,409 +302,409 @@ namespace OnlineMongoMigrationProcessor
                     return false;
                 }
             }
-        }
+        }*/
 
 
-        private string GetBestRestoreSlotFilePath()
-        {
-            DateTime now = DateTime.Now;
-            DateTime minAllowedTime = now.AddMinutes(-1 * TUMBLING_INTERVAL_MINUTES * (SlotNames.Length - 1));
+        //private string GetBestRestoreSlotFilePath()
+        //{
+        //    DateTime now = DateTime.Now;
+        //    DateTime minAllowedTime = now.AddMinutes(-1 * TUMBLING_INTERVAL_MINUTES * (SlotNames.Length - 1));
 
-            var backupFolder = _backupFolderPath; // Replace with your folder path
-            var slotFiles = SlotNames
-                .Select(name => Path.Combine(backupFolder, name))
-                .Where(File.Exists)
-                .Select(filePath => new
-                {
-                    Path = filePath,
-                    Timestamp = File.GetLastWriteTime(filePath)
-                })
-                .OrderBy(f => f.Timestamp) // Sort ascending
-                .ToList();
+        //    var backupFolder = _backupFolderPath; // Replace with your folder path
+        //    var slotFiles = SlotNames
+        //        .Select(name => Path.Combine(backupFolder, name))
+        //        .Where(File.Exists)
+        //        .Select(filePath => new
+        //        {
+        //            Path = filePath,
+        //            Timestamp = File.GetLastWriteTime(filePath)
+        //        })
+        //        .OrderBy(f => f.Timestamp) // Sort ascending
+        //        .ToList();
 
 
-            string latestFile = string.Empty;
-            for (int i = slotFiles.Count - 1; i >= 0; i--)
-            {
-                if (slotFiles[i].Timestamp < minAllowedTime)
-                {
-                    latestFile = slotFiles[i].Path;
-                    break;
-                }
-            }
+        //    string latestFile = string.Empty;
+        //    for (int i = slotFiles.Count - 1; i >= 0; i--)
+        //    {
+        //        if (slotFiles[i].Timestamp < minAllowedTime)
+        //        {
+        //            latestFile = slotFiles[i].Path;
+        //            break;
+        //        }
+        //    }
 
-            if (slotFiles.Count > 0 && latestFile == string.Empty)
-                latestFile = slotFiles.First().Path;
+        //    if (slotFiles.Count > 0 && latestFile == string.Empty)
+        //        latestFile = slotFiles.First().Path;
 
-            if (latestFile != string.Empty)
-            {
-                return backupFolder.Any() ? latestFile : string.Empty;
-            }
-            else
-            {
-                return string.Empty;
-            }
+        //    if (latestFile != string.Empty)
+        //    {
+        //        return backupFolder.Any() ? latestFile : string.Empty;
+        //    }
+        //    else
+        //    {
+        //        return string.Empty;
+        //    }
 
-        }
+        //}
 
-        public DateTime GetBackupDate()
-        {
-            var path = GetBestRestoreSlotFilePath();
+        //public DateTime GetBackupDate()
+        //{
+        //    var path = GetBestRestoreSlotFilePath();
 
-            var backupDataUpdatedOn = !string.IsNullOrEmpty(path) && File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
-            return backupDataUpdatedOn;
-        }
+        //    var backupDataUpdatedOn = !string.IsNullOrEmpty(path) && File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+        //    return backupDataUpdatedOn;
+        //}
 
-        public bool Save()
-        {
-            return Save(out string errorMessage);
-        }
+        //public bool Save()
+        //{
+        //    return Save(out string errorMessage);
+        //}
 
-        public bool Save(out string errorMessage, bool forceBackup = false)
-        {
-            try
-            {
-                lock (_fileLock)
-                {
-                    // Memory-safe serialization with streaming
-                    string tempFile = _filePath + ".tmp";
+        //public bool Save(out string errorMessage, bool forceBackup = false)
+        //{
+        //    try
+        //    {
+        //        lock (_fileLock)
+        //        {
+        //            // Memory-safe serialization with streaming
+        //            string tempFile = _filePath + ".tmp";
                     
-                    if (!TrySerializeToFileStreaming(tempFile, out string serializationError))
-                    {
-                        errorMessage = serializationError;
-                        return false;
-                    }
+        //            if (!TrySerializeToFileStreaming(tempFile, out string serializationError))
+        //            {
+        //                errorMessage = serializationError;
+        //                return false;
+        //            }
 
-                    // Step 2: Safe atomic replacement with file lock handling
-                    if (File.Exists(_filePath))
-                    {
-                        if (!TryReplaceFileWithRetry(_filePath, tempFile, out string replaceError))
-                        {
-                            errorMessage = replaceError;
-                            // Clean up temp file
-                            if (File.Exists(tempFile))
-                                File.Delete(tempFile);
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        // No existing file, just move temp to final location with retry
-                        if (!TryMoveFileWithRetry(tempFile, _filePath, out string moveError))
-                        {
-                            errorMessage = moveError;
-                            // Clean up temp file
-                            if (File.Exists(tempFile))
-                                File.Delete(tempFile);
-                            return false;
-                        }
-                    }
+        //            // Step 2: Safe atomic replacement with file lock handling
+        //            if (File.Exists(_filePath))
+        //            {
+        //                if (!TryReplaceFileWithRetry(_filePath, tempFile, out string replaceError))
+        //                {
+        //                    errorMessage = replaceError;
+        //                    // Clean up temp file
+        //                    if (File.Exists(tempFile))
+        //                        File.Delete(tempFile);
+        //                    return false;
+        //                }
+        //            }
+        //            else
+        //            {
+        //                // No existing file, just move temp to final location with retry
+        //                if (!TryMoveFileWithRetry(tempFile, _filePath, out string moveError))
+        //                {
+        //                    errorMessage = moveError;
+        //                    // Clean up temp file
+        //                    if (File.Exists(tempFile))
+        //                        File.Delete(tempFile);
+        //                    return false;
+        //                }
+        //            }
 
-                    DateTime now = DateTime.UtcNow;
+        //            DateTime now = DateTime.UtcNow;
 
-                    bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
+        //            bool hasJobs = this.MigrationJobs != null && this.MigrationJobs.Count > 0;
 
-                    if (File.Exists(_filePath) && hasJobs && (_processedMin != now.ToString("MM/dd/yyyy HH:mm") || forceBackup))
-                    {
+        //            if (File.Exists(_filePath) && hasJobs && (_processedMin != now.ToString("MM/dd/yyyy HH:mm") || forceBackup))
+        //            {
 
-                        // Rotate every 15 minutes
-                        if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0 || forceBackup)
-                        {
+        //                // Rotate every 15 minutes
+        //                if (now.Minute % TUMBLING_INTERVAL_MINUTES == 0 || forceBackup)
+        //                {
 
-                            //set processed minute               
-                            _processedMin = now.ToString("MM/dd/yyyy HH:mm");
+        //                    //set processed minute               
+        //                    _processedMin = now.ToString("MM/dd/yyyy HH:mm");
 
-                            int slotIndex = (now.Minute / TUMBLING_INTERVAL_MINUTES) % SlotNames.Length; // 0, 1, 2, or 3
+        //                    int slotIndex = (now.Minute / TUMBLING_INTERVAL_MINUTES) % SlotNames.Length; // 0, 1, 2, or 3
 
-                            // Step 3: Write new backup into slot with retry logic
-                            string latestSlot = Path.Combine(_backupFolderPath, SlotNames[slotIndex]);
-                            if (!TryCopyFileWithRetry(_filePath, latestSlot, out string copyError))
-                            {
-                                _log?.WriteLine($"Warning: Failed to create backup slot: {copyError}", LogType.Error);
-                                // Don't fail the entire save operation for backup failure
-                            }
-                        }
-                    }
-                    errorMessage = string.Empty;
-                    return true;
-                }
-            }
-            catch (Exception ex)
-            {
-                errorMessage = $"Error saving data: {ex}";
-                _log?.WriteLine(errorMessage, LogType.Error);
-                return false;
-            }
-        }
+        //                    // Step 3: Write new backup into slot with retry logic
+        //                    string latestSlot = Path.Combine(_backupFolderPath, SlotNames[slotIndex]);
+        //                    if (!TryCopyFileWithRetry(_filePath, latestSlot, out string copyError))
+        //                    {
+        //                        _log?.WriteLine($"Warning: Failed to create backup slot: {copyError}", LogType.Error);
+        //                        // Don't fail the entire save operation for backup failure
+        //                    }
+        //                }
+        //            }
+        //            errorMessage = string.Empty;
+        //            return true;
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        errorMessage = $"Error saving data: {ex}";
+        //        _log?.WriteLine(errorMessage, LogType.Error);
+        //        return false;
+        //    }
+        //}
 
         /// <summary>
         /// Memory-safe serialization using streaming to avoid OOM during large object serialization
-        /// </summary>
-        private bool TrySerializeToFileStreaming(string filePath, out string errorMessage)
-        {
-            try
-            {
-                // Check available memory before serialization
-                var gcMemory = GC.GetTotalMemory(false);
-                var gcMemoryMB = gcMemory / 1024 / 1024;
+        ///// </summary>
+        //private bool TrySerializeToFileStreaming(string filePath, out string errorMessage)
+        //{
+        //    try
+        //    {
+        //        // Check available memory before serialization
+        //        var gcMemory = GC.GetTotalMemory(false);
+        //        var gcMemoryMB = gcMemory / 1024 / 1024;
                 
-                if (gcMemoryMB > 1536) // Warning if over 1.5GB
-                {
-                    _log?.WriteLine($"WARNING: High memory usage before serialization: {gcMemoryMB}MB", LogType.Warning);
+        //        if (gcMemoryMB > 1536) // Warning if over 1.5GB
+        //        {
+        //            _log?.WriteLine($"WARNING: High memory usage before serialization: {gcMemoryMB}MB", LogType.Warning);
                     
-                    // Force GC before serialization to free up memory
-                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
-                    GC.WaitForPendingFinalizers();
+        //            // Force GC before serialization to free up memory
+        //            GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+        //            GC.WaitForPendingFinalizers();
                     
-                    gcMemory = GC.GetTotalMemory(false);
-                    gcMemoryMB = gcMemory / 1024 / 1024;
-                    _log?.WriteLine($"Memory after GC: {gcMemoryMB}MB", LogType.Info);
-                }
+        //            gcMemory = GC.GetTotalMemory(false);
+        //            gcMemoryMB = gcMemory / 1024 / 1024;
+        //            _log?.WriteLine($"Memory after GC: {gcMemoryMB}MB", LogType.Info);
+        //        }
 
-                // Use streaming serialization to avoid large string allocation
-                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
-                using (var streamWriter = new StreamWriter(fileStream, System.Text.Encoding.UTF8, 65536))
-                using (var jsonWriter = new JsonTextWriter(streamWriter))
-                {
-                    // Configure serializer for memory efficiency
-                    var serializer = new JsonSerializer
-                    {
-                        Formatting = Formatting.None, // Minimize output size
-                        NullValueHandling = NullValueHandling.Ignore,
-                        DefaultValueHandling = DefaultValueHandling.Ignore
-                    };
+        //        // Use streaming serialization to avoid large string allocation
+        //        using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
+        //        using (var streamWriter = new StreamWriter(fileStream, System.Text.Encoding.UTF8, 65536))
+        //        using (var jsonWriter = new JsonTextWriter(streamWriter))
+        //        {
+        //            // Configure serializer for memory efficiency
+        //            var serializer = new JsonSerializer
+        //            {
+        //                Formatting = Formatting.None, // Minimize output size
+        //                NullValueHandling = NullValueHandling.Ignore,
+        //                DefaultValueHandling = DefaultValueHandling.Ignore
+        //            };
 
-                    try
-                    {
-                        // Stream serialize directly to file without creating large in-memory string
-                        serializer.Serialize(jsonWriter, this);
-                        jsonWriter.Flush();
-                        streamWriter.Flush();
-                        fileStream.Flush();
+        //            try
+        //            {
+        //                // Stream serialize directly to file without creating large in-memory string
+        //                serializer.Serialize(jsonWriter, this);
+        //                jsonWriter.Flush();
+        //                streamWriter.Flush();
+        //                fileStream.Flush();
                         
-                        errorMessage = string.Empty;
-                        return true;
-                    }
-                    catch (OutOfMemoryException ex)
-                    {
-                        errorMessage = $"Out of memory during serialization: {ex.Message}. Consider reducing data size or increasing available memory.";
-                        _log?.WriteLine(errorMessage, LogType.Error);
+        //                errorMessage = string.Empty;
+        //                return true;
+        //            }
+        //            catch (OutOfMemoryException ex)
+        //            {
+        //                errorMessage = $"Out of memory during serialization: {ex.Message}. Consider reducing data size or increasing available memory.";
+        //                _log?.WriteLine(errorMessage, LogType.Error);
                         
-                        // Emergency fallback: try minimal serialization
-                        return TryEmergencySave(filePath, out errorMessage);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                errorMessage = $"Error during streaming serialization: {ex.Message}";
-                _log?.WriteLine(errorMessage, LogType.Error);
-                return false;
-            }
-        }
+        //                // Emergency fallback: try minimal serialization
+        //                return TryEmergencySave(filePath, out errorMessage);
+        //            }
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        errorMessage = $"Error during streaming serialization: {ex.Message}";
+        //        _log?.WriteLine(errorMessage, LogType.Error);
+        //        return false;
+        //    }
+        //}
 
-        /// <summary>
-        /// Emergency save method when regular serialization fails due to OOM
-        /// Saves only essential job metadata without detailed migration unit data
-        /// </summary>
-        private bool TryEmergencySave(string filePath, out string errorMessage)
-        {
-            try
-            {
-                _log?.WriteLine("Attempting emergency save with minimal data...", LogType.Warning);
+        ///// <summary>
+        ///// Emergency save method when regular serialization fails due to OOM
+        ///// Saves only essential job metadata without detailed migration unit data
+        ///// </summary>
+        //private bool TryEmergencySave(string filePath, out string errorMessage)
+        //{
+        //    try
+        //    {
+        //        _log?.WriteLine("Attempting emergency save with minimal data...", LogType.Warning);
                 
-                // Create a minimal version of JobList with only essential data
-                var minimalJobList = new JobList();
-                minimalJobList.ActiveDumpProcessIds = this.ActiveDumpProcessIds ?? new List<int>();
-                minimalJobList.ActiveRestoreProcessIds = this.ActiveRestoreProcessIds ?? new List<int>();
+        //        // Create a minimal version of JobList with only essential data
+        //        var minimalJobList = new JobList();
+        //        minimalJobList.ActiveDumpProcessIds = this.ActiveDumpProcessIds ?? new List<int>();
+        //        minimalJobList.ActiveRestoreProcessIds = this.ActiveRestoreProcessIds ?? new List<int>();
                 
-                // Create minimal jobs with only essential metadata
-                if (this.MigrationJobs != null)
-                {
-                    minimalJobList.MigrationJobs = new List<MigrationJob>();
-                    foreach (var job in this.MigrationJobs)
-                    {
-                        var minimalJob = new MigrationJob
-                        {
-                            Id = job.Id,
-                            Name = job.Name,
-                            SourceEndpoint = job.SourceEndpoint,
-                            TargetEndpoint = job.TargetEndpoint,
-                            StartedOn = job.StartedOn,
-                            IsCompleted = job.IsCompleted,
-                            CDCMode = job.CDCMode,
-                            IsCancelled = job.IsCancelled,
-                            IsStarted = job.IsStarted,
-                            JobType = job.JobType,
-                            // Create minimal migration units without detailed chunk data
-                            MigrationUnits = job.MigrationUnits?.Select(unit => new MigrationUnit(
-                                unit.DatabaseName, 
-                                unit.CollectionName, 
-                                new List<MigrationChunk>()) // Empty chunks to save memory
-                            {
-                                DumpComplete = unit.DumpComplete,
-                                RestoreComplete = unit.RestoreComplete,
-                                DumpPercent = unit.DumpPercent,
-                                RestorePercent = unit.RestorePercent,
-                                SourceStatus = unit.SourceStatus,
-                                EstimatedDocCount = unit.EstimatedDocCount,
-                                ActualDocCount = unit.ActualDocCount
-                            }).ToList()
-                        };
-                        minimalJobList.MigrationJobs.Add(minimalJob);
-                    }
-                }
+        //        // Create minimal jobs with only essential metadata
+        //        if (this.MigrationJobs != null)
+        //        {
+        //            minimalJobList.MigrationJobs = new List<MigrationJob>();
+        //            foreach (var job in this.MigrationJobs)
+        //            {
+        //                var minimalJob = new MigrationJob
+        //                {
+        //                    Id = job.Id,
+        //                    Name = job.Name,
+        //                    SourceEndpoint = job.SourceEndpoint,
+        //                    TargetEndpoint = job.TargetEndpoint,
+        //                    StartedOn = job.StartedOn,
+        //                    IsCompleted = job.IsCompleted,
+        //                    CDCMode = job.CDCMode,
+        //                    IsCancelled = job.IsCancelled,
+        //                    IsStarted = job.IsStarted,
+        //                    JobType = job.JobType,
+        //                    // Create minimal migration units without detailed chunk data
+        //                    MigrationUnits = job.MigrationUnits?.Select(unit => new MigrationUnit(
+        //                        unit.DatabaseName, 
+        //                        unit.CollectionName, 
+        //                        new List<MigrationChunk>()) // Empty chunks to save memory
+        //                    {
+        //                        DumpComplete = unit.DumpComplete,
+        //                        RestoreComplete = unit.RestoreComplete,
+        //                        DumpPercent = unit.DumpPercent,
+        //                        RestorePercent = unit.RestorePercent,
+        //                        SourceStatus = unit.SourceStatus,
+        //                        EstimatedDocCount = unit.EstimatedDocCount,
+        //                        ActualDocCount = unit.ActualDocCount
+        //                    }).ToList()
+        //                };
+        //                minimalJobList.MigrationJobs.Add(minimalJob);
+        //            }
+        //        }
 
-                // Use simple serialization for minimal data
-                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (var streamWriter = new StreamWriter(fileStream))
-                using (var jsonWriter = new JsonTextWriter(streamWriter))
-                {
-                    var serializer = new JsonSerializer
-                    {
-                        Formatting = Formatting.None,
-                        NullValueHandling = NullValueHandling.Ignore,
-                        DefaultValueHandling = DefaultValueHandling.Ignore
-                    };
+        //        // Use simple serialization for minimal data
+        //        using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
+        //        using (var streamWriter = new StreamWriter(fileStream))
+        //        using (var jsonWriter = new JsonTextWriter(streamWriter))
+        //        {
+        //            var serializer = new JsonSerializer
+        //            {
+        //                Formatting = Formatting.None,
+        //                NullValueHandling = NullValueHandling.Ignore,
+        //                DefaultValueHandling = DefaultValueHandling.Ignore
+        //            };
 
-                    serializer.Serialize(jsonWriter, minimalJobList);
-                    jsonWriter.Flush();
-                    streamWriter.Flush();
-                }
+        //            serializer.Serialize(jsonWriter, minimalJobList);
+        //            jsonWriter.Flush();
+        //            streamWriter.Flush();
+        //        }
 
-                _log?.WriteLine("Emergency save completed successfully with minimal data", LogType.Info);
-                errorMessage = "Emergency save completed - some detailed data was omitted to prevent memory exhaustion";
-                return true;
-            }
-            catch (Exception ex)
-            {
-                errorMessage = $"Emergency save also failed: {ex.Message}";
-                _log?.WriteLine(errorMessage, LogType.Error);
-                return false;
-            }
-        }
+        //        _log?.WriteLine("Emergency save completed successfully with minimal data", LogType.Info);
+        //        errorMessage = "Emergency save completed - some detailed data was omitted to prevent memory exhaustion";
+        //        return true;
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        errorMessage = $"Emergency save also failed: {ex.Message}";
+        //        _log?.WriteLine(errorMessage, LogType.Error);
+        //        return false;
+        //    }
+        //}
 
-        private bool TryReplaceFileWithRetry(string targetPath, string sourcePath, out string errorMessage)
-        {
-            const int maxRetries = 5;
-            const int delayMs = 100;
+        //private bool TryReplaceFileWithRetry(string targetPath, string sourcePath, out string errorMessage)
+        //{
+        //    const int maxRetries = 5;
+        //    const int delayMs = 100;
 
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                try
-                {
-                    string backupFile = targetPath + ".backup";
+        //    for (int attempt = 1; attempt <= maxRetries; attempt++)
+        //    {
+        //        try
+        //        {
+        //            string backupFile = targetPath + ".backup";
 
-                    // Remove any existing backup
-                    if (File.Exists(backupFile))
-                        File.Delete(backupFile);
+        //            // Remove any existing backup
+        //            if (File.Exists(backupFile))
+        //                File.Delete(backupFile);
 
-                    // Move original to backup
-                    File.Move(targetPath, backupFile);
+        //            // Move original to backup
+        //            File.Move(targetPath, backupFile);
 
-                    try
-                    {
-                        // Move temp to final location
-                        File.Move(sourcePath, targetPath);
+        //            try
+        //            {
+        //                // Move temp to final location
+        //                File.Move(sourcePath, targetPath);
 
-                        // Clean up backup
-                        File.Delete(backupFile);
+        //                // Clean up backup
+        //                File.Delete(backupFile);
 
-                        errorMessage = string.Empty;
-                        return true;
-                    }
-                    catch
-                    {
-                        // If move fails, restore from backup
-                        if (File.Exists(backupFile) && !File.Exists(targetPath))
-                        {
-                            File.Move(backupFile, targetPath);
-                        }
-                        throw;
-                    }
-                }
-                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
-                {
-                    _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-                catch (UnauthorizedAccessException) when (attempt < maxRetries)
-                {
-                    _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-            }
+        //                errorMessage = string.Empty;
+        //                return true;
+        //            }
+        //            catch
+        //            {
+        //                // If move fails, restore from backup
+        //                if (File.Exists(backupFile) && !File.Exists(targetPath))
+        //                {
+        //                    File.Move(backupFile, targetPath);
+        //                }
+        //                throw;
+        //            }
+        //        }
+        //        catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //        catch (UnauthorizedAccessException) when (attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //    }
 
-            errorMessage = $"Failed to replace file after {maxRetries} attempts due to file lock or access issues.";
-            return false;
-        }
+        //    errorMessage = $"Failed to replace file after {maxRetries} attempts due to file lock or access issues.";
+        //    return false;
+        //}
 
-        private bool TryMoveFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
-        {
-            const int maxRetries = 5;
-            const int delayMs = 100;
+        //private bool TryMoveFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
+        //{
+        //    const int maxRetries = 5;
+        //    const int delayMs = 100;
 
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                try
-                {
-                    File.Move(sourcePath, targetPath);
-                    errorMessage = string.Empty;
-                    return true;
-                }
-                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
-                {
-                    _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-                catch (UnauthorizedAccessException) when (attempt < maxRetries)
-                {
-                    _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-            }
+        //    for (int attempt = 1; attempt <= maxRetries; attempt++)
+        //    {
+        //        try
+        //        {
+        //            File.Move(sourcePath, targetPath);
+        //            errorMessage = string.Empty;
+        //            return true;
+        //        }
+        //        catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"File lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //        catch (UnauthorizedAccessException) when (attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"Access denied on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //    }
 
-            errorMessage = $"Failed to move file after {maxRetries} attempts due to file lock or access issues.";
-            return false;
-        }
+        //    errorMessage = $"Failed to move file after {maxRetries} attempts due to file lock or access issues.";
+        //    return false;
+        //}
 
-        private bool TryCopyFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
-        {
-            const int maxRetries = 3;
-            const int delayMs = 100;
+        //private bool TryCopyFileWithRetry(string sourcePath, string targetPath, out string errorMessage)
+        //{
+        //    const int maxRetries = 3;
+        //    const int delayMs = 100;
 
-            for (int attempt = 1; attempt <= maxRetries; attempt++)
-            {
-                try
-                {
-                    File.Copy(sourcePath, targetPath, overwrite: true);
-                    errorMessage = string.Empty;
-                    return true;
-                }
-                catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
-                {
-                    _log?.WriteLine($"Backup copy file lock detected on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-                catch (UnauthorizedAccessException) when (attempt < maxRetries)
-                {
-                    _log?.WriteLine($"Backup copy access denied on attempt {attempt}, retrying in {delayMs}ms...");
-                    Thread.Sleep(delayMs * attempt); // Progressive delay
-                }
-            }
+        //    for (int attempt = 1; attempt <= maxRetries; attempt++)
+        //    {
+        //        try
+        //        {
+        //            File.Copy(sourcePath, targetPath, overwrite: true);
+        //            errorMessage = string.Empty;
+        //            return true;
+        //        }
+        //        catch (IOException ex) when (IsFileLockException(ex) && attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"Backup copy file lock detected on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //        catch (UnauthorizedAccessException) when (attempt < maxRetries)
+        //        {
+        //            _log?.WriteLine($"Backup copy access denied on attempt {attempt}, retrying in {delayMs}ms...");
+        //            Thread.Sleep(delayMs * attempt); // Progressive delay
+        //        }
+        //    }
 
-            errorMessage = $"Failed to copy backup file after {maxRetries} attempts due to file lock or access issues.";
-            return false;
-        }
+        //    errorMessage = $"Failed to copy backup file after {maxRetries} attempts due to file lock or access issues.";
+        //    return false;
+        //}
 
-        private static bool IsFileLockException(IOException ex)
-        {
-            // Common HRESULTs for file locking issues
-            const int ERROR_SHARING_VIOLATION = -2147024864; // 0x80070020
-            const int ERROR_LOCK_VIOLATION = -2147024865;    // 0x8007001F
+        //private static bool IsFileLockException(IOException ex)
+        //{
+        //    // Common HRESULTs for file locking issues
+        //    const int ERROR_SHARING_VIOLATION = -2147024864; // 0x80070020
+        //    const int ERROR_LOCK_VIOLATION = -2147024865;    // 0x8007001F
 
-            return ex.HResult == ERROR_SHARING_VIOLATION || ex.HResult == ERROR_LOCK_VIOLATION ||
-                   ex.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
-        }
+        //    return ex.HResult == ERROR_SHARING_VIOLATION || ex.HResult == ERROR_LOCK_VIOLATION ||
+        //           ex.Message.Contains("being used by another process", StringComparison.OrdinalIgnoreCase);
+        //}
     }
 }

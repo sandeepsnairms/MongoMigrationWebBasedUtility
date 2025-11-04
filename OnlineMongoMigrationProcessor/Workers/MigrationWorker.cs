@@ -101,7 +101,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("StopMigration called - cancelling all tokens and stopping processor", LogType.Debug);
                 _cts?.Cancel();
                 _compare_cts?.Cancel();
-                _jobList.Save();
+                _jobList.SaveMigrationJobDefinition(_job);
                 _migrationCancelled = true;
                 _migrationProcessor?.StopProcessing();
                 ProcessRunning = false;
@@ -203,11 +203,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 _log.WriteLine("Checking if change stream is enabled on source");
 
-                if (_job.MigrationUnits == null || _job.MigrationUnits.Count == 0)
+                if (_job.MigrationUnitIds == null || _job.MigrationUnitIds.Count == 0)
                     return TaskResult.FailedAfterRetries;
-                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _job.SourceConnectionString!, _job.MigrationUnits[0]);
+
+                var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitIds[0]);
+                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _job.SourceConnectionString!, migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
-                _jobList.Save();
+                _jobList.SaveJobList();
 
                 if (!retValue.IsCSEnabled)
                 {
@@ -375,8 +377,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             bool useServerLevel = _job.ChangeStreamLevel == ChangeStreamLevel.Server && _job.JobType != JobType.RUOptimizedCopy;
             _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {_job.ChangeStreamLevel}, JobType: {_job.JobType}", LogType.Verbose);
 
+            
+            var unitsForPrep = Helper.GetMigrationUnitToMigrate(_jobList, _job);
 
-            var unitsForPrep = _job.MigrationUnits ?? new List<MigrationUnit>();
             _log.WriteLine($"Processing {unitsForPrep.Count} migration units for preparation", LogType.Debug);
 
             foreach (var unit in unitsForPrep)
@@ -432,7 +435,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             long count = MongoHelper.GetActualDocumentCount(coll, unit);
                             unit.ActualDocCount = count;
-                            _jobList?.Save();
+                            _jobList?.SaveMigrationUnit(unit);
                         }, _cts);
 
                     }
@@ -482,7 +485,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             {
                                 return TaskResult.Retry;
                             }
-                            _jobList.Save();
+                            _jobList.SaveMigrationUnit(unit);
                             if (_job.SyncBackEnabled && !_job.IsSimulatedRun && Helper.IsOnline(_job) && !checkedCS)
                             {
                                 _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
@@ -530,14 +533,14 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         unit.SourceStatus = CollectionStatus.NotFound;
                         _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
-                        _jobList.Save();
+                        _jobList.SaveMigrationUnit(unit);
                         //return TaskResult.Success;
                     }
                     else
                         return TaskResult.Canceled;
                 }
             }
-            _jobList.Save();
+            //_jobList.SaveMigrationUnit(unit);
             return TaskResult.Success;
         }
 
@@ -546,8 +549,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine("MigrateJobCollections started", LogType.Debug);
             if (_job == null)
                 return TaskResult.FailedAfterRetries;
+            
+            var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
 
-            var unitsForMigrate = _job.MigrationUnits ?? new List<MigrationUnit>();
             _log.WriteLine($"Processing {unitsForMigrate.Count} migration units", LogType.Verbose);
             foreach (var migrationUnit in unitsForMigrate)
             {
@@ -627,7 +631,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             {
                                 _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
                                 // since CS processsing has started, we can break the loop. No need to process all collections
-                                if (Helper.IsOnline(_job) && _job.SyncBackEnabled && (_job.CSPostProcessingStarted && !_job.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(_job))
+                                if (Helper.IsOnline(_job) && _job.SyncBackEnabled && (_job.CSPostProcessingStarted && !_job.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(_jobList, _job))
                                 {
                                     _log.WriteLine("Breaking loop: CS post-processing started and offline job completed", LogType.Debug);
                                     break;
@@ -673,7 +677,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (_job == null)
                     return TaskResult.FailedAfterRetries;
 
-                var unitsForMigrate = _job.MigrationUnits ?? new List<MigrationUnit>();
+               
+                var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Verbose);
                 foreach (var migrationUnit in unitsForMigrate)
                 {
@@ -748,21 +754,23 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"Job {_job.Id} started on {_job.StartedOn} (UTC)", LogType.Warning);
 
 
-            if (_job.MigrationUnits == null)
+            if (_job.MigrationUnitIds == null)
             {
-                _job.MigrationUnits = new List<MigrationUnit>();
+                _job.MigrationUnitIds = new List<string>();
             }
 
             _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate}", LogType.Verbose);
-            var unitsToAdd = await Helper.PopulateJobCollectionsAsync(namespacesToMigrate, sourceConnectionString, _job.AllCollectionsUseObjectId);
+            var unitsToAdd = await Helper.PopulateJobCollectionsAsync(_job,namespacesToMigrate, sourceConnectionString, _job.AllCollectionsUseObjectId);
             if (unitsToAdd.Count > 0)
             {
                 _log.WriteLine($"Adding {unitsToAdd.Count} migration units to job", LogType.Debug);
                 foreach (var mu in unitsToAdd)
                 {
+                    _jobList.SaveMigrationUnit(mu);
                     Helper.AddMigrationUnit(mu, job);
                 }
-                _jobList.Save();
+                //_jobList.Save();
+                _jobList.SaveJobList();
             }
 
             
@@ -827,8 +835,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                 await compareHelper.CompareRandomDocumentsAsync(_log, _jobList, _job, _config!, _compare_cts.Token);
                 compareHelper = null;
                 _job.RunComparison = false;
-                _jobList.Save();
-
+                //_jobList.Save();
+                _jobList.SaveMigrationJobDefinition(_job);
                 _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
             }
             
@@ -874,7 +882,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                             _log.WriteLine($"Job {_job.Id} paused (controlled pause) - can be resumed", LogType.Debug);
                         }
                         
-                        _jobList.Save();
+                        //_jobList.Save();
+                        _jobList.SaveMigrationJobDefinition(_job);
                     }
                 }
 
@@ -909,7 +918,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"SyncBack: {_job.Id} started on {_job.StartedOn} (UTC)");
             
             job.ProcessingSyncBack = true;
-            _jobList.Save();
+            _jobList.SaveMigrationJobDefinition(_job);
+            //_jobList.Save();
 
             if (_migrationProcessor != null)
                 _migrationProcessor.StopProcessing();
@@ -918,8 +928,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
             _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job, dummySourceClient, _config!);
             _migrationProcessor.ProcessRunning = true;
-            var dummyUnit = new MigrationUnit("","", new List<MigrationChunk>());
-
+            var dummyUnit = new MigrationUnit(Guid.NewGuid().ToString(), _job.Id, "", "", new List<MigrationChunk>());
+            _jobList.SaveMigrationUnit(dummyUnit);
             //if run comparison is set by customer.
             if (_job.RunComparison)
             {
@@ -928,7 +938,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                 compareHelper.CompareRandomDocumentsAsync(_log, _jobList, _job, _config!, _cts.Token).GetAwaiter().GetResult();
                 compareHelper = null;
                 _job.RunComparison = false;
-                _jobList.Save();
+                _jobList.SaveMigrationJobDefinition(_job);
+                //_jobList.Save();
 
                 _log.WriteLine("Resuming SyncBack.");
             }

@@ -52,7 +52,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             _log.WriteLine($"SyncBack to source starting.");
 
-            var units = _job.MigrationUnits;
+            var units = Helper.GetMigrationUnitToMigrate(_jobList,_job);
             if (units != null)
             {
                 foreach (MigrationUnit unit in units)

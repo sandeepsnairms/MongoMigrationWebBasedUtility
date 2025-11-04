@@ -297,7 +297,8 @@ namespace OnlineMongoMigrationProcessor
                         {
                             // If the first change was replayed, we can proceed
                             mu.InitialDocumenReplayed = true;
-                            _jobList?.Save();
+                            //_jobList?.Save();
+                            _jobList?.SaveMigrationJobDefinition(_job); // persist state
                         }
                         else
                         {
@@ -505,7 +506,8 @@ namespace OnlineMongoMigrationProcessor
                     // Update counters before early return
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
-                    _jobList?.Save();
+                    _jobList.SaveMigrationUnit(mu);
+                    //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
                     _log.WriteLine($"{_syncBackPrefix}Watch() timed out after {watchTimeoutSeconds}s for {collectionKey} - will retry in next batch", LogType.Debug);
@@ -529,7 +531,8 @@ namespace OnlineMongoMigrationProcessor
                     // Update counters before early return
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
-                    _jobList?.Save();
+                    _jobList.SaveMigrationUnit(mu);
+                    //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     return; // Skip this collection, will retry in next batch
                 }
@@ -869,9 +872,10 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = counter;
                     mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
                     _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
-                    _jobList?.Save();
+                        _jobList.SaveMigrationUnit(mu);
+                        //_jobList?.Save();
 
-                    if (counter > 0)
+                        if (counter > 0)
                     {
                         _log.ShowInMonitor($"{_syncBackPrefix}Watch cycle completed for {sourceCollection.CollectionNamespace}: {counter} events processed in batch");
                     }
@@ -1120,8 +1124,8 @@ namespace OnlineMongoMigrationProcessor
 
                         _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collNameSpace}: Resume token persisted after successful flush", LogType.Verbose);
                     }
-
-                    _jobList?.Save();
+                    _jobList?.SaveMigrationUnit(mu); 
+                    //_jobList?.Save();
 
                     // Clear the lists and metadata after successful processing
                     changeStreamDocuments.DocsToBeInserted.Clear();

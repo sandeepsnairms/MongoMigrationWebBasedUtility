@@ -76,7 +76,7 @@ else
                 <tr><td class="nowrap">Sync Back Enabled</td><td>@(MigrationJob.SyncBackEnabled ? "Yes" : "No")</td></tr>
                 <tr><td class="nowrap">Source Endpoint</td><td class="wrap">@MigrationJob.SourceEndpoint</td></tr>
                 <tr><td class="nowrap">Target Endpoint</td><td class="wrap">@MigrationJob.TargetEndpoint</td></tr>
-                <tr><td class="nowrap">Collection Count</td><td>@(MigrationJob.MigrationUnits?.Count ?? 0)</td></tr>
+                <tr><td class="nowrap">Collection Count</td><td>@(@JobManager.GetMigrationUnits(MigrationJob)?.Count ?? 0)</td></tr>
             </tbody>
         </table>
     </div>
@@ -93,7 +93,7 @@ else
             </tr>
         </thead>
         <tbody>
-        @foreach (var mu in (MigrationJob.MigrationUnits ?? new List<MigrationUnit>()))
+        @foreach (var mu in (@JobManager.GetMigrationUnits(MigrationJob) ?? new List<MigrationUnit>()))
         {
             var duration = GetDuration(mu.BulkCopyStartedOn, mu.BulkCopyEndedOn);
             <tr>
@@ -162,7 +162,8 @@ else
 
     protected override void OnParametersSet()
     {
-        MigrationJob = JobManager.GetMigrations(out _, true)?.Find(m => m.Id == JobId);
+
+        MigrationJob = JobManager.GetMigrationJobById(JobId);
     }
 
     private void GoBack()

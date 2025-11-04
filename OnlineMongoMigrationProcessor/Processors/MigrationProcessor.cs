@@ -47,7 +47,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 _job.IsStarted = false;
             }
 
-            _jobList?.Save();
+            _jobList?.SaveMigrationJobDefinition(_job);
 
             if (updateStatus)
                 ProcessRunning = false;
@@ -100,7 +100,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             if (_postUploadCSProcessing)
                 return true; // Skip processing if post-upload CS processing is already in progress
 
-            if (Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_job) && !_postUploadCSProcessing)
+            if (Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_jobList,_job) && !_postUploadCSProcessing)
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
@@ -144,7 +144,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             if (Helper.IsOnline(_job))
             {
-                if(_job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_job) || _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
+                if(_job.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(_jobList, _job) || _job.AggresiveChangeStream) && !_postUploadCSProcessing && !_job.IsSimulatedRun)
                 {
                     _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
@@ -157,7 +157,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
                 }
-                if (_job.AggresiveChangeStream && (Helper.IsOfflineJobCompleted(_job) || _job.IsSimulatedRun))
+                if (_job.AggresiveChangeStream && (Helper.IsOfflineJobCompleted(_jobList,_job) || _job.IsSimulatedRun))
                 {
                     // Process cleanup for all collection
                     _ = _changeStreamProcessor?.CleanupAggressiveCSAllCollectionsAsync();
@@ -189,7 +189,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                         var migrationJob = _jobList.MigrationJobs?.Find(m => m.Id == ctx.JobId);
                         
                         // Check if the job is completed (all collections processed)
-                        if (migrationJob != null && Helper.IsOfflineJobCompleted(migrationJob))
+                        if (migrationJob != null && Helper.IsOfflineJobCompleted(_jobList, migrationJob))
                         {
                             // For aggressive change stream jobs, run final cleanup for all collections
                             RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
@@ -208,7 +208,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 }
                                 
                                 StopProcessing(true);
-                                _jobList.Save();
+                                //_jobList.Save();
                             }
                         }
                         else if (!_postUploadCSProcessing && Helper.IsOnline(_job))

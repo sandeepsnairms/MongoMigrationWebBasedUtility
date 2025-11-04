@@ -763,7 +763,8 @@ namespace OnlineMongoMigrationProcessor
             }
             finally
             {
-                jobList.Save();
+                //jobList.Save();
+                jobList.SaveMigrationUnit(unit);
             }
         }
         return;
@@ -870,7 +871,7 @@ namespace OnlineMongoMigrationProcessor
                             var collectionKey = $"{databaseName}.{collectionName}";
 
                             //checking if change is in collections to be migrated.
-                            var migrationUnit = job.MigrationUnits?.FirstOrDefault(mu =>
+                            var migrationUnit = Helper.GetMigrationUnitToMigrate(jobList,job).FirstOrDefault(mu =>
                                 string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
                                 string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
 

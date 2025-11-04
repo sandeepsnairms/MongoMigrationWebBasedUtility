@@ -20,6 +20,8 @@ namespace OnlineMongoMigrationProcessor
 
     public class MigrationUnit
     {
+        public string Id { get; set; }
+        public string JobId { get; set; }
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? ResumeToken { get; set; }
@@ -117,11 +119,13 @@ namespace OnlineMongoMigrationProcessor
 
         public List<MigrationChunk> MigrationChunks { get; set; }
 
-        public MigrationUnit(string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
+        public MigrationUnit(string Id, string JobId, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
         {
-            DatabaseName = databaseName;
-            CollectionName = collectionName;
-            MigrationChunks = migrationChunks;
+            this.Id = Id;
+            this.JobId = JobId;
+            this.DatabaseName = databaseName;
+            this.CollectionName = collectionName;
+            this.MigrationChunks = migrationChunks;
         }
     }
 }

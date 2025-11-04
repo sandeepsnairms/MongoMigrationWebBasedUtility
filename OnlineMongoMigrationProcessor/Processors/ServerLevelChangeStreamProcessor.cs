@@ -152,12 +152,13 @@ namespace OnlineMongoMigrationProcessor
                         foreach (var kvp in _migrationUnitsToProcess)
                         {
                             kvp.Value.CSUpdatesInLastBatch = 0;
+                            _jobList?.SaveMigrationUnit(kvp.Value);
                         }
-                        _jobList?.Save();
+                        //_jobList?.Save();
                         return;
                     }
                     SetInitialDocumentReplayedStatus(true);
-                    _jobList?.Save();
+                    _jobList?.SaveMigrationJobDefinition(_job);
                 }
 
 
@@ -386,7 +387,7 @@ namespace OnlineMongoMigrationProcessor
                                     _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collKey}: Resume token persisted after successful flush", LogType.Debug);
                                 }
 
-                                _jobList?.Save();
+                                _jobList.SaveMigrationUnit(mu);
 
                                 // Clear the lists and metadata after successful processing
                                 docs.DocsToBeInserted.Clear();
@@ -416,6 +417,7 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task BulkProcessAllChangesAsync(Dictionary<string, ChangeStreamDocuments> changeStreamDocuments)
         {
+            MigrationUnit migrationUnit=null;
             foreach (var kvp in changeStreamDocuments)
             {
                 var collectionKey = kvp.Key;
@@ -425,7 +427,7 @@ namespace OnlineMongoMigrationProcessor
                 
                 if (totalChanges > 0)
                 {
-                    if (_migrationUnitsToProcess.TryGetValue(collectionKey, out var migrationUnit))
+                    if (_migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit))
                     {
                         // NO BACKPRESSURE HERE: This method REDUCES memory pressure by writing accumulated changes
                         // Blocking writes here would prevent the very thing that frees up memory
@@ -457,8 +459,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-
-            _jobList?.Save();
+            _jobList?.SaveMigrationUnit(migrationUnit);
         }
 
         // Server-level equivalent of AutoReplayFirstChangeInResumeToken

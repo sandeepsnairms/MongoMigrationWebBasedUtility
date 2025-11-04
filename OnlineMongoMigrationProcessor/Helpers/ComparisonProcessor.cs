@@ -35,7 +35,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 sourceClient = MongoClientFactory.Create(log, job.SourceConnectionString ?? string.Empty, false, config.CACertContentsForSourceServer);
                 targetClient = MongoClientFactory.Create(log, job.TargetConnectionString ?? string.Empty);
 
-                foreach (var mu in job.MigrationUnits ?? new List<MigrationUnit>())
+
+                foreach (var mu in Helper.GetMigrationUnitToMigrate(joblist,job) ?? new List<MigrationUnit>())
                 {
 
                     log.WriteLine($"Processing {mu.DatabaseName}.{mu.CollectionName}.");
@@ -111,7 +112,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                     mu.VarianceCount = mismatched;
                     mu.ComparedOn = currTime;
-                    joblist.Save();
+                    //joblist.Save();
+                    joblist.SaveMigrationUnit(mu);
                 }
             }           
             catch (Exception ex)

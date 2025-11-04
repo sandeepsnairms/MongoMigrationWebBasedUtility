@@ -64,7 +64,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
-            jobList.Save();
+
+            if (jobList != null)
+                jobList?.SaveMigrationUnit(mu);
         }
 
         public void Initialize(
@@ -223,7 +225,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                    _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Warning);
 					return TaskResult.Retry;
 				}
-                jobList?.Save(); //persists state
+
+                jobList?.SaveMigrationUnit(mu);
+                 //jobList?.Save(); //persists state
             }
             return TaskResult.Success;
         }
@@ -262,7 +266,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
-            jobList.Save();
+            jobList?.SaveMigrationUnit(mu);
 
             try
             {
@@ -397,7 +401,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
                     }
                     segment.IsProcessed = !failed;
-                    jobList.Save();
+                    jobList?.SaveMigrationUnit(mu);
                     return TaskResult.Success;
                 }
                 else
@@ -474,7 +478,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex}", LogType.Warning);
             }
 
-            jobList.Save();
+            jobList?.SaveMigrationUnit(mu);
         }
 
         private async Task CompareChunkDocumentsAsync(

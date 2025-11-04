@@ -14,6 +14,7 @@ using System.Xml.Linq;
 using MongoDB.Driver;
 using MongoDB.Bson;
 using OnlineMongoMigrationProcessor.Helpers;
+using System.Collections.Immutable;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
@@ -319,7 +320,7 @@ namespace OnlineMongoMigrationProcessor
             return connectionString.Contains("mongo.cosmos.azure.com");
         }         
 
-        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
+        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
             if (string.IsNullOrWhiteSpace(namespacesToMigrate))
@@ -344,8 +345,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var item in loadedObject)
                 {
-                    
-                    var tmpList = await PopulateJobCollectionsFromCSVAsync($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString,false);
+
+                    var tmpList = await PopulateJobCollectionsFromCSVAsync(job,$"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString,false);
                     if (tmpList.Count > 0)
                     {
                         foreach (var mu in tmpList)
@@ -372,7 +373,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(namespacesToMigrate, connectionString);
+                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(job,namespacesToMigrate, connectionString);
                 
                 // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
                 if (allCollectionsUseObjectId)
@@ -397,20 +398,20 @@ namespace OnlineMongoMigrationProcessor
             {
                 return;
             }
-            if (job?.MigrationUnits == null)
+            if (job?.MigrationUnitIds == null)
             {
-                job!.MigrationUnits = new List<MigrationUnit>();
+                job!.MigrationUnitIds = new List<string>();
             }
 
             // Check if the MigrationUnit already exists
-            if (job.MigrationUnits.Any(existingMu => existingMu.DatabaseName == mu.DatabaseName && existingMu.CollectionName == mu.CollectionName))
+            if (job.MigrationUnitIds.Contains(mu.Id))
             {
                 return;
             }
-            job.MigrationUnits.Add(mu);
+            job.MigrationUnitIds.Add(mu.Id);
         }
 
-        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(string namespacesToMigrate, string connectionString, bool split=true)
+        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool split=true)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
 
@@ -454,7 +455,8 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
                             {
-                                var migrationUnit = new MigrationUnit(database, collection, new List<MigrationChunk>());
+                                string guid=Guid.NewGuid().ToString();
+                                var migrationUnit = new MigrationUnit(guid, job.Id, database, collection, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -471,7 +473,8 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
                             {
-                                var migrationUnit = new MigrationUnit(database, colName, new List<MigrationChunk>());
+                                string guid = Guid.NewGuid().ToString();
+                                var migrationUnit = new MigrationUnit(guid, job.Id, database, colName, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -485,7 +488,8 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
                         {
-                            var migrationUnit = new MigrationUnit(dbName, collection, new List<MigrationChunk>());
+                            string guid = Guid.NewGuid().ToString();
+                            var migrationUnit = new MigrationUnit(guid, job.Id, dbName, collection, new List<MigrationChunk>());
                             unitsToAdd.Add(migrationUnit);
                         }
                     }
@@ -495,7 +499,8 @@ namespace OnlineMongoMigrationProcessor
                     // No wildcards, use as-is
                     if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
                     {
-                        var migrationUnit = new MigrationUnit(dbName, colName, new List<MigrationChunk>());
+                        string guid = Guid.NewGuid().ToString();
+                        var migrationUnit = new MigrationUnit(guid, job.Id, dbName, colName, new List<MigrationChunk>());
                         unitsToAdd.Add(migrationUnit);
                     }
                 }
@@ -622,14 +627,29 @@ namespace OnlineMongoMigrationProcessor
             return sanitizedFileName;
         }
 
-        public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
+        public static List<MigrationUnit> GetMigrationUnitToMigrate(JobList joblist,MigrationJob job)
+        {
+            var unitsForMigrate = new List<MigrationUnit>();
+            foreach (var id in job.MigrationUnitIds!)
+            {
+                var mu = joblist.GetMigrationUnit(job.Id, id);
+                if (mu != null)
+                {
+                    unitsForMigrate.Add(mu);
+                }
+            }
+            return unitsForMigrate;
+        }
+
+        public static bool IsOfflineJobCompleted(JobList jobList, MigrationJob migrationJob)
         {
             if (migrationJob == null) return true;
 
             if (migrationJob.IsSimulatedRun)
             {
-                foreach (var mu in migrationJob.MigrationUnits)
+                foreach (var id in migrationJob.MigrationUnitIds)
                 {
+                    var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.DumpComplete)
@@ -642,8 +662,9 @@ namespace OnlineMongoMigrationProcessor
             else
             {
 
-                foreach (var mu in migrationJob.MigrationUnits)
+                foreach (var id  in migrationJob.MigrationUnitIds)
                 {
+                    var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.RestoreComplete || !mu.DumpComplete)
