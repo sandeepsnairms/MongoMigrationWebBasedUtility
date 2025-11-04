@@ -325,9 +325,10 @@ namespace OnlineMongoMigrationProcessor
                     {
                         errorMessage = $"Out of memory during serialization: {ex.Message}. Consider reducing data size or increasing available memory.";
                         _log?.WriteLine(errorMessage, LogType.Error);
-                        
+
+                        return false;
                         // Emergency fallback: try minimal serialization
-                        return TryEmergencySave(filePath, out errorMessage);
+                        //return TryEmergencySave(filePath, out errorMessage);
                     }
                 }
             }
@@ -343,82 +344,7 @@ namespace OnlineMongoMigrationProcessor
         /// Emergency save method when regular serialization fails due to OOM
         /// Saves only essential job metadata without detailed migration unit data
         /// </summary>
-        private bool TryEmergencySave(string filePath, out string errorMessage)
-        {
-            try
-            {
-                _log?.WriteLine("Attempting emergency save with minimal data...", LogType.Warning);
-                
-                // Create a minimal version of JobList with only essential data
-                var minimalJobList = new JobList();
-                minimalJobList.ActiveDumpProcessIds = this.ActiveDumpProcessIds ?? new List<int>();
-                minimalJobList.ActiveRestoreProcessIds = this.ActiveRestoreProcessIds ?? new List<int>();
-                
-                // Create minimal jobs with only essential metadata
-                if (this.MigrationJobs != null)
-                {
-                    minimalJobList.MigrationJobs = new List<MigrationJob>();
-                    foreach (var job in this.MigrationJobs)
-                    {
-                        var minimalJob = new MigrationJob
-                        {
-                            Id = job.Id,
-                            Name = job.Name,
-                            SourceEndpoint = job.SourceEndpoint,
-                            TargetEndpoint = job.TargetEndpoint,
-                            StartedOn = job.StartedOn,
-                            IsCompleted = job.IsCompleted,
-                            CDCMode = job.CDCMode,
-                            IsCancelled = job.IsCancelled,
-                            IsStarted = job.IsStarted,
-                            JobType = job.JobType,
-                            // Create minimal migration units without detailed chunk data
-                            MigrationUnits = job.MigrationUnits?.Select(unit => new MigrationUnit(
-                                unit.DatabaseName, 
-                                unit.CollectionName, 
-                                new List<MigrationChunk>()) // Empty chunks to save memory
-                            {
-                                DumpComplete = unit.DumpComplete,
-                                RestoreComplete = unit.RestoreComplete,
-                                DumpPercent = unit.DumpPercent,
-                                RestorePercent = unit.RestorePercent,
-                                SourceStatus = unit.SourceStatus,
-                                EstimatedDocCount = unit.EstimatedDocCount,
-                                ActualDocCount = unit.ActualDocCount
-                            }).ToList()
-                        };
-                        minimalJobList.MigrationJobs.Add(minimalJob);
-                    }
-                }
-
-                // Use simple serialization for minimal data
-                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (var streamWriter = new StreamWriter(fileStream))
-                using (var jsonWriter = new JsonTextWriter(streamWriter))
-                {
-                    var serializer = new JsonSerializer
-                    {
-                        Formatting = Formatting.None,
-                        NullValueHandling = NullValueHandling.Ignore,
-                        DefaultValueHandling = DefaultValueHandling.Ignore
-                    };
-
-                    serializer.Serialize(jsonWriter, minimalJobList);
-                    jsonWriter.Flush();
-                    streamWriter.Flush();
-                }
-
-                _log?.WriteLine("Emergency save completed successfully with minimal data", LogType.Info);
-                errorMessage = "Emergency save completed - some detailed data was omitted to prevent memory exhaustion";
-                return true;
-            }
-            catch (Exception ex)
-            {
-                errorMessage = $"Emergency save also failed: {ex.Message}";
-                _log?.WriteLine(errorMessage, LogType.Error);
-                return false;
-            }
-        }
+        
 
         private bool TryReplaceFileWithRetry(string targetPath, string sourcePath, out string errorMessage)
         {
