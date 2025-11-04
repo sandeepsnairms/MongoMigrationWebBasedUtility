@@ -146,6 +146,7 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
-        public List<MigrationUnit>? MigrationUnits { get; set; }
+        public List<string>? MigrationUnitIds { get; set; }
+        
     }
 }

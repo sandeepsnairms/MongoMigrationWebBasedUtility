@@ -12,7 +12,7 @@ namespace OnlineMongoMigrationProcessor
 {
     public class JobList
     {
-        public List<MigrationJob>? MigrationJobs { get; set; }
+        public List<string>? MigrationJobIds { get; set; }
         
         // Thread-safe process ID tracking for parallel execution
         public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
@@ -23,12 +23,12 @@ namespace OnlineMongoMigrationProcessor
         private static readonly object _fileLock = new object();
         private static readonly object _loadLock = new object();
         private Log _log;
-        private string _processedMin = string.Empty;
+        //private string _processedMin = string.Empty;
 
-        private const int TUMBLING_INTERVAL_MINUTES = 5;
+        //private const int TUMBLING_INTERVAL_MINUTES = 5;
 
-        private readonly string[] SlotNames =
-        { "backup_slot0.json", "backup_slot1.json", "backup_slot2.json", "backup_slot3.json" };
+        //private readonly string[] SlotNames =
+        //{ "backup_slot0.json", "backup_slot1.json", "backup_slot2.json", "backup_slot3.json" };
 
         public JobList()
         {
@@ -40,6 +40,41 @@ namespace OnlineMongoMigrationProcessor
             _backupFolderPath = $"{Helper.GetWorkingFolder()}migrationjobs\\";
 
         }
+
+        public MigrationJob GetMigrationJob(string jobId)
+        {
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
+            string json = File.ReadAllText(filePath);
+            var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
+            return loadedObject;
+        }
+
+        public MigrationUnit GetMigrationUnit(string jobId, string unitId)
+        {
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
+            string json = File.ReadAllText(filePath);
+            var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
+            return loadedObject;
+        }
+
+
+        public bool SaveMigrationUnit(string jobId, MigrationUnit mu)
+        {
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{mu.Id}.json";
+            string json = JsonConvert.SerializeObject(mu, Formatting.Indented);
+            File.WriteAllText(filePath, json);
+            return true;
+        }
+
+        public bool SaveMigrationJob(MigrationJob mj)
+        {
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{mj.Id}\\jobdefinition.json";
+            string json = JsonConvert.SerializeObject(mj, Formatting.Indented);
+            File.WriteAllText(filePath, json);
+            return true;
+        }
+
+
 
         public void SetLog(Log _log)
         {
