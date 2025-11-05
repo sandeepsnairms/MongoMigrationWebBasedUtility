@@ -3,12 +3,14 @@ using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using static OnlineMongoMigrationProcessor.MongoHelper;
+using static System.Net.Mime.MediaTypeNames;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
@@ -18,11 +20,16 @@ namespace OnlineMongoMigrationProcessor
     {
         // Server-level processors use MigrationJob properties directly for global resume tokens
         protected override bool UseResumeTokenCache => false;
+        protected ConcurrentDictionary<string, MigrationUnit> _allCollectionsAsMigrationUnit = new ConcurrentDictionary<string, MigrationUnit>();
 
+        private bool _monitorAllCollections = false;
         public ServerLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
             : base(log, sourceClient, targetClient, jobList, job, config, syncBack)
         {
+            _allCollectionsAsMigrationUnit = new ConcurrentDictionary<string, MigrationUnit>();
         }
+
+
 
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
@@ -40,7 +47,17 @@ namespace OnlineMongoMigrationProcessor
 
             }
 
-            _log.WriteLine($"{_syncBackPrefix}Starting server-level change stream processing for {_migrationUnitsToProcess.Count} collection(s).");
+            //temp override to monitor all collections.
+            bool found = _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out var dummyMu);
+            if (_migrationUnitsToProcess.Count == 1 && _job.ChangeStreamLevel == ChangeStreamLevel.Server && found && dummyMu != null)
+            {
+                _monitorAllCollections = true;
+                _log.WriteLine($"{_syncBackPrefix}Special mode: Starting server-level change stream processing for all collections.", LogType.Warning);
+            }
+            else
+            {
+                _log.WriteLine($"{_syncBackPrefix}Starting server-level change stream processing for {_migrationUnitsToProcess.Count} collection(s).");
+            }
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 try
@@ -53,26 +70,26 @@ namespace OnlineMongoMigrationProcessor
 
                     await WatchServerLevelChangeStream(cancellationToken);
 
-                    loops++;
-                    // Check oplog count periodically
-                    if (loops % 4 == 0 && oplogSuccess && !isVCore && !_syncBack)
-                    {
-                        foreach (var unit in _migrationUnitsToProcess)
-                        {
-                            if (_job.CursorUtcTimestamp > DateTime.MinValue)
-                            {
-                                // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
-                                long secondsSinceEpoch = new DateTimeOffset(_job.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
+                    //loops++;
+                    //// Check oplog count periodically
+                    //if (loops % 4 == 0 && oplogSuccess && !isVCore && !_syncBack)
+                    //{
+                    //    foreach (var unit in _migrationUnitsToProcess)
+                    //    {
+                    //        if (_job.CursorUtcTimestamp > DateTime.MinValue)
+                    //        {
+                    //            // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
+                    //            long secondsSinceEpoch = new DateTimeOffset(_job.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
 
-                                _ = Task.Run(() =>
-                                {
-                                    oplogSuccess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
-                                });
-                                if (!oplogSuccess)
-                                    break;
-                            }
-                        }
-                    }
+                    //            _ = Task.Run(() =>
+                    //            {
+                    //                oplogSuccess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
+                    //            });
+                    //            if (!oplogSuccess)
+                    //                break;
+                    //        }
+                    //    }
+                    //}
                 }
                 catch (OperationCanceledException)
                 {
@@ -147,6 +164,13 @@ namespace OnlineMongoMigrationProcessor
                     if (!AutoReplayFirstChangeInResumeToken())
                     {
                         _log.WriteLine($"{_syncBackPrefix}Failed to replay the first change for server-level change stream. Skipping server-level processing.", LogType.Error);
+
+                        // Reset CSUpdatesInLastBatch before early return to prevent stale values
+                        foreach (var kvp in _migrationUnitsToProcess)
+                        {
+                            kvp.Value.CSUpdatesInLastBatch = 0;
+                        }
+                        _jobList?.Save();
                         return;
                     }
                     SetInitialDocumentReplayedStatus(true);
@@ -186,16 +210,20 @@ namespace OnlineMongoMigrationProcessor
                     changeStreamDocuments[kvp.Key] = new ChangeStreamDocuments();
                 }
 
+
+
                 if (_job.SourceServerVersion.StartsWith("3"))
                 {
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (ExecutionCancelled) break;
+
+
 
                         var result = await ProcessChange(change, changeStreamDocuments, counter);
                         if (!result.success)
-                            return;
+                            break;
                         counter = result.counter;
                     }
                 }
@@ -204,7 +232,7 @@ namespace OnlineMongoMigrationProcessor
                     while (cursor.MoveNext(cancellationToken))
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (ExecutionCancelled) return;
+                        if (ExecutionCancelled) break;
 
                         foreach (var change in cursor.Current)
                         {
@@ -212,16 +240,16 @@ namespace OnlineMongoMigrationProcessor
                             collectionKey = change.CollectionNamespace.ToString();
 
                             cancellationToken.ThrowIfCancellationRequested();
-                            if (ExecutionCancelled) return;
+                            if (ExecutionCancelled) break;
 
                             var result = await ProcessChange(change, changeStreamDocuments, counter);
                             if (!result.success)
-                                return;
+                                break;
                             counter = result.counter;
                         }
 
                         if (ExecutionCancelled)
-                            return;
+                            break;
                     }
                 }
             }
@@ -263,27 +291,46 @@ namespace OnlineMongoMigrationProcessor
                 var collectionName = change.CollectionNamespace.CollectionName;
                 var collectionKey = $"{databaseName}.{collectionName}";
 
-                // Check if this change belongs to one of our collections with SourceStatus.OK
-                if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out var migrationUnit))
+                MigrationUnit migrationUnit;
+
+                //if monitoring all collections, use a dummy key to report all changes, no filtering of collections and data
+                if (_monitorAllCollections)
                 {
-                    return (true, counter); // Skip changes for collections not in our job
+                    //add to _allCollectionsAsMigrationUnit dynamically
+                    if (!_allCollectionsAsMigrationUnit.ContainsKey(collectionKey))
+                    {
+                        migrationUnit = new MigrationUnit(databaseName, collectionName, new List<MigrationChunk>());
+                        _allCollectionsAsMigrationUnit.TryAdd(collectionKey, migrationUnit);
+                    }
+                    else
+                    {
+                        _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
+                    }
                 }
-
-                if (!Helper.IsMigrationUnitValid(migrationUnit))
+                else
                 {
-                    return (true, counter); // Skip changes for collections with errors
+                    // Check if this change belongs to one of our collections with SourceStatus.OK
+                    if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit))
+                    {
+                        return (true, counter); // Skip changes for collections not in our job
+                    }
+
+                    if (!Helper.IsMigrationUnitValid(migrationUnit))
+                    {
+                        return (true, counter); // Skip changes for collections with errors
+                    }
+
+
+                    // Check user filter condition               
+                    var userFilterDoc = MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
+
+                    if (change.OperationType != ChangeStreamOperationType.Delete)
+                    {
+                        if (userFilterDoc.Elements.Count() > 0
+                            && !MongoHelper.CheckForUserFilterMatch(change.FullDocument, userFilterDoc))
+                            return (true, counter); // Skip if doesn't match user filter
+                    }
                 }
-
-                // Check user filter condition               
-                var userFilterDoc=MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
-
-                if (change.OperationType != ChangeStreamOperationType.Delete)
-                {
-                    if (userFilterDoc.Elements.Count() > 0
-                        && !MongoHelper.CheckForUserFilterMatch(change.FullDocument, userFilterDoc))
-                        return (true, counter); // Skip if doesn't match user filter
-                }
-
                 counter++;
 
                 DateTime timeStamp = DateTime.MinValue;
@@ -304,6 +351,16 @@ namespace OnlineMongoMigrationProcessor
 
                 // Get target collection
                 IMongoCollection<BsonDocument> targetCollection = GetTargetCollection(databaseName, collectionName);
+
+                if (_monitorAllCollections)
+                {
+                    _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
+                    if (!changeStreamDocuments.ContainsKey(collectionKey))
+                    {
+                        changeStreamDocuments[collectionKey] = new ChangeStreamDocuments();
+                    }
+                }
+
 
                 // Process the change
                 ProcessChangeEvent(change, targetCollection, collectionKey, changeStreamDocuments[collectionKey], _job.IsSimulatedRun, migrationUnit);
@@ -334,29 +391,41 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var kvp in changeStreamDocuments)
                 {
                     var docs = kvp.Value;
+                    MigrationUnit mu;
                     int totalChanges = docs.DocsToBeInserted.Count + docs.DocsToBeUpdated.Count + docs.DocsToBeDeleted.Count;
-                    
+                    bool found = false;
                     if (totalChanges > _config.ChangeStreamMaxDocsInBatch)
                     {
                         var collKey = kvp.Key;
-                        if (_migrationUnitsToProcess.TryGetValue(collKey, out var mu))
+                        if (_monitorAllCollections)
+                        {
+
+                            found = _allCollectionsAsMigrationUnit.TryGetValue(collKey, out mu);
+                        }
+                        else
+                        {
+                            collKey = kvp.Key;
+                            found = _migrationUnitsToProcess.TryGetValue(collKey, out mu);
+                        }
+
+                        if (found && mu != null)
                         {
                             // BACKPRESSURE: Check global pending writes before mid-batch flush
                             int pending = GetGlobalPendingWriteCount();
                             while (pending >= MAX_GLOBAL_PENDING_WRITES)
                             {
                                 await WaitWithExponentialBackoffAsync(pending, collKey);
-                                
-                                // Check if memory recovered after wait
-                                if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-                                {
-                                    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
-                                    await WaitForMemoryRecoveryAsync(collKey);
-                                }
-                                
+
+                                //// Check if memory recovered after wait
+                                //if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+                                //{
+                                //    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
+                                //    await WaitForMemoryRecoveryAsync(collKey);
+                                //}
+
                                 pending = GetGlobalPendingWriteCount();
                             }
-                            
+
                             var targetColl = GetTargetCollection(mu.DatabaseName, mu.CollectionName);
 
                             _log.ShowInMonitor($"{_syncBackPrefix}Change stream max batch size exceeded. Flushing {totalChanges} changes for {collKey}");
@@ -413,17 +482,36 @@ namespace OnlineMongoMigrationProcessor
             {
                 var collectionKey = kvp.Key;
                 var docs = kvp.Value;
-
+                MigrationUnit migrationUnit;
+                bool found = false;
                 int totalChanges = docs.DocsToBeInserted.Count + docs.DocsToBeUpdated.Count + docs.DocsToBeDeleted.Count;
-                
+
                 if (totalChanges > 0)
                 {
-                    if (_migrationUnitsToProcess.TryGetValue(collectionKey, out var migrationUnit))
+
+                    if (_monitorAllCollections)
                     {
+                        found = _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
+                    }
+                    else
+                    {
+                        found = _migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit);
+                    }
+
+                    if (found && collectionKey != null)
+                    {
+
                         // NO BACKPRESSURE HERE: This method REDUCES memory pressure by writing accumulated changes
                         // Blocking writes here would prevent the very thing that frees up memory
                         // Backpressure is applied at read/accumulation points only
                         var targetCollection = GetTargetCollection(migrationUnit.DatabaseName, migrationUnit.CollectionName);
+
+
+                        if (_monitorAllCollections)
+                        {
+                            //since we want the chnages to  be reported to this dummy collection.
+                            _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
+                        }
 
                         IncrementGlobalPendingWrites();
                         try

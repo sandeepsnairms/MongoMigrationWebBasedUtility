@@ -202,11 +202,14 @@ namespace OnlineMongoMigrationProcessor
             {
                 lock (_fileLock)
                 {
-                    string json = JsonConvert.SerializeObject(this);
+                    // Memory-safe serialization with streaming
                     string tempFile = _filePath + ".tmp";
-
-                    // Step 1: Write JSON to temp
-                    File.WriteAllText(tempFile, json);
+                    
+                    if (!TrySerializeToFileStreaming(tempFile, out string serializationError))
+                    {
+                        errorMessage = serializationError;
+                        return false;
+                    }
 
                     // Step 2: Safe atomic replacement with file lock handling
                     if (File.Exists(_filePath))
@@ -269,6 +272,79 @@ namespace OnlineMongoMigrationProcessor
                 return false;
             }
         }
+
+        /// <summary>
+        /// Memory-safe serialization using streaming to avoid OOM during large object serialization
+        /// </summary>
+        private bool TrySerializeToFileStreaming(string filePath, out string errorMessage)
+        {
+            try
+            {
+                // Check available memory before serialization
+                var gcMemory = GC.GetTotalMemory(false);
+                var gcMemoryMB = gcMemory / 1024 / 1024;
+                
+                if (gcMemoryMB > 1536) // Warning if over 1.5GB
+                {
+                    _log?.WriteLine($"WARNING: High memory usage before serialization: {gcMemoryMB}MB", LogType.Warning);
+                    
+                    // Force GC before serialization to free up memory
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    GC.WaitForPendingFinalizers();
+                    
+                    gcMemory = GC.GetTotalMemory(false);
+                    gcMemoryMB = gcMemory / 1024 / 1024;
+                    _log?.WriteLine($"Memory after GC: {gcMemoryMB}MB", LogType.Info);
+                }
+
+                // Use streaming serialization to avoid large string allocation
+                using (var fileStream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 65536))
+                using (var streamWriter = new StreamWriter(fileStream, System.Text.Encoding.UTF8, 65536))
+                using (var jsonWriter = new JsonTextWriter(streamWriter))
+                {
+                    // Configure serializer for memory efficiency
+                    var serializer = new JsonSerializer
+                    {
+                        Formatting = Formatting.None, // Minimize output size
+                        NullValueHandling = NullValueHandling.Ignore,
+                        DefaultValueHandling = DefaultValueHandling.Ignore
+                    };
+
+                    try
+                    {
+                        // Stream serialize directly to file without creating large in-memory string
+                        serializer.Serialize(jsonWriter, this);
+                        jsonWriter.Flush();
+                        streamWriter.Flush();
+                        fileStream.Flush();
+                        
+                        errorMessage = string.Empty;
+                        return true;
+                    }
+                    catch (OutOfMemoryException ex)
+                    {
+                        errorMessage = $"Out of memory during serialization: {ex.Message}. Consider reducing data size or increasing available memory.";
+                        _log?.WriteLine(errorMessage, LogType.Error);
+
+                        return false;
+                        // Emergency fallback: try minimal serialization
+                        //return TryEmergencySave(filePath, out errorMessage);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error during streaming serialization: {ex.Message}";
+                _log?.WriteLine(errorMessage, LogType.Error);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Emergency save method when regular serialization fails due to OOM
+        /// Saves only essential job metadata without detailed migration unit data
+        /// </summary>
+        
 
         private bool TryReplaceFileWithRetry(string targetPath, string sourcePath, out string errorMessage)
         {
