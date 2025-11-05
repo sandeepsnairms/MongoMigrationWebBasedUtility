@@ -52,7 +52,11 @@ namespace OnlineMongoMigrationProcessor
         protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
         protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
-        protected const int MEMORY_THRESHOLD_PERCENT = 80;
+        protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
+
+        // UI update throttling to prevent Blazor rendering OOM (max 1 update per second per collection)
+        protected readonly ConcurrentDictionary<string, DateTime> _lastUIUpdateTime = new ConcurrentDictionary<string, DateTime>();
+        protected const int UI_UPDATE_INTERVAL_MS = 1000; // 1 second between UI updates
 
         private bool _disposed = false;
 
@@ -62,7 +66,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (_executionCancelled != value)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] ExecutionCancelled changed from {_executionCancelled} to {value}", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}ExecutionCancelled state change - From: {_executionCancelled}, To: {value}", LogType.Debug);
                     _executionCancelled = value;
                 }
             }
@@ -97,7 +101,7 @@ namespace OnlineMongoMigrationProcessor
             if (!_migrationUnitsToProcess.ContainsKey(key))
             {
                 _migrationUnitsToProcess.TryAdd(key, mu);
-                _log.WriteLine($"{_syncBackPrefix}Change stream for {key} added to queue.", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Collection added to change stream queue - Key: {key}, DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Verbose);
 
                 _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
                 return true;
@@ -134,20 +138,27 @@ namespace OnlineMongoMigrationProcessor
                         // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
                         if (_job.AggresiveChangeStream && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
                         {
-                            _ = Task.Run(async () => 
+                            string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
+                            _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Verbose);
+                            
+                            try
                             {
-                                try
+                                _ = Task.Run(async () => 
                                 {
-                                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] Aggressive cleanup Task.Run starting for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                                    await CleanupAggressiveCSAsync(migrationUnit);
-                                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] Aggressive cleanup Task.Run completed for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
-                                    // Don't re-throw for fire-and-forget tasks
-                                }
-                            });
+                                    try
+                                    {
+                                        await CleanupAggressiveCSAsync(migrationUnit);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
+                                        // Don't re-throw for fire-and-forget tasks
+                                    }
+                                });
+                            }
+                            catch
+                            {
+                            }
                         }
                     }
                 }
@@ -203,7 +214,7 @@ namespace OnlineMongoMigrationProcessor
             lock (_pendingWritesLock)
             {
                 _globalPendingWrites++;
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented: {_globalPendingWrites}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented to {_globalPendingWrites}", LogType.Verbose);
             }
         }
 
@@ -212,7 +223,7 @@ namespace OnlineMongoMigrationProcessor
             lock (_pendingWritesLock)
             {
                 _globalPendingWrites = Math.Max(0, _globalPendingWrites - 1);
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented: {_globalPendingWrites}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented to {_globalPendingWrites}", LogType.Verbose);
             }
         }
 
@@ -227,38 +238,38 @@ namespace OnlineMongoMigrationProcessor
             await Task.Delay(delayMs);
         }
 
-        protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
-        {
-            GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
-            maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
-            currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
-            percent = (double)currentMB / maxMB * 100;
-            
-            return percent >= MEMORY_THRESHOLD_PERCENT;
-        }
+        //protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
+        //{
+        //    GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
+        //    maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
+        //    currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
+        //    percent = (double)currentMB / maxMB * 100;
 
-        protected async Task WaitForMemoryRecoveryAsync(string collectionName)
-        {
-            const int MAX_WAIT_SECONDS = 60;
-            DateTime startWait = DateTime.UtcNow;
+        //    return percent >= MEMORY_THRESHOLD_PERCENT;
+        //}
+
+        //protected async Task WaitForMemoryRecoveryAsync(string collectionName)
+        //{
+        //    const int MAX_WAIT_SECONDS = 60;
+        //    DateTime startWait = DateTime.UtcNow;
             
-            while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-            {
-                if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
-                {
-                    // Memory stayed high for 60 seconds - STOP JOB
-                    string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
-                    _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
-                    _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
-                    throw new OutOfMemoryException(errorMsg);
-                }
+        //    while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+        //    {
+        //        if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
+        //        {
+        //            // Memory stayed high for 60 seconds - STOP JOB
+        //            string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
+        //            _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
+        //            _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
+        //            throw new OutOfMemoryException(errorMsg);
+        //        }
                 
-                _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
-                await Task.Delay(5000); // Check every 5 seconds
-            }
+        //        _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
+        //        await Task.Delay(5000); // Check every 5 seconds
+        //    }
             
-            _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
-        }
+        //    _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
+        //}
 
         #endregion
 
@@ -396,7 +407,7 @@ namespace OnlineMongoMigrationProcessor
             int batchSize = 50)
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
-            _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync started for {collectionKey}: I:{insertEvents.Count}, U:{updateEvents.Count}, D:{deleteEvents.Count}, batchSize:{batchSize}", LogType.Debug);
+            _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
             
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
@@ -422,13 +433,11 @@ namespace OnlineMongoMigrationProcessor
                 string jobId = _job.Id ?? string.Empty;
                 bool isSimulatedRun = _job.IsSimulatedRun;
                 
-                _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync context for {collectionKey}: aggressive={isAggressive}, aggressiveComplete={isAggressiveComplete}, simulated={isSimulatedRun}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Processing context - Aggressive: {isAggressive}, AggressiveComplete: {isAggressiveComplete}, Simulated: {isSimulatedRun} for {collectionKey}", LogType.Verbose);
 
                 // Use ParallelWriteProcessor for improved performance with retry logic
                 var parallelProcessor = new ParallelWriteProcessor(_log, _syncBackPrefix);
-                _log.WriteLine($"{_syncBackPrefix}[DEBUG] Created ParallelWriteProcessor for {collectionKey}", LogType.Debug);
                 
-                _log.WriteLine($"{_syncBackPrefix}[DEBUG] Starting ParallelWriteProcessor.ProcessWritesAsync for {collectionKey}", LogType.Debug);
                 var result = await parallelProcessor.ProcessWritesAsync(
                     mu,
                     collection,
@@ -443,47 +452,43 @@ namespace OnlineMongoMigrationProcessor
                     _targetClient,
                     isSimulatedRun);
 
-                _log.WriteLine($"{_syncBackPrefix}[DEBUG] ParallelWriteProcessor completed for {collectionKey}: success={result.Success}, totalFailures={result.TotalFailures}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.TotalFailures} for {collectionKey}", LogType.Debug);
 
                 if (!result.Success)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync had failures for {collectionKey}, incrementing failure counter by {result.TotalFailures}", LogType.Debug);
                     IncrementFailureCounter(mu, result.TotalFailures);
+                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.TotalFailures} failures for {collectionKey}", LogType.Debug);
                     
                     // If there were critical errors that would cause data loss, stop the job
                     if (result.Errors.Any(e => e.Contains("CRITICAL")))
                     {
                         var criticalError = result.Errors.First(e => e.Contains("CRITICAL"));
-                        //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical error detected for {collectionKey}: {criticalError}", LogType.Debug);
                         _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error: {criticalError}", LogType.Error);
                         throw new InvalidOperationException(criticalError);
                     }
                 }
                 else if (result.TotalFailures > 0)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync had non-critical failures for {collectionKey}, incrementing failure counter by {result.TotalFailures}", LogType.Debug);
                     IncrementFailureCounter(mu, result.TotalFailures);
+                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.TotalFailures} non-critical failures for {collectionKey}", LogType.Verbose);
                 }
                 
-                _log.WriteLine($"{_syncBackPrefix}[DEBUG] BulkProcessChangesAsync completed successfully for {collectionKey}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync completed successfully for {collectionKey}", LogType.Verbose);
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL") && ex.Message.Contains("persistent deadlock"))
             {
-                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical deadlock exception caught for {collectionKey}", LogType.Debug);
                 // Critical deadlock failure - re-throw to stop the job and prevent data loss
                 _log.WriteLine($"{_syncBackPrefix}Stopping job due to persistent deadlock that would cause data loss. Details: {ex.Message}", LogType.Error);
                 throw; // Re-throw to stop the entire migration job
             }
             catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
             {
-                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Critical InvalidOperationException caught for {collectionKey}", LogType.Debug);
                 // Critical error that would cause data loss - re-throw to stop the job
                 _log.WriteLine($"{_syncBackPrefix}Stopping job due to critical error that would cause data loss. Details: {ex.Message}", LogType.Error);
                 throw; // Re-throw to stop the entire migration job
             }
             catch (Exception ex)
             {
-                //_log.WriteLine($"{_syncBackPrefix}[DEBUG] Exception caught in BulkProcessChangesAsync for {collectionKey}: {ex.GetType().Name}", LogType.Debug);
                 _log.WriteLine($"{_syncBackPrefix}Error processing operations for {collection.CollectionNamespace.FullName}. Details: {ex}", LogType.Error);
                 throw; // Re-throw all exceptions to ensure they are handled upstream
             }
@@ -503,7 +508,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (mu.AggressiveCacheDeleted || _aggressiveCleanupProcessed.ContainsKey(collectionKey))
                 {
-                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}", LogType.Debug);
+                    _log.WriteLine($"Aggressive change stream cleanup already processed for {collectionKey}", LogType.Verbose);
                     return;
                 }
 
@@ -570,7 +575,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (_finalCleanupExecuted)
                 {
-                    _log.WriteLine("Aggressive change stream final cleanup already executed", LogType.Debug);
+                    _log.WriteLine("Aggressive change stream final cleanup already executed", LogType.Verbose);
                     return;
                 }
                 _finalCleanupExecuted = true;
@@ -646,33 +651,41 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         protected void TrackBackgroundTask(Task task)
         {
-            var monitoredTask = Task.Run(async () =>
+            
+            try
             {
-                try
+                var monitoredTask = Task.Run(async () =>
                 {
-                    await task;
-                }
-                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
-                {
-                    _criticalFailureDetected = true;
-                    _criticalFailureException = ex;
-                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
-                }
-                catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
-                {
-                    var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
-                    _criticalFailureDetected = true;
-                    _criticalFailureException = criticalEx;
-                    _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
-                }
-            });
+                    try
+                    {
+                        await task;
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                    {
+                        _criticalFailureDetected = true;
+                        _criticalFailureException = ex;
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
+                    }
+                    catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
+                    {
+                        var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
+                        _criticalFailureDetected = true;
+                        _criticalFailureException = criticalEx;
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
+                    }
+                });
 
-            _backgroundProcessingTasks.Add(monitoredTask);
-            PruneCompletedBackgroundTasks();
+                _backgroundProcessingTasks.Add(monitoredTask);
+                PruneCompletedBackgroundTasks();
+            }
+            catch
+            {
+                throw;
+            }
         }
 
         /// <summary>
@@ -704,10 +717,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (_backgroundProcessingTasks.Count > 0)
             {
-                _log.WriteLine($"{_syncBackPrefix}Waiting for {_backgroundProcessingTasks.Count} background tasks to complete...", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Waiting for {_backgroundProcessingTasks.Count} background processing tasks to complete", LogType.Debug);
                 try
                 {
                     await Task.WhenAll(_backgroundProcessingTasks);
+                    _log.WriteLine($"{_syncBackPrefix}All background processing tasks completed successfully", LogType.Verbose);
                 }
                 catch (Exception ex)
                 {

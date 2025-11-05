@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using OnlineMongoMigrationProcessor;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
+using OnlineMongoMigrationProcessor.Helpers;
 
 namespace MongoMigrationWebApp.Service
 {
@@ -181,12 +182,29 @@ namespace MongoMigrationWebApp.Service
         }
 
         /// <summary>
-        /// Checks if controlled pause is applicable for the given job type
+        /// Checks if controlled pause is applicable for the given job type and current job state
+        /// Controlled pause is only applicable during bulk copy phase, not during change stream processing
         /// </summary>
-        public bool IsControlledPauseApplicable(OnlineMongoMigrationProcessor.Models.JobType jobType)
+        public bool IsControlledPauseApplicable(JobType jobType, OnlineMongoMigrationProcessor.MigrationJob? job = null)
         {
-            return jobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore ||
-                   jobType == OnlineMongoMigrationProcessor.Models.JobType.MongoDriver;
+            // Controlled pause only applies to chunk-based job types
+            if (jobType != JobType.DumpAndRestore &&
+                jobType != JobType.MongoDriver)
+            {
+                return false;
+            }
+
+            // If job is provided, check if bulk copy (offline phase) is still ongoing
+            if (job != null)
+            {
+                // If offline job is completed, controlled pause is not applicable
+                if (Helper.IsOfflineJobCompleted(job))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
