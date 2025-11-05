@@ -952,7 +952,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 long documentCount = stats.DocumentCount;
                 long totalCollectionSizeBytes = stats.CollectionSizeBytes;
 
-                _log.WriteLine($"{databaseName}.{collectionName} - docCount: {documentCount}, size: {totalCollectionSizeBytes} bytes", LogType.Verbose);
+                _log.WriteLine($"{databaseName}.{collectionName} - docCount: {documentCount}, size: {totalCollectionSizeBytes} bytes", LogType.Debug);
                 var database = _sourceClient!.GetDatabase(databaseName);
                 var collection = database.GetCollection<BsonDocument>(collectionName);
 
@@ -968,11 +968,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     totalChunks = totalChunksBySize;
                     minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
-                    _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}", LogType.Verbose);
+                    _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}", LogType.Debug);
                 }
                 else
                 {
-                    _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}", LogType.Verbose);
+                    _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}", LogType.Debug);
                     totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / (SamplePartitioner.MaxSamples == 0 ? 1 : SamplePartitioner.MaxSamples));
                     totalChunks = Math.Max(1, totalChunks); // At least one chunk
                     totalChunks = Math.Max(totalChunks, totalChunksBySize);

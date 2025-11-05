@@ -238,38 +238,38 @@ namespace OnlineMongoMigrationProcessor
             await Task.Delay(delayMs);
         }
 
-        protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
-        {
-            GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
-            maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
-            currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
-            percent = (double)currentMB / maxMB * 100;
-            
-            return percent >= MEMORY_THRESHOLD_PERCENT;
-        }
+        //protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
+        //{
+        //    GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
+        //    maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
+        //    currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
+        //    percent = (double)currentMB / maxMB * 100;
 
-        protected async Task WaitForMemoryRecoveryAsync(string collectionName)
-        {
-            const int MAX_WAIT_SECONDS = 60;
-            DateTime startWait = DateTime.UtcNow;
+        //    return percent >= MEMORY_THRESHOLD_PERCENT;
+        //}
+
+        //protected async Task WaitForMemoryRecoveryAsync(string collectionName)
+        //{
+        //    const int MAX_WAIT_SECONDS = 60;
+        //    DateTime startWait = DateTime.UtcNow;
             
-            while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-            {
-                if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
-                {
-                    // Memory stayed high for 60 seconds - STOP JOB
-                    string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
-                    _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
-                    _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
-                    throw new OutOfMemoryException(errorMsg);
-                }
+        //    while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+        //    {
+        //        if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
+        //        {
+        //            // Memory stayed high for 60 seconds - STOP JOB
+        //            string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
+        //            _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
+        //            _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
+        //            throw new OutOfMemoryException(errorMsg);
+        //        }
                 
-                _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
-                await Task.Delay(5000); // Check every 5 seconds
-            }
+        //        _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
+        //        await Task.Delay(5000); // Check every 5 seconds
+        //    }
             
-            _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
-        }
+        //    _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
+        //}
 
         #endregion
 

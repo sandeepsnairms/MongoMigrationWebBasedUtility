@@ -40,7 +40,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {sortedKeys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, sortedKeys.Count)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.");
 
             long loops = 0;
-            bool oplogSuccess = true;
+            //bool oplogSuccess = true;
 
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
@@ -109,7 +109,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
                     
                     // Log memory stats before batch processing
-                    LogMemoryStats("BeforeBatch");
+                    //LogMemoryStats("BeforeBatch");
 
                     try
                     {
@@ -156,10 +156,13 @@ namespace OnlineMongoMigrationProcessor
                     GC.WaitForPendingFinalizers();
                     
                     // Log memory stats after batch processing and GC
-                    LogMemoryStats("AfterBatch");
+                    //LogMemoryStats("AfterBatch");
                 }
 
                 _log.WriteLine($"{_syncBackPrefix}Completed round {loops + 1} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...");
+
+                //static collections resume tokens need adjustment
+                AdjustCusrsorTimeForStaticCollections();
 
                 index = 0;
                 // Sort the dictionary after all processing is complete
@@ -168,36 +171,83 @@ namespace OnlineMongoMigrationProcessor
                     .Select(kvp => kvp.Key)
                     .ToList();
 
-                loops++;
-                // every 4 loops, check for oplog count, doesn't work on vcore
-                if (loops % 4 == 0 && oplogSuccess && !isVCore && !_syncBack)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Oplog check triggered at loop {loops}", LogType.Verbose);
-                    foreach (var unit in _migrationUnitsToProcess)
-                    {
-                        if (unit.Value.CursorUtcTimestamp > DateTime.MinValue)
-                        {
-                            // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
-                            long secondsSinceEpoch = new DateTimeOffset(unit.Value.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
+                //loops++;
+                //// every 4 loops, check for oplog count, doesn't work on vcore
+                //if (loops % 4 == 0 && oplogSuccess && !isVCore && !_syncBack)
+                //{
+                //    _log.WriteLine($"{_syncBackPrefix}Oplog check triggered at loop {loops}", LogType.Verbose);
+                //    foreach (var unit in _migrationUnitsToProcess)
+                //    {
+                //        if (unit.Value.CursorUtcTimestamp > DateTime.MinValue)
+                //        {
+                //            // Convert DateTime to Unix timestamp (seconds since Jan 1, 1970)
+                //            long secondsSinceEpoch = new DateTimeOffset(unit.Value.CursorUtcTimestamp.ToLocalTime()).ToUnixTimeSeconds();
 
-                            _ = Task.Run(() =>
-                            {
-                                try
-                                {
-                                    oplogSuccess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _log.WriteLine($"{_syncBackPrefix}Exception in oplog count Task.Run for {unit.Key}: {ex}", LogType.Error);
-                                    oplogSuccess = false; // Set to false on exception
-                                }
-                            });
-                            if (!oplogSuccess)
-                                break;
+                //            _ = Task.Run(() =>
+                //            {
+                //                try
+                //                {
+                //                    oplogSuccess = MongoHelper.GetPendingOplogCountAsync(_log, _sourceClient, secondsSinceEpoch, unit.Key);
+                //                }
+                //                catch (Exception ex)
+                //                {
+                //                    _log.WriteLine($"{_syncBackPrefix}Exception in oplog count Task.Run for {unit.Key}: {ex}", LogType.Error);
+                //                    oplogSuccess = false; // Set to false on exception
+                //                }
+                //            });
+                //            if (!oplogSuccess)
+                //                break;
+                //        }
+                //    }
+                //}
+            }
+        }
+
+        private bool AdjustCusrsorTimeForStaticCollections()
+        {
+            try
+            {
+                foreach (var mu in _migrationUnitsToProcess.Values)
+                {
+                    if (!_syncBack)
+                    {
+                        TimeSpan gap;
+                        if (mu.CursorUtcTimestamp > DateTime.MinValue)
+                             gap = DateTime.UtcNow - mu.CursorUtcTimestamp.AddHours(mu.CSAddHours);
+                        else
+                             gap = DateTime.UtcNow - mu.ChangeStreamStartedOn.Value.AddHours(mu.CSAddHours);
+
+                        if (gap.TotalMinutes > (60 * 24) && mu.CSUpdatesInLastBatch == 0)
+                        {
+                            mu.CSAddHours += 22;
+                            mu.ResumeToken = string.Empty; //clear resume token to use timestamp
+                            _log.WriteLine($"{_syncBackPrefix}24 hour change stream lag with no updates detected for {mu.DatabaseName}.{mu.CollectionName} - pushed by 22 hours",LogType.Warning);
+                        }
+                    }
+                    else
+                    {
+                        TimeSpan gap;
+                        if (mu.CursorUtcTimestamp > DateTime.MinValue)
+                            gap = DateTime.UtcNow - mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours);
+                        else
+                            gap = DateTime.UtcNow - mu.SyncBackChangeStreamStartedOn.Value.AddHours(mu.SyncBackAddHours);
+
+                        if (gap.TotalMinutes > (60 * 24) && mu.CSUpdatesInLastBatch == 0)
+                        {
+                            mu.SyncBackAddHours += 22;
+                            mu.ResumeToken = string.Empty; //clear resume token to use timestamp
+                            _log.WriteLine($"{_syncBackPrefix}24 hour change stream lag with no updates detected for {mu.DatabaseName}.{mu.CollectionName} - pushed by 22 hours", LogType.Warning);
                         }
                     }
                 }
+                return true;
             }
+            catch(Exception ex)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Error adjusting cursor time for static collections: {ex}", LogType.Error);
+                return false;
+            }
+
         }
 
         private async Task ProcessCollectionChangeStream(MigrationUnit mu, bool IsCSProcessingRun = false, int seconds = 0)
@@ -258,7 +308,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (!_syncBack)
                     {
-                        timeStamp = mu.CursorUtcTimestamp;
+                        timeStamp = mu.CursorUtcTimestamp.AddHours(mu.CSAddHours);//to adjust for expiring rsume tokens
                         resumeToken = mu.ResumeToken ?? string.Empty;
                         version = _job.SourceServerVersion;
                         if (mu.ChangeStreamStartedOn.HasValue)
@@ -269,10 +319,11 @@ namespace OnlineMongoMigrationProcessor
                         {
                             startedOn = DateTime.MinValue; // Example default value
                         }
+                        startedOn= startedOn.AddHours(mu.CSAddHours); //to adjust for expiring rsume tokens
                     }
                     else
                     {
-                        timeStamp = mu.SyncBackCursorUtcTimestamp;
+                        timeStamp = mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours);//to adjust for expiring rsume tokens
                         resumeToken = mu.SyncBackResumeToken ?? string.Empty;
                         version = "8"; //hard code for target
                         if (mu.SyncBackChangeStreamStartedOn.HasValue)
@@ -283,6 +334,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             startedOn = DateTime.MinValue; // Example default value
                         }
+                        startedOn = startedOn.AddHours(mu.SyncBackAddHours); //to adjust for expiring rsume tokens
                     }
 
                     if (!mu.InitialDocumenReplayed && !_job.IsSimulatedRun && !_job.AggresiveChangeStream)
@@ -415,17 +467,17 @@ namespace OnlineMongoMigrationProcessor
                 var pipelineArray = pipeline.ToArray();
 
                 // OOM PREVENTION: Check memory before creating Watch cursor to prevent crash during allocation
-                if (IsMemoryExhausted(out long memMB, out long memMaxMB, out double memPercent))
-                {
-                    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure HIGH before Watch() - {memMB}MB / {memMaxMB}MB ({memPercent:F1}%) - waiting for recovery");
+                //if (IsMemoryExhausted(out long memMB, out long memMaxMB, out double memPercent))
+                //{
+                //    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure HIGH before Watch() - {memMB}MB / {memMaxMB}MB ({memPercent:F1}%) - waiting for recovery");
                     
-                    // Force GC and wait for memory recovery before attempting Watch()
-                    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-                    await Task.Delay(2000); // Give GC time to complete
+                //    // Force GC and wait for memory recovery before attempting Watch()
+                //    GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                //    await Task.Delay(2000); // Give GC time to complete
                     
-                    await WaitForMemoryRecoveryAsync(collectionKey);
+                //    await WaitForMemoryRecoveryAsync(collectionKey);
                     
-                }
+                //}
 
                 // Watch timeout should be longer than batch duration to allow full batch processing
                 // Add 30 second buffer to prevent premature timeout when waiting for changes
@@ -586,12 +638,12 @@ namespace OnlineMongoMigrationProcessor
                                     _log.WriteLine($"{_syncBackPrefix}Backpressure applied - Pending writes: {pending}/{MAX_GLOBAL_PENDING_WRITES} for {collectionKey}", LogType.Verbose);
                                     await WaitWithExponentialBackoffAsync(pending, sourceCollection.CollectionNamespace.ToString());
 
-                                    // Check if memory recovered after wait
-                                    if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-                                    {
-                                        _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
-                                        await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
-                                    }
+                                    //// Check if memory recovered after wait
+                                    //if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+                                    //{
+                                    //    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
+                                    //    await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
+                                    //}
 
                                     pending = GetGlobalPendingWriteCount();
                                 }
@@ -729,12 +781,12 @@ namespace OnlineMongoMigrationProcessor
                                         _log.WriteLine($"{_syncBackPrefix}Backpressure applied - Pending writes: {pending}/{MAX_GLOBAL_PENDING_WRITES} for {collectionKey}", LogType.Verbose);
                                         await WaitWithExponentialBackoffAsync(pending, sourceCollection.CollectionNamespace.ToString());
 
-                                        // Check if memory recovered after wait
-                                        if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-                                        {
-                                            _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
-                                            await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
-                                        }
+                                        //// Check if memory recovered after wait
+                                        //if (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
+                                        //{
+                                        //    _log.ShowInMonitor($"{_syncBackPrefix}Memory pressure detected: {currentMB}MB / {maxMB}MB ({percent:F1}%)");
+                                        //    await WaitForMemoryRecoveryAsync(sourceCollection.CollectionNamespace.ToString());
+                                        //}
 
                                         pending = GetGlobalPendingWriteCount();
                                     }
@@ -1139,28 +1191,28 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Log memory statistics to help identify memory pressure and potential OOM issues
         /// </summary>
-        private void LogMemoryStats(string context)
-        {
-            try
-            {
-                var gcMemory = GC.GetTotalMemory(false);
-                var workingSet = Environment.WorkingSet;
-                var gcMemoryMB = gcMemory / 1024 / 1024;
-                var workingSetMB = workingSet / 1024 / 1024;
+        //private void LogMemoryStats(string context)
+        //{
+        //    try
+        //    {
+        //        var gcMemory = GC.GetTotalMemory(false);
+        //        var workingSet = Environment.WorkingSet;
+        //        var gcMemoryMB = gcMemory / 1024 / 1024;
+        //        var workingSetMB = workingSet / 1024 / 1024;
                 
-                _log.WriteLine($"{_syncBackPrefix}MEMORY [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB", LogType.Verbose);
+        //        _log.WriteLine($"{_syncBackPrefix}MEMORY [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB", LogType.Verbose);
                 
-                // Show warning in monitor if memory usage is high (over 1GB GC memory)
-                if (gcMemoryMB > 1024)
-                {
-                    _log.ShowInMonitor($"{_syncBackPrefix}HIGH MEMORY WARNING [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB");
-                }
-            }
-            catch (Exception ex)
-            {
-                // Memory logging itself can fail under extreme pressure
-                _log.WriteLine($"{_syncBackPrefix}Failed to log memory stats [{context}]: {ex.Message}", LogType.Debug);
-            }
-        }
+        //        // Show warning in monitor if memory usage is high (over 1GB GC memory)
+        //        if (gcMemoryMB > 1024)
+        //        {
+        //            _log.ShowInMonitor($"{_syncBackPrefix}HIGH MEMORY WARNING [{context}] - GC: {gcMemoryMB}MB, WorkingSet: {workingSetMB}MB");
+        //        }
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // Memory logging itself can fail under extreme pressure
+        //        _log.WriteLine($"{_syncBackPrefix}Failed to log memory stats [{context}]: {ex.Message}", LogType.Debug);
+        //    }
+        //}
     }
 }
