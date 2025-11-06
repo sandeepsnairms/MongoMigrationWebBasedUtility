@@ -37,6 +37,11 @@ namespace OnlineMongoMigrationProcessor.Workers
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
 
+        public MigrationJob CurrentJob
+        {
+            get=>_job;
+        }
+
         public MigrationWorker(JobList jobList)
         {            
             _log = new Log();

@@ -84,8 +84,17 @@ namespace MongoMigrationWebApp.Service
         //    return GetJobList().Save(out errorMessage);
         //}
 
-        public MigrationJob? GetMigrationJobById(string id)
+        public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
+            if(active)
+            {
+                if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+                {
+                    var ret= MigrationWorker.CurrentJob;
+                    if(ret != null)
+                        return ret;
+                }
+            }
             var job = GetJobList().GetMigrationJob(id);
             return job;
         }
@@ -100,7 +109,7 @@ namespace MongoMigrationWebApp.Service
                 {
                     jobs.Add(job);
                 }
-            }   
+            }
             return jobs;
         }
 

@@ -20,7 +20,7 @@
     </h3>
     <div class="d-flex align-items-center mb-3">
 
-                @if (IsResumeEnabled() && !_isLoadingCollections)
+        @if (IsResumeEnabled() && !_isLoadingCollections)
         {
             <div class="btn-group mx-2">
                 <button class="btn btn-primary dropdown-toggle" type="button" id="resumeJobDropdown" data-bs-toggle="dropdown" aria-expanded="false">
@@ -991,7 +991,7 @@ else if (@_showLogBackupFile)
     {
         _showLogBackupFile = false;
         _logBackupFile = string.Empty;  
-        MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+        MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             // Only start timer if AutoRefreshEnabled is true (default)
@@ -1073,7 +1073,7 @@ else if (@_showLogBackupFile)
         // Marshal ALL component state changes to the UI thread to prevent cross-thread access issues
         InvokeAsync(() =>
         {
-            MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+            MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
             if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
             {
                 // Check if we should hide loading spinner
@@ -1124,7 +1124,7 @@ else if (@_showLogBackupFile)
             return; // Exit if the JobId does not match
         }
 
-        MigrationJob = GetMigrations().Find(m => m.Id == id);
+        MigrationJob = JobManager.GetMigrationJobById(JobId);//GetMigrations().Find(m => m.Id == id);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             LogBucket = JobManager.GetLogBucket(id, out string logBackup, out bool isLive);
@@ -1663,8 +1663,8 @@ else if (@_showLogBackupFile)
 
     private bool IsResumeEnabled()
     {
-    var mj = MigrationJob;
-    return mj != null && !mj.IsCompleted && !IsJobRunning();
+        var mj = MigrationJob;
+        return mj != null && !mj.IsCompleted && !IsJobRunning();
     }
 
     private bool CanAutoStart()
