@@ -174,7 +174,7 @@ namespace OnlineMongoMigrationProcessor
                         return;
                     }
                     SetInitialDocumentReplayedStatus(true);
-                    _jobList?.SaveMigrationJobDefinition(_job);
+                    _job.SaveToDisk();;
                 }
 
 
@@ -448,7 +448,7 @@ namespace OnlineMongoMigrationProcessor
                                     _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collKey}: Resume token persisted after successful flush", LogType.Debug);
                                 }
 
-                                _jobList.SaveMigrationUnit(mu);
+                                mu.SaveToDisk();
 
                                 // Clear the lists and metadata after successful processing
                                 docs.DocsToBeInserted.Clear();
@@ -538,7 +538,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            _jobList?.SaveMigrationUnit(migrationUnit);
+            migrationUnit.SaveToDisk();
         }
 
         // Server-level equivalent of AutoReplayFirstChangeInResumeToken

@@ -165,7 +165,7 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 _job.CSPostProcessingStarted = true;
-                _jobList?.SaveMigrationJobDefinition(_job); // persist state
+                _job.SaveToDisk(); // persist state
                 //_jobList?.Save(); // persist state
 
                 if (_migrationUnitsToProcess.Count == 0)
@@ -180,7 +180,7 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
                 //_jobList?.Save();
-                _jobList?.SaveMigrationJobDefinition(_job); // persist state
+                _job.SaveToDisk();; // persist state
 
             }
             catch (OperationCanceledException)
@@ -553,7 +553,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 // Save the updated state
                 //_jobList?.Save();
-                _jobList?.SaveMigrationJobDefinition(_job); // persist state
+                _job.SaveToDisk();; // persist state
             }
             catch (Exception ex)
             {

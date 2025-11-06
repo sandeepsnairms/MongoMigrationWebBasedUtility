@@ -30,12 +30,11 @@ namespace OnlineMongoMigrationProcessor
         // Thread-safe process ID tracking for parallel execution
         public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
-
-       
+              
 
         //private string _filePath = string.Empty;
         //private string _backupFolderPath = string.Empty;
-        private static readonly object _fileLock = new object();
+        private static readonly object _writeLock = new object();
         private static readonly object _loadLock = new object();
         private Log _log;
         //private string _processedMin = string.Empty;
@@ -76,18 +75,8 @@ namespace OnlineMongoMigrationProcessor
 
         public JobList()
         {
-            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs");
-        }
-
-        private bool CreateFolderIfNotExists(string folderPath)
-        {
-
-            if (!Directory.Exists(folderPath))
-            {
-                Directory.CreateDirectory(folderPath);
-            }
-            return true;
-        }
+            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs");
+        }        
 
         public MigrationJob GetMigrationJob(string jobId)
         {
@@ -109,7 +98,7 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
+                Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
                 string json = File.ReadAllText(filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
@@ -123,30 +112,15 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public bool SaveMigrationUnit(MigrationUnit mu)
+        public bool SaveToDisk()
         {
-            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{mu.JobId}");
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{mu.JobId}\\{mu.Id}.json";
-            string json = JsonConvert.SerializeObject(mu, Formatting.Indented);
-            File.WriteAllText(filePath, json);
-            return true;
-        }
-
-        public bool SaveMigrationJobDefinition(MigrationJob mj)
-        {
-            CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{mj.Id}");
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{mj.Id}\\jobdefinition.json";
-            string json = JsonConvert.SerializeObject(mj, Formatting.Indented);
-            File.WriteAllText(filePath, json);
-            return true;
-        }
-
-        public bool SaveJobList()
-        {
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
-            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-            File.WriteAllText(filePath, json);
-            return true;
+            lock(_writeLock)
+            {
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                File.WriteAllText(filePath, json);
+                return true;
+            }
         }
 
         public void SetLog(Log _log)
@@ -159,33 +133,36 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                var old_filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
-                if (System.IO.File.Exists(old_filePath))
+                lock (_loadLock)
                 {
-                    if (ConvertToNewFormat(old_filePath, out errorMessage))
+                    var old_filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
+                    if (System.IO.File.Exists(old_filePath))
                     {
-                        System.IO.File.Move(old_filePath, old_filePath + ".bak");
+                        if (ConvertToNewFormat(old_filePath, out errorMessage))
+                        {
+                            System.IO.File.Move(old_filePath, old_filePath + ".bak");
+                        }
                     }
-                }
-                
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
-                string json = File.ReadAllText(filePath);
-                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                if (loadedObject != null)
-                {
-                    MigrationJobs = loadedObject.MigrationJobs;
 
-                    MigrationJobIds = loadedObject.MigrationJobIds;
-                    ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
-                    ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
+                    var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+                    string json = File.ReadAllText(filePath);
+                    var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                    if (loadedObject != null)
+                    {
+                        MigrationJobs = loadedObject.MigrationJobs;
 
-                    errorMessage = string.Empty;
-                    return true;
-                }
-                else
-                {
-                    errorMessage = "Error Loading Job List";
-                    return false;
+                        MigrationJobIds = loadedObject.MigrationJobIds;
+                        ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
+                        ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
+
+                        errorMessage = string.Empty;
+                        return true;
+                    }
+                    else
+                    {
+                        errorMessage = "Error Loading Job List";
+                        return false;
+                    }
                 }
             }
             catch (Exception ex)
@@ -213,7 +190,7 @@ namespace OnlineMongoMigrationProcessor
                     MigrationJobIds = new List<string>();
                     foreach (var mj in loadedObject.MigrationJobs)
                     {
-                        SaveMigrationJobDefinition(mj);
+                        mj.SaveToDisk();
                         mj.MigrationUnitIds = new List<string>();
                         foreach (var mu in mj.MigrationUnits)
                         {
@@ -221,12 +198,12 @@ namespace OnlineMongoMigrationProcessor
                             mu.JobId = mj.Id;
                             mj.MigrationUnitIds.Add(mu.Id);
                             
-                            SaveMigrationUnit(mu);
-                        }                        
-                        SaveMigrationJobDefinition(mj);
+                            mu.SaveToDisk();
+                        }
+                        mj.SaveToDisk();
                         MigrationJobIds.Add(mj.Id);
                     }                    
-                    SaveJobList();
+                    SaveToDisk();
                 }
                 errorMessage= string.Empty; 
                 return true;

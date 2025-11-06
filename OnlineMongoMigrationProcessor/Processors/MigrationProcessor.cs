@@ -47,7 +47,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 _job.IsStarted = false;
             }
 
-            _jobList?.SaveMigrationJobDefinition(_job);
+            _job.SaveToDisk();;
 
             if (updateStatus)
                 ProcessRunning = false;

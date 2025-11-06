@@ -403,8 +403,8 @@
          
                 jobList.MigrationJobIds.Add(job.Id);
                 job.IsStarted = true;
-                jobList.SaveMigrationJobDefinition(job);
-                jobList.SaveJobList();
+                job.SaveToDisk();
+                jobList.SaveToDisk();
                 // if (!string.IsNullOrEmpty(errorMessage))
                 // {
                 //     _message = errorMessage;

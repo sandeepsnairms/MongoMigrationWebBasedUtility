@@ -20,6 +20,8 @@ namespace OnlineMongoMigrationProcessor
 
     public class MigrationUnit
     {
+        private static readonly object _writeLock = new object();
+
         public string Id { get; set; }
         public string JobId { get; set; }
         public string DatabaseName { get; set; }
@@ -127,6 +129,18 @@ namespace OnlineMongoMigrationProcessor
             this.DatabaseName = databaseName;
             this.CollectionName = collectionName;
             this.MigrationChunks = migrationChunks;
+        }
+
+        public bool SaveToDisk()
+        {
+            lock (_writeLock)
+            {
+                Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
+                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                File.WriteAllText(filePath, json);
+                return true;
+            }
         }
     }
 }

@@ -179,7 +179,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            _jobList?.SaveMigrationJobDefinition(_job);
+            _job.SaveToDisk();;
             //_jobList?.Save();
         }
 
@@ -226,7 +226,7 @@ namespace OnlineMongoMigrationProcessor
             }
             
             //_jobList?.Save();
-            _jobList.SaveMigrationJobDefinition(_job);  
+            _job.SaveToDisk();;  
         }
 
         /// <summary>
@@ -243,7 +243,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"Set insertion workers per collection to {newCount}. Will apply to new restore operations.");
             
             //_jobList?.Save();
-            _jobList.SaveMigrationJobDefinition(_job);
+            _job.SaveToDisk();;
         }
 
         private int CalculateOptimalConcurrency(int? configOverride, bool isDump)
@@ -338,7 +338,7 @@ namespace OnlineMongoMigrationProcessor
             if ((DateTime.UtcNow - _lastSave).TotalSeconds > SAVE_DEBOUNCE_SECONDS)
             {
                 //_jobList.Save();
-                _jobList.SaveMigrationJobDefinition(_job);
+                _job.SaveToDisk();;
                 _lastSave = DateTime.UtcNow;
             }
         }
@@ -395,7 +395,7 @@ namespace OnlineMongoMigrationProcessor
                 _jobList.ActiveRestoreProcessIds.Clear();
 
                 //_jobList.Save();
-                _jobList.SaveMigrationJobDefinition(_job);
+                _job.SaveToDisk();;
                 _log.WriteLine("All active processes terminated");
             }
         }
@@ -1108,7 +1108,7 @@ namespace OnlineMongoMigrationProcessor
                 
                 _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
                 //_jobList?.Save();
-                _jobList?.SaveMigrationUnit(mu);
+                mu.SaveToDisk();
 
                 // Small delay to simulate processing time (50ms per chunk)
                 try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
@@ -1214,7 +1214,7 @@ namespace OnlineMongoMigrationProcessor
                                 skipFinalize = true;
                                 _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] Documents missing, Chunk will be reprocessed", LogType.Error);
                             }
-                            _jobList?.SaveMigrationUnit(mu);
+                            mu.SaveToDisk();
                             //_jobList?.Save();
                         }
                         catch (Exception ex)
@@ -1230,7 +1230,7 @@ namespace OnlineMongoMigrationProcessor
                     if (!skipFinalize)
                     {
                         mu.MigrationChunks[chunkIndex].IsUploaded = true;
-                        _jobList?.SaveMigrationUnit(mu);
+                        mu.SaveToDisk();
                         //_jobList?.Save();
 
                         try { File.Delete($"{folder}\\{chunkIndex}.bson"); } catch { }
@@ -1247,7 +1247,7 @@ namespace OnlineMongoMigrationProcessor
                     if (mu.MigrationChunks[chunkIndex].IsUploaded == true)
                     {
                         // Already uploaded, treat as success
-                        _jobList?.SaveMigrationUnit(mu);
+                        mu.SaveToDisk();
                         return Task.FromResult(TaskResult.Success);
                     }
 
@@ -1303,7 +1303,7 @@ namespace OnlineMongoMigrationProcessor
                         if (task.IsCompletedSuccessfully)
                         {
                             mu.ActualDocCount = task.Result;
-                            _jobList.SaveMigrationUnit(mu);
+                            mu.SaveToDisk();
                             _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
                         }
                     }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
@@ -1457,7 +1457,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
 
-                _jobList?.SaveMigrationUnit(mu  );
+                mu.SaveToDisk();
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
             }
@@ -1487,7 +1487,7 @@ namespace OnlineMongoMigrationProcessor
                                 mu.BulkCopyEndedOn = DateTime.UtcNow;
                             }
                         }
-                        _jobList.SaveMigrationJobDefinition(_job); // Persist state
+                        _job.SaveToDisk();; // Persist state
                     }
                     else
                     {

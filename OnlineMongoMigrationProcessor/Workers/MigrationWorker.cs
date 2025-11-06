@@ -101,7 +101,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("StopMigration called - cancelling all tokens and stopping processor", LogType.Debug);
                 _cts?.Cancel();
                 _compare_cts?.Cancel();
-                _jobList.SaveMigrationJobDefinition(_job);
+                _job.SaveToDisk();;
                 _migrationCancelled = true;
                 _migrationProcessor?.StopProcessing();
                 ProcessRunning = false;
@@ -209,7 +209,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitIds[0]);
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _jobList.SourceConnectionString[_job.Id], migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
-                _jobList.SaveJobList();
+                _jobList.SaveToDisk();
 
                 if (!retValue.IsCSEnabled)
                 {
@@ -435,7 +435,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             long count = MongoHelper.GetActualDocumentCount(coll, unit);
                             unit.ActualDocCount = count;
-                            _jobList?.SaveMigrationUnit(unit);
+                            unit.SaveToDisk();
                         }, _cts);
 
                     }
@@ -485,7 +485,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             {
                                 return TaskResult.Retry;
                             }
-                            _jobList.SaveMigrationUnit(unit);
+                            unit.SaveToDisk();
                             if (_job.SyncBackEnabled && !_job.IsSimulatedRun && Helper.IsOnline(_job) && !checkedCS)
                             {
                                 _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
@@ -533,14 +533,14 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         unit.SourceStatus = CollectionStatus.NotFound;
                         _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} does not exist on source", LogType.Error);
-                        _jobList.SaveMigrationUnit(unit);
+                        unit.SaveToDisk();
                         //return TaskResult.Success;
                     }
                     else
                         return TaskResult.Canceled;
                 }
             }
-            //_jobList.SaveMigrationUnit(unit);
+            //unit.SaveToDisk();
             return TaskResult.Success;
         }
 
@@ -752,6 +752,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
             }
             _log.WriteLine($"Job {_job.Id} started on {_job.StartedOn} (UTC)", LogType.Warning);
+            
+            _job.SaveToDisk();
 
 
             if (_job.MigrationUnitIds == null)
@@ -766,11 +768,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Adding {unitsToAdd.Count} migration units to job", LogType.Debug);
                 foreach (var mu in unitsToAdd)
                 {
-                    _jobList.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
                     Helper.AddMigrationUnit(mu, job);
                 }
                 //_jobList.Save();
-                _jobList.SaveJobList();
+                _jobList.SaveToDisk();
             }
 
             
@@ -836,7 +838,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 compareHelper = null;
                 _job.RunComparison = false;
                 //_jobList.Save();
-                _jobList.SaveMigrationJobDefinition(_job);
+                _job.SaveToDisk();;
                 _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
             }
             
@@ -883,7 +885,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         
                         //_jobList.Save();
-                        _jobList.SaveMigrationJobDefinition(_job);
+                        _job.SaveToDisk();;
                     }
                 }
 
@@ -918,7 +920,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"SyncBack: {_job.Id} started on {_job.StartedOn} (UTC)");
             
             job.ProcessingSyncBack = true;
-            _jobList.SaveMigrationJobDefinition(_job);
+            _job.SaveToDisk();;
             //_jobList.Save();
 
             if (_migrationProcessor != null)
@@ -929,7 +931,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job, dummySourceClient, _config!);
             _migrationProcessor.ProcessRunning = true;
             var dummyUnit = new MigrationUnit(Guid.NewGuid().ToString(), _job.Id, "", "", new List<MigrationChunk>());
-            _jobList.SaveMigrationUnit(dummyUnit);
+            //_jobList.SaveMigrationUnit(dummyUnit);
+            dummyUnit.SaveToDisk();
             //if run comparison is set by customer.
             if (_job.RunComparison)
             {
@@ -938,7 +941,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 compareHelper.CompareRandomDocumentsAsync(_log, _jobList, _job, _config!, _cts.Token).GetAwaiter().GetResult();
                 compareHelper = null;
                 _job.RunComparison = false;
-                _jobList.SaveMigrationJobDefinition(_job);
+                _job.SaveToDisk();;
                 //_jobList.Save();
 
                 _log.WriteLine("Resuming SyncBack.");

@@ -895,7 +895,7 @@ else if (@_showLogBackupFile)
     {
         // Save the job when log level changes
         var jobList = JobManager.GetJobList();
-        jobList.SaveMigrationJobDefinition(MigrationJob);
+        MigrationJob.SaveToDisk();
 
         // if (!string.IsNullOrEmpty(errorMessage))
         // {
@@ -1257,8 +1257,8 @@ else if (@_showLogBackupFile)
         mj.IsStarted = true;  
 
         var jobList = JobManager.GetJobList();
-        jobList.SaveMigrationJobDefinition(mj);
-        jobList.SaveJobList();
+        mj.SaveToDisk();
+        jobList.SaveToDisk();
     // if(!string.IsNullOrEmpty(errorMessage))
     // {
     //     _errorMessage = errorMessage;         
@@ -1458,7 +1458,7 @@ else if (@_showLogBackupFile)
                 else
                     migrationUnitsToReset[i].ResetChangeStream = false; // Ensure other collections are not reset
 
-                if (!jobList.SaveMigrationUnit(migrationUnitsToReset[i]))
+                if (migrationUnitsToReset[i].SaveToDisk())
                     return;
             }
 
@@ -1478,13 +1478,13 @@ else if (@_showLogBackupFile)
 
             foreach (var mu in migrationUnits)
             {
-                if(!jobList.SaveMigrationUnit( mu))
+                if(mu.SaveToDisk())
                     return;
 
                 mj2.MigrationUnitIds.Add(mu.Id);
                
             }
-            if (!jobList.SaveMigrationJobDefinition(mj2))
+            if (mj2.SaveToDisk())
                 return;
             
             //if (!SaveJobs()) return;
@@ -1520,7 +1520,7 @@ else if (@_showLogBackupFile)
                     mjc.IsCompleted = true;
                 }
 
-                if (!jobList.SaveMigrationJobDefinition(mjc))
+                if (mjc.SaveToDisk())
                     return;
 
                 _refreshTimer = null;
@@ -1534,7 +1534,7 @@ else if (@_showLogBackupFile)
                                                 JobManager.TargetConnectionString[mjs.Id] ?? string.Empty,
                                                 mjs);
                 }
-                if (!jobList.SaveMigrationJobDefinition(mjs))
+                if (mjs.SaveToDisk())
                     return;
             }
             else if( result.DiaLogType == YesNoDialog.Category.RunComparisonNot)
@@ -1544,7 +1544,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr.RunComparison = true;
                 }
-                if (!jobList.SaveMigrationJobDefinition(mjr))
+                if (mjr.SaveToDisk())
                     return;
             }
 
@@ -1558,7 +1558,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr2.RunComparison = false;
                 }
-                if (!jobList.SaveMigrationJobDefinition(mjr2))
+                if (mjr2.SaveToDisk())
                     return;
             }
         }
@@ -1569,7 +1569,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
         JobManager.StopMigration();
         var jobList = JobManager.GetJobList();
-        if (!jobList.SaveMigrationJobDefinition(MigrationJob))
+        if (MigrationJob.SaveToDisk())
             return;
         _refreshTimer = null;
     }
@@ -1580,7 +1580,7 @@ else if (@_showLogBackupFile)
         JobManager.ControlledPauseMigration();
 
         var jobList = JobManager.GetJobList();
-        if (!jobList.SaveMigrationJobDefinition(MigrationJob))
+        if (MigrationJob.SaveToDisk())
             return;
     }
 

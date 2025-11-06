@@ -390,7 +390,14 @@ namespace OnlineMongoMigrationProcessor
             return unitsToAdd;
         }
 
-
+        public static bool CreateFolderIfNotExists(string folderPath)
+        {
+            if (!Directory.Exists(folderPath))
+            {
+                Directory.CreateDirectory(folderPath);
+            }
+            return true;
+        }
 
         public static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
         {

@@ -128,7 +128,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpPercent = progressPercent;
                 mu.RestorePercent = progressPercent;
 
-                _jobList?.SaveMigrationUnit(mu);
+                mu.SaveToDisk();
             }
 
             if (mu.MigrationChunks.All(s => s.IsUploaded == true))
@@ -231,7 +231,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     {
                         // Save the latest resume token to the chunk
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                        _jobList?.SaveMigrationUnit(mu);
+                        mu.SaveToDisk();
                     }
                     
 
@@ -246,7 +246,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                             lock (_processingLock)
                             {
                                 chunk.IsUploaded = true;
-                                _jobList?.SaveMigrationUnit(mu);
+                                mu.SaveToDisk();
                             }
                             _log.WriteLine($"Partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}] offline copy completed.");
                             return TaskResult.Success;
@@ -267,7 +267,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 {
                     // Save the latest resume token to the chunk
                     chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                    _jobList?.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
                 }
 
             }
@@ -279,7 +279,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     lock (_processingLock)
                     {
                         chunk.IsUploaded = true;
-                        _jobList?.SaveMigrationUnit(mu);
+                        mu.SaveToDisk();
                     }
                     _log.WriteLine($"Partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}] offline copy completed.");
                     return TaskResult.Success;
@@ -292,7 +292,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     if (resumeToken != null)
                     {
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                        _jobList?.SaveMigrationUnit(mu);
+                        mu.SaveToDisk();
                     }
                     await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
                 }
@@ -473,6 +473,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             var stopChunks = unit.MigrationChunks
                 .Where(c => !intactPartitions.Contains(c.Id))
                 .ToList();
+            unit.SaveToDisk();
+
             foreach (var chunk in stopChunks)
             {
                 chunk.IsDownloaded = true;
@@ -486,12 +488,12 @@ namespace OnlineMongoMigrationProcessor.Processors
                 unit.RestoreComplete = false;
                 //_jobList?.Save();
 
-                _jobList?.SaveMigrationUnit(unit);
+                unit.SaveToDisk();
                 throw new Exception("New partitions found during copy process. Please pause and re-run the job to process new partitions.");
             }
             else
             {
-                _jobList?.SaveMigrationUnit(unit);
+                unit.SaveToDisk();
                 return TaskResult.Success;
             }
         }

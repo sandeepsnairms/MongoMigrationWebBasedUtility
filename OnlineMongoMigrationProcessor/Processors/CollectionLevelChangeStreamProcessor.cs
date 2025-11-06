@@ -350,7 +350,7 @@ namespace OnlineMongoMigrationProcessor
                             // If the first change was replayed, we can proceed
                             mu.InitialDocumenReplayed = true;
                             //_jobList?.Save();
-                            _jobList?.SaveMigrationJobDefinition(_job); // persist state
+                            _job.SaveToDisk();; // persist state
                         }
                         else
                         {
@@ -558,7 +558,7 @@ namespace OnlineMongoMigrationProcessor
                     // Update counters before early return
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
-                    _jobList.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
                     //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
@@ -583,7 +583,7 @@ namespace OnlineMongoMigrationProcessor
                     // Update counters before early return
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
-                    _jobList.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
                     //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     return; // Skip this collection, will retry in next batch
@@ -924,7 +924,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = counter;
                     mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
                     _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
-                    _jobList.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
                         //_jobList?.Save();
 
                     if (counter > 0)
@@ -1177,7 +1177,7 @@ namespace OnlineMongoMigrationProcessor
                         _log.WriteLine($"{_syncBackPrefix}Mid-batch checkpoint updated for {collNameSpace}: Resume token persisted after successful flush", LogType.Verbose);
                     }
 
-                    _jobList?.SaveMigrationUnit(mu);
+                    mu.SaveToDisk();
 
                     // Clear the lists and metadata after successful processing
                     changeStreamDocuments.DocsToBeInserted.Clear();
