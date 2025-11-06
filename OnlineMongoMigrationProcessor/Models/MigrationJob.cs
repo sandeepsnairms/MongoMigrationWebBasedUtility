@@ -14,10 +14,10 @@ namespace OnlineMongoMigrationProcessor
         public string? Name { get; set; }
         public string? SourceEndpoint { get; set; }
         public string? TargetEndpoint { get; set; }
-        [JsonIgnore]
-        public string? SourceConnectionString { get; set; }
-        [JsonIgnore]
-        public string? TargetConnectionString { get; set; }
+        //[JsonIgnore]
+        //public string? SourceConnectionString { get; set; }
+        //[JsonIgnore]
+        //public string? TargetConnectionString { get; set; }
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
         

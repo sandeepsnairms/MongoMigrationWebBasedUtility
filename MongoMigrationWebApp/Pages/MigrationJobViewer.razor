@@ -28,7 +28,7 @@
                 </button>
                 <ul class="dropdown-menu" aria-labelledby="resumeJobDropdown">
                     <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
-                    @if (MigrationJob != null && !string.IsNullOrEmpty(MigrationJob.SourceConnectionString) && !string.IsNullOrEmpty(MigrationJob.TargetConnectionString))
+                    @if (MigrationJob != null && !string.IsNullOrEmpty(JobManager.SourceConnectionString[MigrationJob.Id]) && !string.IsNullOrEmpty(JobManager.TargetConnectionString[MigrationJob.Id]))
                     {
                         <li><a class="dropdown-item" @onclick="ResumeJobWithExistingConnectionString">With Existing Connection Strings</a></li>
                     }
@@ -142,7 +142,7 @@
 }
 @if (_manageCollectionDialogOpen && MigrationJob != null)
 {
-    <ManageCollections MigrationJob="@MigrationJob" MigrationUnits="@JobManager.GetMigrationUnits(MigrationJob)" SourceConnectionString="@MigrationJob.SourceConnectionString" OnCollectionsUpdated="@OnCollectionsUpdated" />
+    <ManageCollections MigrationJob="@MigrationJob" MigrationUnits="@JobManager.GetMigrationUnits(MigrationJob)" SourceConnectionString="@JobManager.SourceConnectionString[MigrationJob.Id]" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
 @if (_resetChangeStreamDialogOpen && MigrationJob != null)
@@ -961,7 +961,7 @@ else if (@_showLogBackupFile)
                 }
 
                 // Trigger immediate refresh
-                MigrationJob = GetMigrations().Find(m => m.Id == JobId);
+                MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
                 if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
                 {
                     if (_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && @JobManager.GetMigrationUnits(MigrationJob).Count > 0)
@@ -1228,36 +1228,42 @@ else if (@_showLogBackupFile)
         }        
     }
 
-    private async Task OnMigrationDetailsPopUpSubmit(MigrationJob? job)
+    private async Task<bool> OnMigrationDetailsPopUpSubmit(MigrationJob? job, string sourceConnectionString, string targetConnectionString)
     {
         _migrationDetailsPopUpOpen = false;
         await Task.Delay(100);
         var mj = MigrationJob;
         if (job == null || mj == null)
         {
-            return;
+            return false;
         }
 
+        if (!string.IsNullOrEmpty(sourceConnectionString))
+            JobManager.SourceConnectionString[job.Id] = sourceConnectionString;
+
+        if (!string.IsNullOrEmpty(targetConnectionString))
+            JobManager.TargetConnectionString[job.Id] = targetConnectionString;
+
         // Copy connection strings from the provided job into the current migration
-        mj.SourceConnectionString = job.SourceConnectionString;
-        mj.TargetConnectionString = job.TargetConnectionString;
+        // mj.SourceConnectionString = job.SourceConnectionString;
+        // mj.TargetConnectionString = job.TargetConnectionString;
 
         // MigrationJob.CurrentlyActive = true;
         mj.IsCancelled = false;
 
         if (!mj.StartedOn.HasValue)
-            mj.StartedOn = DateTime.UtcNow;
+        mj.StartedOn = DateTime.UtcNow;
 
-        mj.IsStarted = true;            
+        mj.IsStarted = true;  
 
         var jobList = JobManager.GetJobList();
         jobList.SaveMigrationJobDefinition(mj);
         jobList.SaveJobList();
-        // if(!string.IsNullOrEmpty(errorMessage))
-        // {
-        //     _errorMessage = errorMessage;                
-        //     return;
-        // }
+    // if(!string.IsNullOrEmpty(errorMessage))
+    // {
+    //     _errorMessage = errorMessage;         
+    //     return false;
+    // }
 
         // Check if we should show the loading spinner
         if (mj.MigrationUnitIds == null || mj.MigrationUnitIds.Count == 0)
@@ -1266,29 +1272,30 @@ else if (@_showLogBackupFile)
             await InvokeAsync(StateHasChanged);
         }
 
-        // Run the long task on a separate thread
-        await Task.Run(() =>
+    // Run the long task on a separate thread
+    await Task.Run(() =>
         {
             // JobManager.DisposeLogs();
 
             if (mj!.ProcessingSyncBack && !mj.IsSimulatedRun)
             {
-                JobManager.SyncBackToSource(mj.SourceConnectionString ?? string.Empty,
-                                            mj.TargetConnectionString ?? string.Empty,
-                                            mj);
+                JobManager.SyncBackToSource(JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
+                JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
+                mj);
             }
             else
             {
                 JobManager.StartMigrationAsync(mj,
-                                               mj.SourceConnectionString ?? string.Empty,
-                                               mj.TargetConnectionString ?? string.Empty,
-                                               mj.NameSpaces ?? string.Empty,
-                                               mj.JobType,
-                                               Helper.IsOnline(mj));
+                JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
+                JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
+                mj.NameSpaces ?? string.Empty,
+                mj.JobType,
+                Helper.IsOnline(mj));
             }
         });
 
         StartAutoRefresh();
+        return true;
     }
 
     private void RunComparison()
@@ -1296,7 +1303,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
 
         // Check if SourceConnectionString is blank
-        if (string.IsNullOrWhiteSpace(MigrationJob?.SourceConnectionString))
+        if (string.IsNullOrWhiteSpace(JobManager.SourceConnectionString[MigrationJob.Id]))
         {
             _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before running comparison.";
             return;
@@ -1336,7 +1343,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
 
         // Check if SourceConnectionString is blank
-        if (string.IsNullOrWhiteSpace(MigrationJob?.SourceConnectionString))
+        if (string.IsNullOrWhiteSpace(JobManager.SourceConnectionString[MigrationJob.Id]))
         {
             _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before updating collections.";
             return;
@@ -1365,7 +1372,7 @@ else if (@_showLogBackupFile)
         {
             var mjResume = MigrationJob;
             if (mjResume != null)
-                await OnMigrationDetailsPopUpSubmit(mjResume);
+                await OnMigrationDetailsPopUpSubmit(mjResume,string.Empty,string.Empty);
             else
                 _migrationDetailsPopUpOpen = true;
         }
@@ -1391,7 +1398,7 @@ else if (@_showLogBackupFile)
                 {
                     var mjAuto = MigrationJob;
                     if (mjAuto != null)
-                        await OnMigrationDetailsPopUpSubmit(mjAuto);
+                        await OnMigrationDetailsPopUpSubmit(mjAuto, string.Empty, string.Empty);
                 }
 
             }
@@ -1523,8 +1530,8 @@ else if (@_showLogBackupFile)
                 var mjs = MigrationJob;
                 if (mjs != null)
                 {
-                    JobManager.SyncBackToSource(mjs.SourceConnectionString ?? string.Empty,
-                                                mjs.TargetConnectionString ?? string.Empty,
+                    JobManager.SyncBackToSource(JobManager.SourceConnectionString[mjs.Id] ?? string.Empty,
+                                                JobManager.TargetConnectionString[mjs.Id] ?? string.Empty,
                                                 mjs);
                 }
                 if (!jobList.SaveMigrationJobDefinition(mjs))
@@ -1664,7 +1671,7 @@ else if (@_showLogBackupFile)
     {
         var mj = MigrationJob;
         if (IsResumeEnabled() && NoOtherActiveJobs() && mj != null && mj.IsStarted &&
-            (!string.IsNullOrEmpty(mj.SourceConnectionString) || !string.IsNullOrEmpty(mj.TargetConnectionString)))
+            (!string.IsNullOrEmpty(JobManager.SourceConnectionString[mj.Id]) || !string.IsNullOrEmpty(JobManager.TargetConnectionString[mj.Id])))
         {
             return true;
         }

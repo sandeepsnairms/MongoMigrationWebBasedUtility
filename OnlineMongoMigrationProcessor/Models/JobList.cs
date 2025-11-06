@@ -30,7 +30,9 @@ namespace OnlineMongoMigrationProcessor
         // Thread-safe process ID tracking for parallel execution
         public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
-        
+
+       
+
         //private string _filePath = string.Empty;
         //private string _backupFolderPath = string.Empty;
         private static readonly object _fileLock = new object();
@@ -42,6 +44,35 @@ namespace OnlineMongoMigrationProcessor
 
         //private readonly string[] SlotNames =
         //{ "backup_slot0.json", "backup_slot1.json", "backup_slot2.json", "backup_slot3.json" };
+
+
+        private readonly Dictionary<string, string> _sourceConnectionStrings = new();
+        private readonly Dictionary<string, string> _targetConnectionStrings = new();
+
+        [JsonIgnore]
+        public ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
+        [JsonIgnore]
+        public ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
+
+        public class ConnectionAccessor
+        {
+            private readonly Dictionary<string, string> _dict;
+
+            public ConnectionAccessor(Dictionary<string, string> dict)
+            {
+                _dict = dict;
+            }
+
+            // Indexer to get/set by jobId
+            public string this[string jobId]
+            {
+                get => _dict.TryGetValue(jobId, out var value) ? value : null;
+                set => _dict[jobId] = value;
+            }
+
+            // Add this property to expose dictionary keys
+            public IEnumerable<string> Keys => _dict.Keys;
+        }
 
         public JobList()
         {

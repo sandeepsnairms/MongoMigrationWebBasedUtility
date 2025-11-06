@@ -168,8 +168,8 @@ namespace OnlineMongoMigrationProcessor
                                 workerId,
                                 _currentCollection!,
                                 _currentFolder!,
-                                _job.SourceConnectionString!,
-                                _job.TargetConnectionString!,
+                                _jobList.SourceConnectionString[_job.Id],
+                                _jobList.TargetConnectionString[_job.Id],
                                 _currentMigrationUnit!.DatabaseName,
                                 _currentMigrationUnit!.CollectionName
                             );
@@ -214,7 +214,7 @@ namespace OnlineMongoMigrationProcessor
                                 workerId,
                                 _restoreQueue,
                                 _currentFolder!,
-                                _job.TargetConnectionString!,
+                                _jobList.TargetConnectionString[_job.Id],
                                 _currentMigrationUnit!.DatabaseName,
                                 _currentMigrationUnit!.CollectionName
                             );

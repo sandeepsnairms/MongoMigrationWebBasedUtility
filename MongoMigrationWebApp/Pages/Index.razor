@@ -385,7 +385,7 @@
         return Task.FromResult(migrationJob != null);
     }
 
-    private void OnMigrationDetailsPopUpSubmit(MigrationJob job)
+    private Task<bool> OnMigrationDetailsPopUpSubmit(MigrationJob job, string sourceConnectionString, string targetConnectionString)
     {
         _migrationDetailsPopUpOpen = false;
         if (job != null)
@@ -393,6 +393,14 @@
             if (_selectedMigrationJob == null)
             {
                 var jobList = JobManager.GetJobList();
+       
+                // Store connection strings if provided
+                if (!string.IsNullOrEmpty(sourceConnectionString))
+                    JobManager.SourceConnectionString[job.Id] = sourceConnectionString;
+
+                if (!string.IsNullOrEmpty(targetConnectionString))
+                    JobManager.TargetConnectionString[job.Id] = targetConnectionString;
+         
                 jobList.MigrationJobIds.Add(job.Id);
                 job.IsStarted = true;
                 jobList.SaveMigrationJobDefinition(job);
@@ -405,5 +413,7 @@
                 ViewMigration(job.Id);
             }
         }
+        
+        return Task.FromResult(true);
     }
 }

@@ -166,10 +166,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (_config == null)
                 _config = new MigrationSettings();
 
-            if (string.IsNullOrWhiteSpace(_job.SourceConnectionString))
+            if (string.IsNullOrWhiteSpace(_jobList.SourceConnectionString[_job.Id]))
                 return TaskResult.FailedAfterRetries;
 
-            _sourceClient = MongoClientFactory.Create(_log, _job.SourceConnectionString!, false, _config.CACertContentsForSourceServer ?? string.Empty);
+            _sourceClient = MongoClientFactory.Create(_log, _jobList.SourceConnectionString[_job.Id], false, _config.CACertContentsForSourceServer ?? string.Empty);
             _log.WriteLine("Source client created.");
             _log.WriteLine($"Source client initialized - ConnectionString masked, JobType: {_job.JobType}, IsSimulated: {_job.IsSimulatedRun}", LogType.Debug);
             if (_job.IsSimulatedRun)
@@ -207,7 +207,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     return TaskResult.FailedAfterRetries;
 
                 var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitIds[0]);
-                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _job.SourceConnectionString!, migrationUnit);
+                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _jobList.SourceConnectionString[_job.Id], migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
                 _jobList.SaveJobList();
 
@@ -474,9 +474,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             var database = _sourceClient!.GetDatabase(unit.DatabaseName);
                             var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                            if (string.IsNullOrWhiteSpace(_job.TargetConnectionString))
+                            if (string.IsNullOrWhiteSpace(_jobList.TargetConnectionString[_job.Id]))
                                 return TaskResult.FailedAfterRetries;
-                            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+                            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _jobList.TargetConnectionString[_job.Id], collection, _job.SkipIndexes);
 
                             if (_cts.IsCancellationRequested)
                                 return TaskResult.Canceled;
@@ -490,7 +490,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             {
                                 _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
 
-                                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, _job.TargetConnectionString, unit, true);
+                                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, _jobList.TargetConnectionString[_job.Id], unit, true);
                                 checkedCS = true;
                                 if (!retValue.IsCSEnabled)
                                 {
@@ -524,7 +524,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 //try creating empty collection with necessary indexes.
                                 var database = _sourceClient!.GetDatabase(unit.DatabaseName);
                                 var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
-                                var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _job.TargetConnectionString!, collection, _job.SkipIndexes);
+                                var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, unit, _jobList.TargetConnectionString[_job.Id], collection, _job.SkipIndexes);
                             }
                             catch
                             {
@@ -590,12 +590,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                         MongoClient? targetClient = null;
                         if (!_job.IsSimulatedRun)
                         {
-                            if (string.IsNullOrWhiteSpace(_job.TargetConnectionString))
+                            if (string.IsNullOrWhiteSpace(_jobList.TargetConnectionString[_job.Id]))
                                 return TaskResult.FailedAfterRetries;
 
-                            targetClient = MongoClientFactory.Create(_log, _job.TargetConnectionString!);
+                            targetClient = MongoClientFactory.Create(_log, _jobList.TargetConnectionString[_job.Id]);
 
-                            if (Helper.IsRU(_job.TargetConnectionString))
+                            if (Helper.IsRU(_jobList.TargetConnectionString[_job.Id]))
                                 checkExist = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
                             else
                                 checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
@@ -621,11 +621,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                                     return setResumeResult;
                             }
 
-                            if (string.IsNullOrWhiteSpace(_job.SourceConnectionString) || string.IsNullOrWhiteSpace(_job.TargetConnectionString))
+                            if (string.IsNullOrWhiteSpace(_jobList.SourceConnectionString[_job.Id]) || string.IsNullOrWhiteSpace(_jobList.TargetConnectionString[_job.Id]))
                                 return TaskResult.Abort;
 
                             _log.WriteLine($"Starting migration processor for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                            var result = await _migrationProcessor.StartProcessAsync(migrationUnit, _job.SourceConnectionString!, _job.TargetConnectionString!);
+                            var result = await _migrationProcessor.StartProcessAsync(migrationUnit, _jobList.SourceConnectionString[_job.Id], _jobList.TargetConnectionString[_job.Id]);
 
                             if (result == TaskResult.Success)
                             {
@@ -698,13 +698,13 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         if (await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                         {
-                            processor.AddCollectionToChangeStreamQueue(migrationUnit, _job.TargetConnectionString!);
+                            processor.AddCollectionToChangeStreamQueue(migrationUnit, _jobList.TargetConnectionString[_job.Id]);
                             _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Verbose);
                             _log.ShowInMonitor($"Change stream processor added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to the monitoring queue.");
                         }
                     }
                 }
-                processor.RunChangeStreamProcessorForAllCollections(_job.TargetConnectionString!);
+                processor.RunChangeStreamProcessorForAllCollections(_jobList.TargetConnectionString[_job.Id]);
                 _log.WriteLine("Change stream processor started for all collections", LogType.Debug);
 
                 return TaskResult.Success;
@@ -717,7 +717,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         }
 
 
-        public async Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
+        public async Task StartMigrationAsync(MigrationJob job, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
             _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
             _job = job;
@@ -727,14 +727,14 @@ namespace OnlineMongoMigrationProcessor.Workers
 
 
             //encoding speacial characters
-            sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(sourceConnectionString);
-            targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(targetConnectionString);
+            var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(_jobList.SourceConnectionString[_job.Id]);
+            var targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(_jobList.TargetConnectionString[_job.Id]);
 
             targetConnectionString = Helper.UpdateAppName(targetConnectionString, $"MSFTMongoWebMigration{Helper.IsOnline(_job)}-" + job.Id);
 
             _log.WriteLine($"Connection strings prepared - Job ID: {job.Id}", LogType.Verbose);
-            _job.TargetConnectionString = targetConnectionString;
-            _job.SourceConnectionString = sourceConnectionString;
+            //_jobList.TargetConnectionString[_job.Id] = targetConnectionString;
+            //_jobList.SourceConnectionString[_job.Id] = sourceConnectionString;
 
             LoadConfig();
 

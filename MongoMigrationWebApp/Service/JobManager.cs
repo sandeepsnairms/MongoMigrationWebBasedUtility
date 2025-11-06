@@ -267,9 +267,14 @@ namespace MongoMigrationWebApp.Service
 
         public Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
         {
+            
+
             MigrationWorker = new MigrationWorker(GetJobList());
+            _jobList.SourceConnectionString[job.Id] = sourceConnectionString;
+            _jobList.TargetConnectionString[job.Id] = targetConnectionString;
+
             // Fire-and-forget: UI should not block on long-running migration
-            _ = MigrationWorker?.StartMigrationAsync(job, sourceConnectionString, targetConnectionString, namespacesToMigrate, jobType, trackChangeStreams);
+            _ = MigrationWorker?.StartMigrationAsync(job, namespacesToMigrate, jobType, trackChangeStreams);
             return Task.CompletedTask;
         }
 
@@ -277,13 +282,45 @@ namespace MongoMigrationWebApp.Service
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
             MigrationWorker = new MigrationWorker(GetJobList());
+
+            _jobList.SourceConnectionString[job.Id] = sourceConnectionString;
+            _jobList.TargetConnectionString[job.Id] = targetConnectionString;
             MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
         }
-
-
         public string GetRunningJobId()
         {
             return MigrationWorker?.GetRunningJobId() ?? string.Empty;
+        }
+
+        public JobList.ConnectionAccessor SourceConnectionString
+        {
+            get => _jobList.SourceConnectionString;
+            set
+            {
+                // Optional: if you want to copy data from another accessor
+                if (value != null)
+                {
+                    foreach (var key in value.Keys)
+                    {
+                        _jobList.SourceConnectionString[key] = value[key];
+                    }
+                }
+            }
+        }
+
+        public JobList.ConnectionAccessor TargetConnectionString
+        {
+            get => _jobList.TargetConnectionString;
+            set
+            {
+                if (value != null)
+                {
+                    foreach (var key in value.Keys)
+                    {
+                        _jobList.TargetConnectionString[key] = value[key];
+                    }
+                }
+            }
         }
 
         public bool IsProcessRunning(string id)

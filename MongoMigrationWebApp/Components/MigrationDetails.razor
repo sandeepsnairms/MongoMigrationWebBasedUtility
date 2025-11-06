@@ -178,7 +178,7 @@
     public MigrationJob? Job { get; set; }
 
     [Parameter]
-    public EventCallback<MigrationJob> OnSubmit { get; set; }
+    public Func<MigrationJob, string, string, Task<bool>>? OnSubmit { get; set; }
 
     [Parameter]
     public Func<string, Task<bool>>? CheckNameExists { get; set; }
@@ -206,24 +206,24 @@
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
-    
+
     // File upload state
     private bool isFileUploaded = false;
     private bool isTextAreaUsed = false;
     private string uploadedFileName = string.Empty;
 
     private void OnTextAreaInput(ChangeEventArgs e)
-{
+    {
         var value = e?.Value?.ToString() ?? string.Empty;
         isTextAreaUsed = !string.IsNullOrWhiteSpace(value);
     }
 
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
     {
-     try
+        try
         {
             var file = e.File;
-    
+
             if (file == null)
             {
                 return;
@@ -257,8 +257,8 @@
     {
         isFileUploaded = false;
         uploadedFileName = string.Empty;
-    namespaces = string.Empty;
-    StateHasChanged();
+        namespaces = string.Empty;
+        StateHasChanged();
     }
 
     private void OnModeSelectionChanged(ChangeEventArgs e)
@@ -284,7 +284,7 @@
     {
         var val = e?.Value?.ToString() ?? "Delayed";
         SelectedChangeStreamMode = val;
-        
+
         // Map dropdown selection to boolean flags
         switch (val)
         {
@@ -355,10 +355,10 @@
             uploadedFileName = string.Empty;
         }
         else
-     {
-       name = Job?.Name ?? string.Empty;
-            sourceConnectionString = Job?.SourceConnectionString ?? string.Empty;
-            targetConnectionString = Job?.TargetConnectionString ?? string.Empty;
+        {
+            name = Job?.Name ?? string.Empty;
+            sourceConnectionString = JobManager.SourceConnectionString[Job?.Id] ?? string.Empty;
+            targetConnectionString = JobManager.TargetConnectionString[Job?.Id] ?? string.Empty;
             namespaces = Job?.NameSpaces ?? string.Empty;
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
@@ -498,13 +498,12 @@
             }
         }
 
+
         var job = new MigrationJob
         {
             Name = name,
             Id = Guid.NewGuid().ToString(),
             CDCMode = cdcMode,
-            SourceConnectionString = sourceConnectionString,
-            TargetConnectionString = targetConnectionString,
             SourceEndpoint = tmpSrcEndpoint,
             TargetEndpoint = tmpTgtEndpoint,
             NameSpaces = namespaces,
@@ -519,11 +518,17 @@
             AllCollectionsUseObjectId = allCollectionsUseObjectId, // Transient flag, not persisted
             MigrationUnitIds = new List<string>()
         };
-        await OnSubmit.InvokeAsync(job);
+        if (OnSubmit != null)
+        {
+            await OnSubmit(job, sourceConnectionString, targetConnectionString);
+        }
     }
 
-    private Task Cancel()
+    private async Task Cancel()
     {
-        return OnSubmit.InvokeAsync(null);
+        if (OnSubmit != null)
+        {
+ await OnSubmit(null, string.Empty, string.Empty);
+        }
     }
 }

@@ -455,8 +455,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
                             {
-                                string guid=Guid.NewGuid().ToString();
-                                var migrationUnit = new MigrationUnit(guid, job.Id, database, collection, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, database, collection, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -473,8 +472,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
                             {
-                                string guid = Guid.NewGuid().ToString();
-                                var migrationUnit = new MigrationUnit(guid, job.Id, database, colName, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, database, colName, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -488,8 +486,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
                         {
-                            string guid = Guid.NewGuid().ToString();
-                            var migrationUnit = new MigrationUnit(guid, job.Id, dbName, collection, new List<MigrationChunk>());
+                            var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, dbName, collection, new List<MigrationChunk>());
                             unitsToAdd.Add(migrationUnit);
                         }
                     }
@@ -499,8 +496,7 @@ namespace OnlineMongoMigrationProcessor
                     // No wildcards, use as-is
                     if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
                     {
-                        string guid = Guid.NewGuid().ToString();
-                        var migrationUnit = new MigrationUnit(guid, job.Id, dbName, colName, new List<MigrationChunk>());
+                        var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, dbName, colName, new List<MigrationChunk>());
                         unitsToAdd.Add(migrationUnit);
                     }
                 }
