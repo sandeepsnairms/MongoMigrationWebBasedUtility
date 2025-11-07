@@ -193,9 +193,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}\\jobdefinition.json";
+
                 string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(filePath, json);
-                return true;
+
+                return Helper.WriteAtomicFile(filePath, json);
+
             }
         }
     }

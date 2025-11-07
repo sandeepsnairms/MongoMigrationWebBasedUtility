@@ -24,6 +24,7 @@ namespace OnlineMongoMigrationProcessor
         protected MongoClient _targetClient;
         protected JobList? _jobList;
         protected MigrationJob? _job;
+        protected ActiveMigrationUnitsCache? _muCache;
         protected MigrationSettings? _config;
         protected bool _syncBack = false;
         protected string _syncBackPrefix = string.Empty;
@@ -34,7 +35,7 @@ namespace OnlineMongoMigrationProcessor
         // Server-level processors don't need this as they use MigrationJob properties directly for global tokens
         protected virtual bool UseResumeTokenCache => true; // Override in server-level processor to return false
         protected ConcurrentDictionary<string, string> _resumeTokenCache = new ConcurrentDictionary<string, string>();
-        protected ConcurrentDictionary<string, MigrationUnit> _migrationUnitsToProcess = new ConcurrentDictionary<string, MigrationUnit>();
+        protected ConcurrentDictionary<string, long> _migrationUnitsToProcess = new ConcurrentDictionary<string, long>();
 
         // Tracking for aggressive cleanup to prevent duplicate executions
         protected ConcurrentDictionary<string, bool> _aggressiveCleanupProcessed = new ConcurrentDictionary<string, bool>();
@@ -73,13 +74,14 @@ namespace OnlineMongoMigrationProcessor
         }
         private bool _executionCancelled = false;
 
-        public ChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
+        public ChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
         {
             _log = log;
             _sourceClient = sourceClient;
             _targetClient = targetClient;
             _jobList = jobList;
             _job = job;
+            _muCache= muCache;
             _config = config;
             _syncBack = syncBack;
             if (_syncBack)
@@ -98,9 +100,9 @@ namespace OnlineMongoMigrationProcessor
                 //_log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
                 return false;
             }
-            if (!_migrationUnitsToProcess.ContainsKey(key))
+            if (!_migrationUnitsToProcess.ContainsKey(mu.Id) && !Helper.IsMigrationUnitValid(mu))
             {
-                _migrationUnitsToProcess.TryAdd(key, mu);
+                _migrationUnitsToProcess.TryAdd(mu.Id, 0);
                 _log.WriteLine($"{_syncBackPrefix}Collection added to change stream queue - Key: {key}, DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Verbose);
 
                 _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
@@ -134,7 +136,7 @@ namespace OnlineMongoMigrationProcessor
                     var migrationUnit = _jobList.GetMigrationUnit(_job.Id, id);
                     if (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
                     {
-                        _migrationUnitsToProcess[$"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}"] = migrationUnit;
+                        _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
 
                         // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
                         if (_job.AggresiveChangeStream && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)

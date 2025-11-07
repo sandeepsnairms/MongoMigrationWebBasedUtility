@@ -31,8 +31,8 @@ namespace OnlineMongoMigrationProcessor.Processors
         private static readonly TimeSpan BatchDuration = TimeSpan.FromSeconds(60);
         private static readonly object _processingLock = new object();
 
-        public RUCopyProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-           : base(log, jobList, job, sourceClient, config)
+        public RUCopyProcessor(Log log, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+           : base(log, jobList, job,muCache, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -136,6 +136,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpComplete = true;
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
+                _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"RU copy completed for {ctx.DatabaseName}.{ctx.CollectionName}.");
                 return TaskResult.Success;
             }
@@ -374,9 +375,11 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
                         
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+           
             ProcessRunning = true;
+            var mu = _muCache.GetMigrationUnit(migrationUnitId);
 
             if (_job != null)
                 _job.IsStarted = true;

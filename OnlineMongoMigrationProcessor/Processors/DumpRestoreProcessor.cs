@@ -25,7 +25,9 @@ namespace OnlineMongoMigrationProcessor
         private string _mongoDumpOutputFolder = $"{Helper.GetWorkingFolder()}mongodump";
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
 
-        private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
+        //private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
+
+        private OrderedUniqueList<string> _migrationUnitsPendingUpload = new OrderedUniqueList<string>();
 
         // Parallel processing infrastructure
         private WorkerPoolManager? _dumpPool;
@@ -93,8 +95,8 @@ namespace OnlineMongoMigrationProcessor
             return acquired;
         }
 
-        public DumpRestoreProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-            : base(log, jobList, job, sourceClient, config)
+        public DumpRestoreProcessor(Log log, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+            : base(log, jobList, job, muCache, sourceClient, config)
         {
             // Calculate optimal concurrency
             int maxDumpWorkers, maxRestoreWorkers;
@@ -972,8 +974,9 @@ namespace OnlineMongoMigrationProcessor
                 if (!continueDownloads)
                 {
                     _log.WriteLine($"{dbName}.{colName} added to upload queue");
-                    MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                    _ = Task.Run(() => Upload(mu, targetConnectionString), _cts.Token);
+                    //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                    _migrationUnitsPendingUpload.Add(mu.Id);
+                    _ = Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
 
                     _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobList are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobList. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
 
@@ -1024,7 +1027,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log);
+                var processExecutor = new ProcessExecutor(_log,_muCache);
 
                 var task = Task.Run(() => processExecutor.Execute(
                     _jobList, 
@@ -1050,8 +1053,9 @@ namespace OnlineMongoMigrationProcessor
                         mu.MigrationChunks[chunkIndex].IsDownloaded = true;
                     });
                     _log.WriteLine($"{dbName}.{colName} added to upload queue.");
-                    MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                    Task.Run(() => Upload(mu, targetConnectionString), _cts.Token);
+                    //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                    _migrationUnitsPendingUpload.Add(mu.Id);
+                    Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
                     return Task.FromResult(TaskResult.Success);
                 }
                 else
@@ -1161,7 +1165,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log);
+                var processExecutor = new ProcessExecutor(_log,_muCache);
 
                 var task = Task.Run(() => processExecutor.Execute(
                     _jobList, 
@@ -1260,9 +1264,10 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-             ProcessRunning = true;
+            ProcessRunning = true;
+            var mu = _muCache.GetMigrationUnit(migrationUnitId);
 
             // Initialize processor context (parity with CopyProcessor)
             ProcessorContext ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
@@ -1346,13 +1351,14 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpComplete = true;
 
                     // BulkCopyEndedOn will be set after restore completes, not here
-                    
+
                     // Only trigger restore if not paused
                     if (!_controlledPauseRequested)
                     {
-                        _log.WriteLine($"{dbName}.{colName} dump complete, immediately starting restore");
-                        MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                        _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
+                        _log.WriteLine($"{dbName}.{colName} dump complete, adding  to restore queue.");
+                        //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                        _migrationUnitsPendingUpload.Add(mu.Id);
+                        _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
                     }
                     else
                     {
@@ -1362,18 +1368,20 @@ namespace OnlineMongoMigrationProcessor
             }
             else if (mu.DumpComplete && !mu.RestoreComplete && !_cts.Token.IsCancellationRequested)
             {
-                _log.WriteLine($"{dbName}.{colName} added to upload queue (resume scenario)");
+                _log.WriteLine($"{dbName}.{colName} added to upload queue.");
 
-                MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                _ = Task.Run(() => Upload(mu, ctx.TargetConnectionString), _cts.Token);
+                //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+                _migrationUnitsPendingUpload.Add(mu.Id);
+                _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
             }            
 
             return TaskResult.Success;
         }
 
 
-        private void Upload(MigrationUnit mu, string targetConnectionString, bool force = false)
+        private void Upload(string migrationUnitId, string targetConnectionString, bool force = false)
         {
+           
             if (!force)
             {
                 if (!TryEnterUploadLock())
@@ -1383,15 +1391,15 @@ namespace OnlineMongoMigrationProcessor
             }
 
             ProcessRunning=true;
-
+            var mu = _muCache.GetMigrationUnit(migrationUnitId);
             string dbName = mu.DatabaseName;
             string colName = mu.CollectionName;
             string jobId = _job.Id ?? string.Empty;
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
             string folder = GetDumpFolder(jobId, dbName, colName);
 
-            _log.WriteLine($"{dbName}.{colName} upload started.");
-
+            _log.WriteLine($"Processing {dbName}.{colName} from upload queue");
+ 
             try
             {
                 ProcessRestoreLoop(mu, folder, targetConnectionString, dbName, colName);
@@ -1447,6 +1455,7 @@ namespace OnlineMongoMigrationProcessor
                 mu.RestoreComplete = true;
                 mu.RestoreGap = 0; // Assume perfect simulation
                 
+
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - {result.RestoredChunks} chunks, {result.RestoredDocs} docs");
                 
                 if (mu.DumpComplete && mu.RestoreComplete)
@@ -1458,6 +1467,7 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 mu.SaveToDisk();
+                _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
             }
@@ -1485,9 +1495,11 @@ namespace OnlineMongoMigrationProcessor
                             if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
                             {
                                 mu.BulkCopyEndedOn = DateTime.UtcNow;
-                            }
+                            }                            
                         }
-                        _job.SaveToDisk();; // Persist state
+                        mu.SaveToDisk();
+                        _muCache.RemoveMigrationUnit(mu.Id);
+                        _job.SaveToDisk(); // Persist state
                     }
                     else
                     {
@@ -1578,13 +1590,13 @@ namespace OnlineMongoMigrationProcessor
             AddCollectionToChangeStreamQueue(mu, targetConnectionString);
 
             // Remove from upload queue
-            MigrationUnitsPendingUpload.Remove(key);
+            //MigrationUnitsPendingUpload.Remove(key);
+            _migrationUnitsPendingUpload.Remove(mu.Id);
 
             // Process next pending upload if any
-            if (MigrationUnitsPendingUpload.TryGetFirst(out var nextItem))
-            {
-                _log.WriteLine($"Processing {nextItem.Value.DatabaseName}.{nextItem.Value.CollectionName} from upload queue");
-                Upload(nextItem.Value, targetConnectionString, true);
+            if (_migrationUnitsPendingUpload.Count>0)
+            {                
+                Upload(_migrationUnitsPendingUpload[0], targetConnectionString, true);
                 return;
             }
 
@@ -1593,20 +1605,21 @@ namespace OnlineMongoMigrationProcessor
             // Handle offline completion and post-upload CS logic
             if (!_cts.Token.IsCancellationRequested)
             {
-                var migrationJob = _jobList.MigrationJobs?.Find(m => m.Id == jobId);
-                if (migrationJob != null)
-                {
-                    if (!Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_jobList,migrationJob))
+                //var migrationJob = _jobList.GetMigrationJob(jobId);
+                //if (migrationJob != null)
+                //{
+                    if (!Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_jobList, _job))
                     {
                         // Don't mark as completed if this is a controlled pause
                         if (!_controlledPauseRequested)
                         {
-                            _log.WriteLine($"Job {migrationJob.Id} Completed");
-                            migrationJob.IsCompleted = true;
-                        }
+                            _log.WriteLine($"Job {_job.Id} Completed");
+                            _job.IsCompleted = true;
+                            _job.SaveToDisk();
+                    }
                         else
                         {
-                            _log.WriteLine($"Job {migrationJob.Id} paused (controlled pause) - can be resumed");
+                            _log.WriteLine($"Job {_job.Id} paused (controlled pause) - can be resumed");
                         }
                         
                         StopProcessing();
@@ -1615,7 +1628,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         RunChangeStreamProcessorForAllCollections(targetConnectionString);
                     }
-                }
+                //}
             }
         }
         

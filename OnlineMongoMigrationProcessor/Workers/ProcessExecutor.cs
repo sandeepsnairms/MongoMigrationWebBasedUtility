@@ -1,4 +1,5 @@
-﻿using System;
+﻿using OnlineMongoMigrationProcessor.Helpers;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
@@ -18,10 +19,11 @@ namespace OnlineMongoMigrationProcessor.Workers
         private static readonly Dictionary<string, System.Timers.Timer> _percentageTimers = new Dictionary<string, System.Timers.Timer>();
         private static readonly object _timerLock = new object();
         private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-
-		public ProcessExecutor(Log log)
+        private ActiveMigrationUnitsCache _muCache;
+        public ProcessExecutor(Log log, ActiveMigrationUnitsCache muCache)
         {
             _log = log;
+            _muCache = muCache;
 		}
 		
 		/// <summary>
@@ -202,7 +204,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
                     if (mu.RestorePercent >= 99.99)
+                    {
                         mu.RestoreComplete = true;
+                        _muCache.RemoveMigrationUnit(mu.Id);
+                    }
                 }
                 else
                 {
@@ -212,6 +217,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 //jobList.Save();
                 mu.SaveToDisk();
+                
                 // Ensure timer is running for this migration unit to handle percentage updates
                 EnsurePercentageTimerRunning(mu, jobList, processType);
             }

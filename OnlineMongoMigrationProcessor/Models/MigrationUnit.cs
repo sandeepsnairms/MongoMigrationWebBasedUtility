@@ -6,6 +6,8 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
@@ -122,24 +124,28 @@ namespace OnlineMongoMigrationProcessor
 
         public List<MigrationChunk> MigrationChunks { get; set; }
 
-        public MigrationUnit(string Id, string JobId, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
+        public MigrationUnit(string JobId, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
         {
-            this.Id = Id;
+            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);
             this.JobId = JobId;
             this.DatabaseName = databaseName;
             this.CollectionName = collectionName;
             this.MigrationChunks = migrationChunks;
         }
 
+
+        
         public bool SaveToDisk()
         {
             lock (_writeLock)
             {
                 Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json"; 
+
                 string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(filePath, json);
-                return true;
+
+                return Helper.WriteAtomicFile(filePath, json);
+
             }
         }
     }

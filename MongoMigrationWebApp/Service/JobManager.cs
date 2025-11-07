@@ -261,16 +261,16 @@ namespace MongoMigrationWebApp.Service
 
         public Task CancelMigration(string id)
         {
-            var list = GetJobList().MigrationJobs;
-            if (list != null)
+            //var list = GetJobList().MigrationJobs;
+            //if (list != null)
+            //{
+            var migration = _jobList.GetMigrationJob(id);
+            if (migration != null)
             {
-                var migration = list.Find(m => m.Id == id);
-                if (migration != null)
-                {
-                    migration.IsCancelled = true;
-                    migration.IsStarted = false;
-                }
+                migration.IsCancelled = true;
+                migration.IsStarted = false;
             }
+            //}
             return Task.CompletedTask;
         }
 

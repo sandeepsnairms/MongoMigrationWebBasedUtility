@@ -22,17 +22,19 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
         protected bool _postUploadCSProcessing = false;
         protected bool _controlledPauseRequested = false;
+        protected ActiveMigrationUnitsCache _muCache;
         protected Log _log;
 
         public bool ProcessRunning { get; set; }
         // Add this property to the MigrationProcessor class
         public string? MongoToolsFolder { get; set; }
 
-        protected MigrationProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
+        protected MigrationProcessor(Log log, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
         {
             _log = log;
             _jobList = jobList;
             _job = job;
+            _muCache = muCache;
             _sourceClient = sourceClient;
             _targetClient = null;
             _config = config;
@@ -110,7 +112,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 // Ensure _sourceClient is not null before using it
                 if (_changeStreamProcessor == null && _sourceClient != null)
 #pragma warning disable CS8604 // Possible null reference argument.
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _jobList, _job, _muCache, _config);
 #pragma warning restore CS8604 // Possible null reference argument.
 
                 if (_changeStreamProcessor != null)
@@ -133,7 +135,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                 // Ensure _sourceClient is not null before using it
                 if (_changeStreamProcessor == null && _sourceClient != null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _muCache, _config);
 
                 _changeStreamProcessor?.AddCollectionsToProcess(mu, _cts);
             }
@@ -153,7 +155,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     // Ensure _sourceClient is not null before using it
                     if (_changeStreamProcessor == null && _sourceClient != null)
-                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _config);
+                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _muCache, _config);
 
                     var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
                 }
@@ -186,10 +188,10 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     if (!_cts.Token.IsCancellationRequested)
                     {
-                        var migrationJob = _jobList.MigrationJobs?.Find(m => m.Id == ctx.JobId);
-                        
+                        //var migrationJob = _jobList.GetMigrationJob(ctx.JobId);
+
                         // Check if the job is completed (all collections processed)
-                        if (migrationJob != null && Helper.IsOfflineJobCompleted(_jobList, migrationJob))
+                        if (_job != null && Helper.IsOfflineJobCompleted(_jobList, _job))
                         {
                             // For aggressive change stream jobs, run final cleanup for all collections
                             RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
@@ -199,12 +201,13 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 // Don't mark as completed if this is a controlled pause
                                 if (!_controlledPauseRequested)
                                 {
-                                    _log.WriteLine($"{migrationJob.Id} completed.");
-                                    migrationJob.IsCompleted = true;
+                                    _log.WriteLine($"{_job.Id} completed.");
+                                    _job.IsCompleted = true;
+                                    _job.SaveToDisk();
                                 }
                                 else
                                 {
-                                    _log.WriteLine($"{migrationJob.Id} paused (controlled pause) - can be resumed");
+                                    _log.WriteLine($"{_job.Id} paused (controlled pause) - can be resumed");
                                 }
                                 
                                 StopProcessing(true);
@@ -227,7 +230,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
 
 
-        public virtual Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public virtual Task<TaskResult> StartProcessAsync(string MigrationunitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         { return Task.FromResult(TaskResult.Success); }
     }
 }

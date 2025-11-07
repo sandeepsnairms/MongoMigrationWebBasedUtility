@@ -961,7 +961,7 @@ else if (@_showLogBackupFile)
                 }
 
                 // Trigger immediate refresh
-                MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
+                MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations()(m => m.Id == JobId);
                 if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
                 {
                     if (_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && @JobManager.GetMigrationUnits(MigrationJob).Count > 0)
@@ -991,7 +991,7 @@ else if (@_showLogBackupFile)
     {
         _showLogBackupFile = false;
         _logBackupFile = string.Empty;  
-        MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
+        MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations()(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             // Only start timer if AutoRefreshEnabled is true (default)
@@ -1073,7 +1073,7 @@ else if (@_showLogBackupFile)
         // Marshal ALL component state changes to the UI thread to prevent cross-thread access issues
         InvokeAsync(() =>
         {
-            MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations().Find(m => m.Id == JobId);
+            MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations()(m => m.Id == JobId);
             if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
             {
                 // Check if we should hide loading spinner
@@ -1124,7 +1124,7 @@ else if (@_showLogBackupFile)
             return; // Exit if the JobId does not match
         }
 
-        MigrationJob = JobManager.GetMigrationJobById(JobId);//GetMigrations().Find(m => m.Id == id);
+        MigrationJob = JobManager.GetMigrationJobById(JobId);//GetMigrations()(m => m.Id == id);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             LogBucket = JobManager.GetLogBucket(id, out string logBackup, out bool isLive);

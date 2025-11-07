@@ -1,20 +1,22 @@
-﻿using Newtonsoft.Json;
+﻿using MongoDB.Bson;
+using MongoDB.Driver;
+using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
+using System.Security.Cryptography;
 using System.Xml.Linq;
-using MongoDB.Driver;
-using MongoDB.Bson;
-using OnlineMongoMigrationProcessor.Helpers;
-using System.Collections.Immutable;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
@@ -462,7 +464,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
                             {
-                                var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, database, collection, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job.Id, database, collection, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -479,7 +481,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
                             {
-                                var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, database, colName, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job.Id, database, colName, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -493,7 +495,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
                         {
-                            var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, dbName, collection, new List<MigrationChunk>());
+                            var migrationUnit = new MigrationUnit( job.Id, dbName, collection, new List<MigrationChunk>());
                             unitsToAdd.Add(migrationUnit);
                         }
                     }
@@ -503,7 +505,7 @@ namespace OnlineMongoMigrationProcessor
                     // No wildcards, use as-is
                     if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
                     {
-                        var migrationUnit = new MigrationUnit(Guid.NewGuid().ToString(), job.Id, dbName, colName, new List<MigrationChunk>());
+                        var migrationUnit = new MigrationUnit( job.Id, dbName, colName, new List<MigrationChunk>());
                         unitsToAdd.Add(migrationUnit);
                     }
                 }
@@ -629,6 +631,81 @@ namespace OnlineMongoMigrationProcessor
             }
             return sanitizedFileName;
         }
+
+        public static bool WriteAtomicFile(string filePath, string content, int maxRetries = 5)
+        {
+            string tempFile = filePath + ".tmp";
+            string backupFile = filePath + ".backup";
+
+            // Step 1: Write to temp file
+            using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            using (var sw = new StreamWriter(fs))
+            {
+                sw.Write(content);
+                sw.Flush();
+                fs.Flush(true); // ensure fully written to disk
+            }
+
+            // Step 2: Attempt atomic replace or move, with retry logic
+            int attempt = 0;
+            while (true)
+            {
+                try
+                {
+                    if (File.Exists(filePath))
+                    {
+                        if (File.Exists(backupFile))
+                            File.Delete(backupFile);
+
+                        File.Replace(tempFile, filePath, backupFile);
+
+                        // Clean up backup (optional)
+                        if (File.Exists(backupFile))
+                            File.Delete(backupFile);
+                    }
+                    else
+                    {
+                        File.Move(tempFile, filePath);
+                    }
+
+                    return true; // success
+                }
+                catch (IOException ex)
+                {
+                    // This typically happens when file is temporarily locked
+                    attempt++;
+                    if (attempt >= maxRetries)
+                    {
+                        // Clean up on repeated failure
+                        if (File.Exists(tempFile))
+                            File.Delete(tempFile);
+
+                        throw new IOException($"Failed to write file '{filePath}' after {maxRetries} attempts due to locking issues.", ex);
+                    }
+
+                    Thread.Sleep(1000); // wait 1 second before retrying
+                }
+            }
+        }
+
+
+        public static string GenerateMigrationUnitId(string databaseName, string collectionName)
+        {
+            using var sha256 = SHA256.Create();
+            var input = $"{databaseName}:{collectionName}";
+            return GenerateMigrationUnitId(input);
+        }
+
+        public static string GenerateMigrationUnitId(string collectionKey)
+        {
+            using var sha256 = SHA256.Create();
+            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(collectionKey));
+
+            // Take first 8 bytes (64 bits) -> convert to 16-digit hex
+            ulong part = BitConverter.ToUInt64(hashBytes, 0);
+            return part.ToString("X16"); // 16 hex digits
+        }
+
 
         public static List<MigrationUnit> GetMigrationUnitToMigrate(JobList joblist,MigrationJob job)
         {

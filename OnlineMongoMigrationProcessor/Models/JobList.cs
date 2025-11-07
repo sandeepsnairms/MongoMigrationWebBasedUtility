@@ -114,12 +114,13 @@ namespace OnlineMongoMigrationProcessor
 
         public bool SaveToDisk()
         {
-            lock(_writeLock)
+            lock (_writeLock)
             {
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+
                 string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(filePath, json);
-                return true;
+
+                return Helper.WriteAtomicFile(filePath, json);
             }
         }
 

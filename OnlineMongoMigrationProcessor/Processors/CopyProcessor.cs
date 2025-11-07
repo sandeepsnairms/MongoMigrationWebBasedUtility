@@ -11,8 +11,8 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-        public CopyProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-            : base(log, jobList, job, sourceClient, config)
+        public CopyProcessor(Log log, JobList jobList, MigrationJob job,ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+            : base(log, jobList, job, muCache, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -143,8 +143,10 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            ProcessRunning = true;
+            var mu=_muCache.GetMigrationUnit(migrationUnitId);
 
             ProcessorContext ctx;
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
@@ -221,6 +223,7 @@ namespace OnlineMongoMigrationProcessor
 
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
+                    _muCache.RemoveMigrationUnit(mu.Id);
                 }
                 else
                 {

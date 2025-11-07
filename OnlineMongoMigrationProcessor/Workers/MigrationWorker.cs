@@ -21,6 +21,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
     public class MigrationWorker
     {
+        
         public bool ProcessRunning { get; set; }
         public bool ControlledPauseRequested { get; private set; } = false;
 
@@ -33,7 +34,8 @@ namespace OnlineMongoMigrationProcessor.Workers
         private MongoClient? _sourceClient;
         private MigrationProcessor? _migrationProcessor;
         public MigrationSettings? _config;
-        
+
+        private ActiveMigrationUnitsCache _muCache;
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
 
@@ -45,7 +47,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         public MigrationWorker(JobList jobList)
         {            
             _log = new Log();
-            _jobList = jobList;
+            _jobList = jobList;            
             jobList.SetLog(_log);
         }
 
@@ -112,6 +114,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 ProcessRunning = false;
                 _migrationProcessor = null;
                 ControlledPauseRequested = false; // Reset controlled pause flag
+                _muCache = null;
                 _log.WriteLine("StopMigration completed - all resources released", LogType.Verbose);
             }
             catch { }
@@ -232,21 +235,21 @@ namespace OnlineMongoMigrationProcessor.Workers
             switch (_job.JobType)
             {
                 case JobType.MongoDriver:
-            _migrationProcessor = new CopyProcessor(_log, _jobList, _job, _sourceClient!, _config);
+                    _migrationProcessor = new CopyProcessor(_log, _jobList, _job,_muCache,  _sourceClient!, _config);
                     _log.WriteLine("CopyProcessor created for MongoDriver job type", LogType.Verbose);
                     break;
                 case JobType.DumpAndRestore:
-                    _migrationProcessor = new DumpRestoreProcessor(_log, _jobList, _job, _sourceClient!, _config);
+                    _migrationProcessor = new DumpRestoreProcessor(_log, _jobList, _job, _muCache, _sourceClient!, _config);
                     _migrationProcessor.MongoToolsFolder = _toolsLaunchFolder;
                     _log.WriteLine("DumpRestoreProcessor created for DumpAndRestore job type", LogType.Verbose);
                     break;
                 case JobType.RUOptimizedCopy:
-            _migrationProcessor = new RUCopyProcessor(_log, _jobList, _job, _sourceClient!, _config);
+            _migrationProcessor = new RUCopyProcessor(_log, _jobList, _job, _muCache, _sourceClient!, _config);
                     _log.WriteLine("RUCopyProcessor created for RUOptimizedCopy job type", LogType.Verbose);
                     break;
                 default:
                     _log.WriteLine($"Unknown JobType: {_job.JobType}. Defaulting to MongoDriver.", LogType.Error);
-            _migrationProcessor = new CopyProcessor(_log, _jobList, _job, _sourceClient!, _config);
+            _migrationProcessor = new CopyProcessor(_log, _jobList, _job, _muCache, _sourceClient!, _config);
                     break;
             }
             _migrationProcessor.ProcessRunning = true;
@@ -555,11 +558,14 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (_job == null)
                 return TaskResult.FailedAfterRetries;
             
-            var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+            //var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+           
 
-            _log.WriteLine($"Processing {unitsForMigrate.Count} migration units", LogType.Verbose);
-            foreach (var migrationUnit in unitsForMigrate)
+            _log.WriteLine($"Processing {_job.MigrationUnitIds.Count} migration units", LogType.Verbose);
+            foreach (var muId in _job.MigrationUnitIds)
             {
+                var migrationUnit= _muCache.GetMigrationUnit(muId);
+
                 if (_migrationCancelled) 
                     return TaskResult.Canceled;
 
@@ -630,7 +636,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 return TaskResult.Abort;
 
                             _log.WriteLine($"Starting migration processor for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                            var result = await _migrationProcessor.StartProcessAsync(migrationUnit, _jobList.SourceConnectionString[_job.Id], _jobList.TargetConnectionString[_job.Id]);
+                            var result = await _migrationProcessor.StartProcessAsync(migrationUnit.Id, _jobList.SourceConnectionString[_job.Id], _jobList.TargetConnectionString[_job.Id]);
 
                             if (result == TaskResult.Success)
                             {
@@ -682,7 +688,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (_job == null)
                     return TaskResult.FailedAfterRetries;
 
-               
+                _muCache = new ActiveMigrationUnitsCache(_jobList, _job);
                 var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
 
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Verbose);
@@ -730,6 +736,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             StopMigration(); //stop any existing
             ProcessRunning = true;
 
+            _muCache = new ActiveMigrationUnitsCache(_jobList,_job);
 
             //encoding speacial characters
             var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(_jobList.SourceConnectionString[_job.Id]);
@@ -933,9 +940,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             _migrationProcessor = null;
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
-            _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job, dummySourceClient, _config!);
+            _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job,_muCache ,dummySourceClient, _config!);
             _migrationProcessor.ProcessRunning = true;
-            var dummyUnit = new MigrationUnit(Guid.NewGuid().ToString(), _job.Id, "", "", new List<MigrationChunk>());
+            var dummyUnit = new MigrationUnit(_job.Id,"", "", new List<MigrationChunk>());
             //_jobList.SaveMigrationUnit(dummyUnit);
             dummyUnit.SaveToDisk();
             //if run comparison is set by customer.
@@ -952,7 +959,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("Resuming SyncBack.");
             }
 
-            _migrationProcessor.StartProcessAsync(dummyUnit, sourceConnectionString, targetConnectionString).GetAwaiter().GetResult();
+            _migrationProcessor.StartProcessAsync(dummyUnit.Id, sourceConnectionString, targetConnectionString).GetAwaiter().GetResult();
             
         }
 

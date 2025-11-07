@@ -40,16 +40,16 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
+        public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
         {
             _log = log;
             _job = job;
 
             // Create the appropriate processor based on configuration
-            _processor = CreateProcessor(log, sourceClient, targetClient, jobList, job, config, syncBack);
+            _processor = CreateProcessor(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack);
         }
 
-        private ChangeStreamProcessor CreateProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack)
+        private ChangeStreamProcessor CreateProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache,  MigrationSettings config, bool syncBack)
         {
             // Determine which processor to use
             bool useServerLevel = job.ChangeStreamLevel == ChangeStreamLevel.Server && job.JobType != JobType.RUOptimizedCopy;
@@ -57,7 +57,7 @@ namespace OnlineMongoMigrationProcessor
             if (useServerLevel)
             {
                 _log.WriteLine($"{(syncBack ? "SyncBack: " : "")}Using server-level change stream processor.");
-                return new ServerLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, config, syncBack);
+                return new ServerLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, muCache ,config, syncBack);
             }
             else
             {
@@ -69,7 +69,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _log.WriteLine($"{(syncBack ? "SyncBack: " : "")}Using collection-level change stream processor.");
                 }
-                return new CollectionLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, config, syncBack);
+                return new CollectionLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack);
             }
         }
 

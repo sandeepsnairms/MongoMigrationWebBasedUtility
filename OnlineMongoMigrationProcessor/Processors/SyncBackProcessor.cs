@@ -13,8 +13,8 @@ namespace OnlineMongoMigrationProcessor.Processors
     internal class SyncBackProcessor : MigrationProcessor
     {
 
-        public SyncBackProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-           : base(log, jobList, job, sourceClient, config)
+        public SyncBackProcessor(Log log, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+           : base(log, jobList, job, muCache, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -68,7 +68,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             return Task.FromResult(TaskResult.Success);
         }
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public override async Task<TaskResult> StartProcessAsync(string MigrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             ProcessRunning = true;
 
@@ -80,7 +80,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
             _changeStreamProcessor = null;
-            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobList, _job, _config, true);
+            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobList, _job, _muCache, _config, true);
 
             _cts=new CancellationTokenSource();
 

@@ -205,49 +205,49 @@
 
     private void RestoreBackupSubmit(YesNoDialog.YesNoDialogResult result)
     {
-    //     try
-    //     {
-    //         _recoverDialogOpen = false;
-    //         _loadingComplete = false;
+        //     try
+        //     {
+        //         _recoverDialogOpen = false;
+        //         _loadingComplete = false;
 
-    //         if (!result.IsConfirmed)
-    //         {
-    //             return;
-    //         }
-
-
-    //         foreach (var job in GetMigrationsFromManager(true,false))
-    //         {
-    //             job.IsCancelled = true;
-    //             // job.CurrentlyActive = false;
-    //             job.IsStarted = false;
-    //             JobManager.CancelMigration(job.Id);
-    //         }
-    //         JobManager.StopMigration();
+        //         if (!result.IsConfirmed)
+        //         {
+        //             return;
+        //         }
 
 
+        //         foreach (var job in GetMigrationsFromManager(true,false))
+        //         {
+        //             job.IsCancelled = true;
+        //             // job.CurrentlyActive = false;
+        //             job.IsStarted = false;
+        //             JobManager.CancelMigration(job.Id);
+        //         }
+        //         JobManager.StopMigration();
 
-    //         bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
-    //         if (success)
-    //         {
-    //             migrationJobs = GetMigrations();               
-    //         }
-    //         else
-    //         {
-    //             _message = errorMessage;
-    //             _messageDialogOpen = true;
-    //         }
-    //     }
-    // catch (Exception)
-    //     {
-    //         _message = "Failed to restore backup.";
-    //         _messageDialogOpen = true;
-    //     }
-    //     finally
-    //     {           
-    //         _selectedMigrationJob = null;
-    //         _loadingComplete = true;
-    //     }
+
+
+        //         bool success = JobManager.RestoreJobsFromBackup(out string errorMessage);
+        //         if (success)
+        //         {
+        //             migrationJobs = GetMigrations();               
+        //         }
+        //         else
+        //         {
+        //             _message = errorMessage;
+        //             _messageDialogOpen = true;
+        //         }
+        //     }
+        // catch (Exception)
+        //     {
+        //         _message = "Failed to restore backup.";
+        //         _messageDialogOpen = true;
+        //     }
+        //     finally
+        //     {           
+        //         _selectedMigrationJob = null;
+        //         _loadingComplete = true;
+        //     }
     }
 
     private List<MigrationJob> GetMigrations()
@@ -275,9 +275,8 @@
 
     private void RemoveMigration(string? id)
     {
-        var migrationJob = GetMigrations().Find(m => m.Id == id);
-        _selectedMigrationJob = migrationJob;
-        //if (!_selectedMigrationJob.CurrentlyActive || !JobManager.IsProcessRunning(id
+        //var migrationJob =JobManager.GetMigrationJobById(id) ; GetMigrations().Find(m => m.Id == id);
+        _selectedMigrationJob = JobManager.GetMigrationJobById(id);       
         if (!JobManager.IsProcessRunning(id ?? string.Empty))
         {
             _message = "Are you sure you want to delete " + _selectedMigrationJob.Name + " ?";

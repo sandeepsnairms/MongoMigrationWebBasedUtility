@@ -15,8 +15,8 @@ namespace OnlineMongoMigrationProcessor
 {
     public class CollectionLevelChangeStreamProcessor : ChangeStreamProcessor
     {
-        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
-            : base(log, sourceClient, targetClient, jobList, job, config, syncBack)
+        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
+            : base(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack)
         {
         }
 
@@ -33,7 +33,7 @@ namespace OnlineMongoMigrationProcessor
 
             // Get the latest sorted keys
             var sortedKeys = _migrationUnitsToProcess
-                .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
+                .OrderByDescending(kvp => kvp.Value) //value is CSNormalizedUpdatesInLastBatch
                 .Select(kvp => kvp.Key)
                 .ToList();
 
@@ -54,16 +54,20 @@ namespace OnlineMongoMigrationProcessor
 
                     // Determine the batch
                     var batchKeys = sortedKeys.Skip(index).Take(_concurrentProcessors).ToList();
-                    var batchUnits = batchKeys
-                        .Select(k => _migrationUnitsToProcess.TryGetValue(k, out var unit) ? unit : null)
-                        .Where(u => u != null)
-                        .ToList();
+                    //var batchUnits = batchKeys              
+                    //    .Select(k => _muCache.GetMigrationUnit(k))
+                    //    .ToList();
 
                     //total of batchUnits.All(u => u.CSUpdatesInLastBatch)
-                    long totalUpdatesInBatch = batchUnits.Sum(u => u.CSNormalizedUpdatesInLastBatch);
+                    //long totalUpdatesInBatch = batchUnits.Sum(u => u.CSNormalizedUpdatesInLastBatch);
 
-                    //total of  _migrationUnitsToProcess
-                    long totalUpdatesInAll = _migrationUnitsToProcess.Sum(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch);
+                    //total of _migrationUnitsToProcess
+                    long totalUpdatesInAll = _migrationUnitsToProcess.Sum(kvp => kvp.Value);
+
+                    //filter _migrationUnitsToProcess for batchKeys and calculate total of value.
+                    long totalUpdatesInBatch = _migrationUnitsToProcess
+                        .Where(kvp => batchKeys.Contains(kvp.Key))
+                        .Sum(kvp => kvp.Value);
 
                     float timeFactor = totalUpdatesInAll > 0 ? (float)totalUpdatesInBatch / totalUpdatesInAll : 1;
                     _log.WriteLine($"{_syncBackPrefix}Batch load calculation - TotalUpdatesInBatch: {totalUpdatesInBatch}, TotalUpdatesInAll: {totalUpdatesInAll}, TimeFactor: {timeFactor:F3}", LogType.Verbose);
@@ -74,8 +78,9 @@ namespace OnlineMongoMigrationProcessor
                     
                     foreach (var key in batchKeys)
                     {
-                        if (_migrationUnitsToProcess.TryGetValue(key, out var unit))
+                        if (_migrationUnitsToProcess.ContainsKey(key))
                         {
+                            var unit=_muCache.GetMigrationUnit(key);
                             collectionProcessed.Add(key);
                             unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
                             // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside ProcessCollectionChangeStream
@@ -144,8 +149,14 @@ namespace OnlineMongoMigrationProcessor
                         throw; // Re-throw to let outer exception handler deal with it
                     }
 
+                    //cleanup the processes migrationUnits from cache
+                    foreach (var key in batchKeys)
+                    {
+                        _muCache.RemoveMigrationUnit(key);
+                    }
 
-                    index += _concurrentProcessors;
+
+                        index += _concurrentProcessors;
 
                     // Pause between batches to allow memory recovery and reduce CPU spikes
                     // Increased to 5000ms to address OOM issues and server CPU spikes
@@ -167,7 +178,7 @@ namespace OnlineMongoMigrationProcessor
                 index = 0;
                 // Sort the dictionary after all processing is complete
                 sortedKeys = _migrationUnitsToProcess
-                    .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
+                    .OrderByDescending(kvp => kvp.Value)
                     .Select(kvp => kvp.Key)
                     .ToList();
 
@@ -207,8 +218,9 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                foreach (var mu in _migrationUnitsToProcess.Values)
+                foreach (var unitId in _migrationUnitsToProcess.Keys)
                 {
+                    var mu= _jobList.GetMigrationUnit(_job.Id, unitId);
                     if (!_syncBack)
                     {
                         TimeSpan gap;
@@ -239,6 +251,7 @@ namespace OnlineMongoMigrationProcessor
                             _log.WriteLine($"{_syncBackPrefix}24 hour change stream lag with no updates detected for {mu.DatabaseName}.{mu.CollectionName} - pushed by 22 hours", LogType.Warning);
                         }
                     }
+                    mu.SaveToDisk();
                 }
                 return true;
             }
@@ -480,10 +493,7 @@ namespace OnlineMongoMigrationProcessor
                     
                 //}
 
-                // Watch timeout should be longer than batch duration to allow full batch processing
-                // Add 30 second buffer to prevent premature timeout when waiting for changes
-                int watchTimeoutSeconds = seconds + 30;
-                _log.WriteLine($"{_syncBackPrefix}Watch task timeout set to {watchTimeoutSeconds}s for {collectionKey}", LogType.Verbose);
+                // Watch task timeout set to {watchTimeoutSeconds}s for {collectionKey}", LogType.Verbose);
 
                 // Create a separate CTS for the watch task that we can cancel if it times out
                 using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -526,13 +536,13 @@ namespace OnlineMongoMigrationProcessor
                 }, watchToken);
                 
                 
-                var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds), CancellationToken.None);
+                var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(seconds), CancellationToken.None);
 
                 var completedTask = await Task.WhenAny(watchTask, watchTimeoutTask);
 
                 if (completedTask == watchTimeoutTask)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}, cancelling watch task", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Watch task timed out after {seconds}s for {collectionKey}, cancelling watch task", LogType.Debug);
                     // Cancel the watch task to prevent it from running indefinitely
                     watchCts.Cancel();
                     
@@ -562,7 +572,7 @@ namespace OnlineMongoMigrationProcessor
                     //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
-                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out after {watchTimeoutSeconds}s for {collectionKey} - will retry in next batch", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out after {seconds}s for {collectionKey} - will retry in next batch", LogType.Debug);
                     return; // Skip this collection, will retry in next batch
                 }
                 IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor;
