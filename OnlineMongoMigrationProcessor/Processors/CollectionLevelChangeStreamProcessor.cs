@@ -225,6 +225,7 @@ namespace OnlineMongoMigrationProcessor
             catch(Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error adjusting cursor time for static collections: {ex}", LogType.Error);
+                StopProcessing = true;
                 return false;
             }
 
@@ -338,7 +339,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && resumeToken == null && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
+                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream &&  string.IsNullOrEmpty(resumeToken) && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
@@ -390,6 +391,7 @@ namespace OnlineMongoMigrationProcessor
                     // Handle other potential exceptions
                     _log.WriteLine($"{_syncBackPrefix}Oplog is full. Error processing change stream for {sourceCollection.CollectionNamespace}. Details: {ex}", LogType.Error);
                     _log.ShowInMonitor($"{_syncBackPrefix}Oplog is full. Error processing change stream for {sourceCollection.CollectionNamespace}. Details: {ex}");
+                    StopProcessing = true;
                 }
                 catch (MongoCommandException ex) when (ex.Message.Contains("Expired resume token") || ex.Message.Contains("cursor"))
                 {
@@ -400,6 +402,7 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
+                StopProcessing = true;
             }
         }
 
@@ -417,6 +420,12 @@ namespace OnlineMongoMigrationProcessor
             // Update resume token after successful flush
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
             {
+                if(accumulatedChangesInColl.LatestResumeToken=="")
+                {
+                    _log.WriteLine($"{_syncBackPrefix}LatestResumeToken is empty for {targetCollection.CollectionNamespace}", LogType.Error);
+                    throw new Exception($"{_syncBackPrefix} LatestResumeToken is empty for {targetCollection.CollectionNamespace}");
+                }
+
                 if (!_syncBack)
                 {
                     // We don't allow going backwards in time
@@ -511,7 +520,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Verbose);
+                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Debug);
 
                     ProcessWatchCollectionException(accumulatedChangesInColl, mu);                    
 
@@ -762,7 +771,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Error);
                     break; // Exit loop on exception, let finally block handle cleanup
                 }
 
@@ -1038,6 +1047,7 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing cursor. Details: {ex}", LogType.Error);
+                StopProcessing = true;
                 return false;
             }
         }

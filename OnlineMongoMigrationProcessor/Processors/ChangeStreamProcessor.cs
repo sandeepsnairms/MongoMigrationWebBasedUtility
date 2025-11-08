@@ -56,6 +56,7 @@ namespace OnlineMongoMigrationProcessor
         const int GLOBAL_UI_UPDATE_INTERVAL_MS = 500; // 500ms global throttling across all collections
         protected readonly ConcurrentDictionary<string, DateTime> _lastUIUpdateTime = new ConcurrentDictionary<string, DateTime>();
 
+        protected bool StopProcessing = false;
 
         private bool _disposed = false;
         protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
@@ -88,6 +89,8 @@ namespace OnlineMongoMigrationProcessor
             _concurrentProcessors = _config?.ChangeStreamMaxCollsInBatch ?? 5;
             _processorRunMaxDurationInSec = _config?.ChangeStreamBatchDuration ?? 120;
             _processorRunMinDurationInSec = _config?.ChangeStreamBatchDurationMin ?? 30;
+            StopProcessing = false;
+
         }
 
         public bool AddCollectionsToProcess(MigrationUnit mu, CancellationTokenSource cts)
