@@ -49,16 +49,16 @@ namespace OnlineMongoMigrationProcessor
         protected static readonly object _cleanupLock = new object();
 
         // Global backpressure tracking across ALL collections/processors to prevent OOM
-        protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
-        protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
-        protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
+
 
         // UI update throttling to prevent Blazor rendering OOM (max 1 update per second per collection)
+        const int GLOBAL_UI_UPDATE_INTERVAL_MS = 500; // 500ms global throttling across all collections
         protected readonly ConcurrentDictionary<string, DateTime> _lastUIUpdateTime = new ConcurrentDictionary<string, DateTime>();
-        protected const int UI_UPDATE_INTERVAL_MS = 1000; // 1 second between UI updates
+
 
         private bool _disposed = false;
+        protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
 
         public bool ExecutionCancelled { 
             get => _executionCancelled; 
@@ -201,42 +201,100 @@ namespace OnlineMongoMigrationProcessor
 
         #region Global Backpressure Methods - Shared by All Processors
 
-        protected int GetGlobalPendingWriteCount()
+        //protected int GetGlobalPendingWriteCount()
+        //{
+        //    lock (_pendingWritesLock)
+        //    {
+        //        return _globalPendingWrites;
+        //    }
+        //}
+
+        //protected void IncrementGlobalPendingWrites()
+        //{
+        //    lock (_pendingWritesLock)
+        //    {
+        //        _globalPendingWrites++;
+        //        _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented to {_globalPendingWrites}", LogType.Verbose);
+        //    }
+        //}
+
+        //protected void DecrementGlobalPendingWrites()
+        //{
+        //    lock (_pendingWritesLock)
+        //    {
+        //        _globalPendingWrites = Math.Max(0, _globalPendingWrites - 1);
+        //        _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented to {_globalPendingWrites}", LogType.Verbose);
+        //    }
+        //}
+
+        protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
         {
-            lock (_pendingWritesLock)
+            totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +
+                                  accumulatedChangesInColl.DocsToBeUpdated.Count +
+                                  accumulatedChangesInColl.DocsToBeDeleted.Count;
+            if (totalAccumulated >= _config?.ChangeStreamMaxCollsInBatch)
+                return true;
+            else
+                return false;
+        }
+        protected bool ShowInMonitor(ChangeStreamDocument<BsonDocument> change, string collNameSpace, DateTime timeStamp, long counter)
+        {
+            DateTime now = DateTime.UtcNow;
+            bool shouldUpdateUI = false;            
+
+            // Check if enough time has passed since last global UI update (500ms throttling across all collections)
+            if (_lastGlobalUIUpdate == DateTime.MinValue ||
+                (now - _lastGlobalUIUpdate).TotalMilliseconds >= GLOBAL_UI_UPDATE_INTERVAL_MS)
             {
-                return _globalPendingWrites;
+                // Update the global last UI update time and allow UI update
+                _lastGlobalUIUpdate = now;
+                shouldUpdateUI = true;
             }
+
+            // Show on monitor only if global UI update is allowed (once per 500ms), but always log to file
+            if (shouldUpdateUI)
+            {
+                if (timeStamp == DateTime.MinValue)
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");
+                }
+                else
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}");
+                }
+            }
+
+            return shouldUpdateUI;
+        }
+        protected async Task WaitForPendingChnagesAsync(Dictionary<string, AccumulatedChangesTracker> accumulatedChangesPerCollection)
+        {
+            //count pending changes in accumulated changes tracker across keys in batch
+            long pendingChanges = 0;
+            bool loop = true;
+            int counter = 1;
+            while (loop)
+            {
+                foreach (var c in accumulatedChangesPerCollection.Values)
+                {
+                    var count = c.DocsToBeDeleted.Count + c.DocsToBeInserted.Count + c.DocsToBeUpdated.Count;
+                    pendingChanges += count;
+                }
+                if (pendingChanges > _config.ChangeStreamMaxDocsInBatch * 5)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Pending changes exceeded limit -  Round {counter} pausing for {counter}seconds,  PendingChanges: {pendingChanges}, Limit: {_config.ChangeStreamMaxDocsInBatch * 5}", LogType.Warning);
+                    Thread.Sleep(1000 * counter);//sleep for some time
+                    loop = true;
+                    counter++;
+                }
+                else
+                {
+                    loop = false;
+                }
+            }         
+
         }
 
-        protected void IncrementGlobalPendingWrites()
-        {
-            lock (_pendingWritesLock)
-            {
-                _globalPendingWrites++;
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented to {_globalPendingWrites}", LogType.Verbose);
-            }
-        }
 
-        protected void DecrementGlobalPendingWrites()
-        {
-            lock (_pendingWritesLock)
-            {
-                _globalPendingWrites = Math.Max(0, _globalPendingWrites - 1);
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented to {_globalPendingWrites}", LogType.Verbose);
-            }
-        }
-
-        protected async Task WaitWithExponentialBackoffAsync(int pendingWrites, string collectionName)
-        {
-            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, max 5000ms
-            int delayMs = Math.Min(5000, 100 * (int)Math.Pow(2, Math.Min(pendingWrites - MAX_GLOBAL_PENDING_WRITES, 6)));
-            
-            _log.WriteLine($"{_syncBackPrefix}Backpressure activated for {collectionName}: {pendingWrites} total pending writes, waiting {delayMs}ms", LogType.Warning);
-            _log.ShowInMonitor($"{_syncBackPrefix}BACKPRESSURE: System overloaded ({pendingWrites} pending writes), pausing {collectionName}");
-            
-            await Task.Delay(delayMs);
-        }
 
         //protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
         //{
@@ -252,7 +310,7 @@ namespace OnlineMongoMigrationProcessor
         //{
         //    const int MAX_WAIT_SECONDS = 60;
         //    DateTime startWait = DateTime.UtcNow;
-            
+
         //    while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
         //    {
         //        if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
@@ -263,11 +321,11 @@ namespace OnlineMongoMigrationProcessor
         //            _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
         //            throw new OutOfMemoryException(errorMsg);
         //        }
-                
+
         //        _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
         //        await Task.Delay(5000); // Check every 5 seconds
         //    }
-            
+
         //    _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
         //}
 

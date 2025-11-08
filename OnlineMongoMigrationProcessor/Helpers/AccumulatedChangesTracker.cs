@@ -8,18 +8,13 @@ using System.Threading.Tasks;
 
 namespace OnlineMongoMigrationProcessor.Helpers
 {
-    public class ChangeStreamDocuments
+    public class AccumulatedChangesTracker
     {
         public List<ChangeStreamDocument<BsonDocument>> DocsToBeInserted { get; private set; } = new();
         public List<ChangeStreamDocument<BsonDocument>> DocsToBeUpdated { get; private set; } = new();
         public List<ChangeStreamDocument<BsonDocument>> DocsToBeDeleted { get; private set; } = new();
 
-        // Track the earliest resume token for rollback on failure
-        public string EarliestResumeToken { get; private set; } = string.Empty;
-        public DateTime EarliestTimestamp { get; private set; } = DateTime.MinValue;
-        public ChangeStreamOperationType EarliestOperationType { get; private set; }
-        public string EarliestDocumentKey { get; private set; } = string.Empty;
-
+        
         // Track the latest resume token for checkpoint on success
         public string LatestResumeToken { get; private set; } = string.Empty;
         public DateTime LatestTimestamp { get; private set; } = DateTime.MinValue;
@@ -94,23 +89,17 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {
                 changeTimestamp = change.WallTime.Value;
             }
-
-            // Track earliest (first change in batch) - for rollback on failure
-            if (string.IsNullOrEmpty(EarliestResumeToken) && change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
-            {
-                EarliestResumeToken = change.ResumeToken.ToJson();
-                EarliestOperationType = change.OperationType;
-                EarliestDocumentKey = change.DocumentKey.ToJson();
-                EarliestTimestamp = changeTimestamp;
-            }
-
+           
             // Always track latest (last change in batch) - for checkpoint on success
             if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
             {
-                LatestResumeToken = change.ResumeToken.ToJson();
-                LatestOperationType = change.OperationType;
-                LatestDocumentKey = change.DocumentKey.ToJson();
-                LatestTimestamp = changeTimestamp;
+                if (changeTimestamp > LatestTimestamp)
+                {
+                    LatestResumeToken = change.ResumeToken.ToJson();
+                    LatestOperationType = change.OperationType;
+                    LatestDocumentKey = change.DocumentKey.ToJson();
+                    LatestTimestamp = changeTimestamp;
+                }
             }
         }
 
@@ -119,24 +108,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// </summary>
         public void ClearMetadata()
         {
-            // Clear earliest
-            EarliestResumeToken = string.Empty;
-            EarliestTimestamp = DateTime.MinValue;
-            EarliestDocumentKey = string.Empty;
-            
+           
             // Clear latest
             LatestResumeToken = string.Empty;
             LatestTimestamp = DateTime.MinValue;
             LatestDocumentKey = string.Empty;
-        }
+        }       
         
-        /// <summary>
-        /// DEPRECATED: Use ClearMetadata() instead.
-        /// </summary>
-        [Obsolete("Use ClearMetadata() instead to clear both earliest and latest metadata")]
-        public void ClearLatestMetadata()
-        {
-            ClearMetadata();
-        }
     }
 }

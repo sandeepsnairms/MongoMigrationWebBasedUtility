@@ -154,7 +154,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             IMongoCollection<BsonDocument> targetCollection, CancellationToken timeoutCts, CancellationToken manualToken, bool isSimulated)
         {
             int counter = 0;
-            List<ChangeStreamDocument<BsonDocument>> changeStreamDocuments = new List<ChangeStreamDocument<BsonDocument>>();
+            List<ChangeStreamDocument<BsonDocument>> accumulatedChangesInColl = new List<ChangeStreamDocument<BsonDocument>>();
 
             long currentLSN;
             BsonDocument? resumeToken = null;
@@ -204,7 +204,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                         var document = change.FullDocument;
 
-                        changeStreamDocuments.Add(change);
+                        accumulatedChangesInColl.Add(change);
 
                         // Save the latest token
                         resumeToken = change.ResumeToken;
@@ -214,14 +214,14 @@ namespace OnlineMongoMigrationProcessor.Processors
                         if (manualToken.IsCancellationRequested)
                             return TaskResult.Canceled;
 
-                        if (changeStreamDocuments.Count > _config.ChangeStreamMaxDocsInBatch)
+                        if (accumulatedChangesInColl.Count > _config.ChangeStreamMaxDocsInBatch)
                         {
-                            await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                            await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                          }
                     }
                    
                     _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
-                    await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
 
                     if (resumeToken == null)
                         continue;
@@ -286,7 +286,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 }
 
                 //save the remaining items in the batch
-                if (changeStreamDocuments.Count>0)
+                if (accumulatedChangesInColl.Count>0)
                 {
                     _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
                     if (resumeToken != null)
@@ -294,7 +294,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
                         _jobList?.Save();
                     }
-                    await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                 }
             }
             catch (OperationCanceledException) when (!timeoutCts.IsCancellationRequested && manualToken.IsCancellationRequested)
@@ -309,9 +309,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             return TaskResult.Retry;
         }
 
-        private async Task BulkProcessChangesAsync(MigrationChunk chunk, IMongoCollection<BsonDocument> targetCollection, List<ChangeStreamDocument<BsonDocument>> changeStreamDocuments)
+        private async Task BulkProcessChangesAsync(MigrationChunk chunk, IMongoCollection<BsonDocument> targetCollection, List<ChangeStreamDocument<BsonDocument>> accumulatedChangesInColl)
         {
-            if(targetCollection==null || changeStreamDocuments.Count == 0)
+            if(targetCollection==null || accumulatedChangesInColl.Count == 0)
             {
                 // No changes to process
                 return;
@@ -321,12 +321,12 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 // Create the counter delegate implementation
                 CounterDelegate<MigrationChunk> counterDelegate = (t, counterType, operationType, count) => IncrementDocCounter(chunk, count);
-                await MongoHelper.ProcessInsertsAsync<MigrationChunk>(chunk, targetCollection, changeStreamDocuments, counterDelegate, _log, $"Processing partition {targetCollection.CollectionNamespace}.[{chunk.Id}].");
+                await MongoHelper.ProcessInsertsAsync<MigrationChunk>(chunk, targetCollection, accumulatedChangesInColl, counterDelegate, _log, $"Processing partition {targetCollection.CollectionNamespace}.[{chunk.Id}].");
             }
             else
-                IncrementDocCounter(chunk, changeStreamDocuments.Count);
+                IncrementDocCounter(chunk, accumulatedChangesInColl.Count);
 
-            changeStreamDocuments.Clear();
+            accumulatedChangesInColl.Clear();
         }
 
         private void IncrementSkippedCounter(MigrationChunk chunk, int incrementBy = 1)
