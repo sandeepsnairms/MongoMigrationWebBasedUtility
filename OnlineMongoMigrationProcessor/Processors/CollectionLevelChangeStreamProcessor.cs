@@ -873,10 +873,18 @@ namespace OnlineMongoMigrationProcessor
                     }
 
                     // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                    if (IsReadyForFlush(accumulatedChangesInColl,out int total) )
+                    if (changeCount > _config.ChangeStreamMaxDocsInBatch)
                     {
-                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                        Task.Run(async () =>
+                        {
+                            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                        });
+                        changeCount = 0;
+
+                        await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
                     }
+
+
                 }
 
                 await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);  
@@ -1110,19 +1118,19 @@ namespace OnlineMongoMigrationProcessor
                         break;
                 }
 
-                if (IsReadyForFlush(accumulatedChangesInColl,out var total))
-                {
-                    //int batchSize = accumulatedChangesInColl.DocsToBeInserted.Count + accumulatedChangesInColl.DocsToBeUpdated.Count + accumulatedChangesInColl.DocsToBeDeleted.Count;
-                    _log.WriteLine($"{_syncBackPrefix}Change stream max batch size exceeded - Flushing {total} changes for {collNameSpace}", LogType.Debug);
+                //if (IsReadyForFlush(accumulatedChangesInColl,out var total))
+                //{
+                //    //int batchSize = accumulatedChangesInColl.DocsToBeInserted.Count + accumulatedChangesInColl.DocsToBeUpdated.Count + accumulatedChangesInColl.DocsToBeDeleted.Count;
+                //    _log.WriteLine($"{_syncBackPrefix}Change stream max batch size exceeded - Flushing {total} changes for {collNameSpace}", LogType.Debug);
 
-                    // Process the changes in bulk if the batch size exceeds the limit
-                    // Use Task.Run().Wait() to avoid deadlock - this is a controlled synchronous wait
-                    Task.Run(async () =>
-                    {
-                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                    }).GetAwaiter().GetResult();
-                    _jobList?.Save();                    
-                }
+                //    // Process the changes in bulk if the batch size exceeds the limit
+                //    // Use Task.Run().Wait() to avoid deadlock - this is a controlled synchronous wait
+                //    Task.Run(async () =>
+                //    {
+                //        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                //    }).GetAwaiter().GetResult();
+                //    _jobList?.Save();                    
+                //}
             }
             catch (Exception ex)
             {

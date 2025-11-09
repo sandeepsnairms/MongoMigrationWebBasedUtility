@@ -282,7 +282,7 @@ namespace OnlineMongoMigrationProcessor
                     var count = c.DocsToBeDeleted.Count + c.DocsToBeInserted.Count + c.DocsToBeUpdated.Count;
                     pendingChanges += count;
                 }
-                if (pendingChanges > _config.ChangeStreamMaxDocsInBatch * 5)
+                if (pendingChanges > _config.ChangeStreamMaxDocsInBatch * 10)
                 {
                     _log.WriteLine($"{_syncBackPrefix}Pending changes exceeded limit -  Round {counter} pausing for {counter}seconds,  PendingChanges: {pendingChanges}, Limit: {_config.ChangeStreamMaxDocsInBatch * 5}", LogType.Warning);
                     Thread.Sleep(1000 * counter);//sleep for some time
@@ -469,7 +469,9 @@ namespace OnlineMongoMigrationProcessor
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
-            
+
+            _log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
+
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
                 switch (counterType)
