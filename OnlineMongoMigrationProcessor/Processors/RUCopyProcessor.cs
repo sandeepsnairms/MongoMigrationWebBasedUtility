@@ -136,6 +136,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpComplete = true;
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
+                mu.SaveToDisk();
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"RU copy completed for {ctx.DatabaseName}.{ctx.CollectionName}.");
                 return TaskResult.Success;

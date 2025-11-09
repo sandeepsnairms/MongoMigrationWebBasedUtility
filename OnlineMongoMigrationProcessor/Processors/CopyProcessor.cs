@@ -223,6 +223,8 @@ namespace OnlineMongoMigrationProcessor
 
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
+
+                    mu.SaveToDisk();
                     _muCache.RemoveMigrationUnit(mu.Id);
                 }
                 else

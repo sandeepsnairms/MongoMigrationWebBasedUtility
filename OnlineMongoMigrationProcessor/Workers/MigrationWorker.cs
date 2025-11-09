@@ -564,10 +564,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"Processing {_job.MigrationUnitIds.Count} migration units", LogType.Verbose);
             foreach (var muId in _job.MigrationUnitIds)
             {
-                var migrationUnit= _muCache.GetMigrationUnit(muId);
-
                 if (_migrationCancelled) 
                     return TaskResult.Canceled;
+
+                var migrationUnit = _muCache.GetMigrationUnit(muId);
 
                 if (Helper.IsMigrationUnitValid(migrationUnit))
                 {
@@ -775,13 +775,17 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate}", LogType.Verbose);
             var unitsToAdd = await Helper.PopulateJobCollectionsAsync(_job,namespacesToMigrate, sourceConnectionString, _job.AllCollectionsUseObjectId);
-            if (unitsToAdd.Count > 0)
+
+            //find new units to add
+            var newUnits = unitsToAdd.Where(mu => !_job.MigrationUnitIds.Contains(Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName))).ToList();
+            if (newUnits.Count > 0)
             {
-                _log.WriteLine($"Adding {unitsToAdd.Count} migration units to job", LogType.Debug);
-                foreach (var mu in unitsToAdd)
+
+                _log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
+                foreach (var mu in newUnits)
                 {
-                    mu.SaveToDisk();
-                    Helper.AddMigrationUnit(mu, job);
+                   mu.SaveToDisk();
+                   Helper.AddMigrationUnit(mu, job);                        
                 }
                 //_jobList.Save();
                 _jobList.SaveToDisk();

@@ -1349,7 +1349,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpGap = Helper.GetMigrationUnitDocCount(mu) - downloadCount;
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
-
+                    mu.SaveToDisk();
                     // BulkCopyEndedOn will be set after restore completes, not here
 
                     // Only trigger restore if not paused

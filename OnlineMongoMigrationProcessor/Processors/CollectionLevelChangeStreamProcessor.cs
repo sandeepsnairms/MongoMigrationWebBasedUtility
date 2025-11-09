@@ -81,11 +81,10 @@ namespace OnlineMongoMigrationProcessor
                         if (_migrationUnitsToProcess.ContainsKey(key))
                         {
                             var unit=_muCache.GetMigrationUnit(key);
-                            collectionProcessed.Add(key);
+                            var collectionKey= $"{unit.DatabaseName}.{unit.CollectionName}";
+                            collectionProcessed.Add(collectionKey);
                             unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
-                            // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside ProcessCollectionChangeStream
-                            string collectionName = key; // Capture for closure
-                            
+                                                        
                             
                             try
                             {
@@ -97,7 +96,7 @@ namespace OnlineMongoMigrationProcessor
                                     }
                                     catch (Exception ex)
                                     {
-                                        _log.WriteLine($"{_syncBackPrefix}Unhandled exception in Task.Run for collection {collectionName}: {ex}", LogType.Error);
+                                        _log.WriteLine($"{_syncBackPrefix}Unhandled exception in Task.Run for collection {collectionKey}: {ex}", LogType.Error);
                                         throw; // Re-throw to ensure Task.WhenAll sees the failure
                                     }
                                 });

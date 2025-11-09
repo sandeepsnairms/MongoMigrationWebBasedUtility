@@ -98,7 +98,7 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
+                //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
                 string json = File.ReadAllText(filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
