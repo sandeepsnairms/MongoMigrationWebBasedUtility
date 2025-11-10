@@ -544,7 +544,7 @@ namespace OnlineMongoMigrationProcessor
                 // Only process final batch if we didn't exit early (e.g., due to timeout or cursor creation failure)
                 if (shouldProcessFinalBatch)
                 {
-                    await ProcessFinalBatchAsync(mu, sourceCollection, targetCollection, accumulatedChangesInColl, counter, collectionKey);
+                    await ProcessWatchFinallyAsync(mu, sourceCollection, targetCollection, accumulatedChangesInColl, counter, collectionKey);
                 }
             }
         }
@@ -785,6 +785,7 @@ namespace OnlineMongoMigrationProcessor
             return counter;
         }
 
+        /*
         private async Task<long> ProcessMongoDB4xChangeStreamAsync(
             IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,
             MigrationUnit mu,
@@ -797,6 +798,7 @@ namespace OnlineMongoMigrationProcessor
             string collectionKey,
             long counter)
         {
+                            
             _log.WriteLine($"{_syncBackPrefix}Processing MongoDB 4.0+ change stream with MoveNext pattern for {collectionKey}", LogType.Verbose);
             
             // Watchdog: Track when MoveNext was last called to detect hangs
@@ -872,17 +874,17 @@ namespace OnlineMongoMigrationProcessor
                         break; // Exit loop on exception, let finally block handle cleanup
                     }
 
-                    // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                    if (changeCount > _config.ChangeStreamMaxDocsInBatch)
-                    {
-                        Task.Run(async () =>
-                        {
-                            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                        });
-                        changeCount = 0;
+                    //// MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
+                    //if (changeCount > _config.ChangeStreamMaxDocsInBatch)
+                    //{
+                    //    Task.Run(async () =>
+                    //    {
+                    //        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                    //    });
+                    //    changeCount = 0;
 
-                        await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
-                    }
+                    //    await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
+                    //}
 
 
                 }
@@ -894,9 +896,87 @@ namespace OnlineMongoMigrationProcessor
                 }
             }            
             return counter;
+            
+        }
+            */
+
+        private async Task<long> ProcessMongoDB4xChangeStreamAsync(IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,
+            MigrationUnit mu,
+            IMongoCollection<BsonDocument> sourceCollection,
+            IMongoCollection<BsonDocument> targetCollection,
+            AccumulatedChangesTracker accumulatedChangesInColl,
+            CancellationToken cancellationToken,
+            int seconds,
+            BsonDocument userFilterDoc,
+            string collectionKey,
+            long counter)
+        {          
+
+            using (cursor)
+            {
+                try
+                {
+                    // Iterate changes detected
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var hasNext = await cursor.MoveNextAsync(cancellationToken);
+                        if (!hasNext)
+                        {                            
+                            break; // Stream closed or no more data
+                        }
+                        int changeCount = 0;
+                        foreach (var change in cursor.Current)
+                        {
+                            changeCount++;
+
+                            if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
+                                break; // Exit inner loop, outer loop will also break
+                            }
+
+                            string lastProcessedToken = string.Empty;
+                            _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
+                            lastProcessedToken = token2 ?? string.Empty;
+
+                            if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
+                            {
+                                mu.CSUpdatesInLastBatch = 0;
+                                mu.CSNormalizedUpdatesInLastBatch = 0;
+                                return counter; // Skip processing if the event has already been processed
+                            }
+
+                            try
+                            {
+                                bool result = ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, accumulatedChangesInColl, ref counter, userFilterDoc);
+                                if (!result)
+                                    break; // Exit loop on error, let finally block handle cleanup
+                            }
+                            catch (Exception ex)
+                            {
+                                _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Error);
+                                break; // Exit loop on exception, let finally block handle cleanup
+                            }
+
+                        }
+
+                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation requested - exit quietly
+                }
+                finally
+                {
+                   await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);                   
+                }                
+            }
+            return counter;
         }
 
-        private async Task ProcessFinalBatchAsync(
+        private async Task ProcessWatchFinallyAsync(
             MigrationUnit mu,
             IMongoCollection<BsonDocument> sourceCollection,
             IMongoCollection<BsonDocument> targetCollection,
