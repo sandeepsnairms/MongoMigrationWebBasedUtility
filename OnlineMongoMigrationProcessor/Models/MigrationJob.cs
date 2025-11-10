@@ -148,7 +148,7 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
-        public List<string>? MigrationUnitIds { get; set; }
+        public List<MigrationUnitBasic>? MigrationUnitBasics { get; set; }
 
 
         [JsonProperty("MigrationUnits")]

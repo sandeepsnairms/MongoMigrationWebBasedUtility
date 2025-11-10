@@ -129,6 +129,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.RestorePercent = progressPercent;
 
                 mu.SaveToDisk();
+                mu.UpdateParentJob();
             }
 
             if (mu.MigrationChunks.All(s => s.IsUploaded == true))
@@ -137,6 +138,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
                 mu.SaveToDisk();
+                mu.UpdateParentJob();   
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"RU copy completed for {ctx.DatabaseName}.{ctx.CollectionName}.");
                 return TaskResult.Success;
@@ -381,7 +383,7 @@ namespace OnlineMongoMigrationProcessor.Processors
            
             ProcessRunning = true;
             var mu = _muCache.GetMigrationUnit(migrationUnitId);
-
+            mu.ParentJob = _job;
             if (_job != null)
                 _job.IsStarted = true;
 
@@ -493,6 +495,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 //_jobList?.Save();
 
                 unit.SaveToDisk();
+                unit.UpdateParentJob();
                 throw new Exception("New partitions found during copy process. Please pause and re-run the job to process new partitions.");
             }
             else

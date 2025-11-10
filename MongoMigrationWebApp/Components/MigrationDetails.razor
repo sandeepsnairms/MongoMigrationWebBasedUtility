@@ -516,7 +516,7 @@
             AggresiveChangeStream = aggressiveCS,
             ChangeStreamLevel = changeStreamLevel,
             AllCollectionsUseObjectId = allCollectionsUseObjectId, // Transient flag, not persisted
-            MigrationUnitIds = new List<string>()
+            MigrationUnitBasics = new List<MigrationUnitBasic>()
         };
         if (OnSubmit != null)
         {

@@ -20,14 +20,31 @@ namespace OnlineMongoMigrationProcessor
         public string? Value { get; set; }
     }
 
-    public class MigrationUnit
+    public  class MigrationUnitBasic
     {
-        private static readonly object _writeLock = new object();
-
         public string Id { get; set; }
         public string JobId { get; set; }
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
+        public long CSUpdatesInLastBatch { get; set; }
+        public DateTime CursorUtcTimestamp { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
+        public double DumpPercent { get; set; }
+        public double RestorePercent { get; set; }
+        public bool DumpComplete { get; set; }
+        public bool RestoreComplete { get; set; }
+
+        public CollectionStatus SourceStatus { get; set; }
+        public bool ResetChangeStream { get; set; }
+                
+    }
+
+
+    public class MigrationUnit:MigrationUnitBasic
+    {
+       
+        private static readonly object _writeLock = new object();
+               
         public string? ResumeToken { get; set; }
         public string? OriginalResumeToken { get; set; }
 
@@ -62,7 +79,8 @@ namespace OnlineMongoMigrationProcessor
         //            .ToList();
         //    }
         //}
-
+        [JsonIgnore]
+        public MigrationJob? ParentJob;
 
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
@@ -73,8 +91,7 @@ namespace OnlineMongoMigrationProcessor
         public int VarianceCount { get; set; }
 
         public DateTime? ChangeStreamStartedOn { get; set; }
-        public DateTime CursorUtcTimestamp { get; set; }
-        public long CSUpdatesInLastBatch { get; set; }
+        
         public long CSNormalizedUpdatesInLastBatch { get; set; }
         public int CSLastBatchDurationSeconds { get; set; }
 
@@ -82,15 +99,10 @@ namespace OnlineMongoMigrationProcessor
         public int SyncBackAddHours { get; set; }        public string? UserFilter { get; set; }
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
-        public DateTime SyncBackCursorUtcTimestamp { get; set; }
-
-        public double DumpPercent { get; set; }
-        public double RestorePercent { get; set; }
-        public bool DumpComplete { get; set; }
-        public bool RestoreComplete { get; set; }
-        public bool ResetChangeStream { get; set; }
+               
+        
         public long EstimatedDocCount { get; set; }
-        public CollectionStatus SourceStatus { get; set; }
+       
         public long ActualDocCount { get; set; }
         public long SourceCountDuringCopy { get; set; }
         public long DumpGap { get; set; }
@@ -124,13 +136,17 @@ namespace OnlineMongoMigrationProcessor
 
         public List<MigrationChunk> MigrationChunks { get; set; }
 
-        public MigrationUnit(string JobId, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
+        public MigrationUnit(MigrationJob job, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
         {
-            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);
-            this.JobId = JobId;
+            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);            
             this.DatabaseName = databaseName;
             this.CollectionName = collectionName;
             this.MigrationChunks = migrationChunks;
+            if (job !=null)
+            {
+                this.JobId = job.Id;
+                this.ParentJob = job;
+            }
         }
 
 
@@ -148,5 +164,46 @@ namespace OnlineMongoMigrationProcessor
 
             }
         }
+
+        public bool UpdateParentJob()
+        {
+            if (this.ParentJob == null) return false;
+
+            try
+            {
+                var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
+                if (index == -1) return false; // not found
+
+                ParentJob.MigrationUnitBasics[index] = GetBasic();
+
+                return ParentJob.SaveToDisk();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+
+        public MigrationUnitBasic GetBasic()
+        {
+            var mub = new MigrationUnitBasic();
+            mub.Id = Helper.GenerateMigrationUnitId(this.DatabaseName, this.CollectionName);
+            mub.JobId = this.JobId;
+            mub.DatabaseName = this.DatabaseName;
+            mub.CollectionName = this.CollectionName;
+            mub.CSUpdatesInLastBatch = this.CSUpdatesInLastBatch;
+            mub.CursorUtcTimestamp = this.CursorUtcTimestamp;
+            mub.SyncBackCursorUtcTimestamp = this.SyncBackCursorUtcTimestamp;
+            mub.DumpPercent = this.DumpPercent;
+            mub.RestorePercent = this.RestorePercent;
+            mub.DumpComplete = this.DumpComplete;
+            mub.RestoreComplete = this.RestoreComplete;
+            mub.SourceStatus = this.SourceStatus;
+            mub.ResetChangeStream = this.ResetChangeStream;
+
+            return mub;
+        }
+
     }
 }

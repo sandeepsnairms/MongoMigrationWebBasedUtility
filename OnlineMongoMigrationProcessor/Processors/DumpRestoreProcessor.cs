@@ -1113,6 +1113,7 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
                 //_jobList?.Save();
                 mu.SaveToDisk();
+                mu.UpdateParentJob();
 
                 // Small delay to simulate processing time (50ms per chunk)
                 try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
@@ -1268,6 +1269,7 @@ namespace OnlineMongoMigrationProcessor
         {
             ProcessRunning = true;
             var mu = _muCache.GetMigrationUnit(migrationUnitId);
+            mu.ParentJob=_job;
 
             // Initialize processor context (parity with CopyProcessor)
             ProcessorContext ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
@@ -1350,6 +1352,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
                     mu.SaveToDisk();
+                    mu.UpdateParentJob();
+
                     // BulkCopyEndedOn will be set after restore completes, not here
 
                     // Only trigger restore if not paused
@@ -1392,6 +1396,7 @@ namespace OnlineMongoMigrationProcessor
 
             ProcessRunning=true;
             var mu = _muCache.GetMigrationUnit(migrationUnitId);
+            mu.ParentJob = _job;
             string dbName = mu.DatabaseName;
             string colName = mu.CollectionName;
             string jobId = _job.Id ?? string.Empty;
@@ -1467,6 +1472,7 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 mu.SaveToDisk();
+                mu.UpdateParentJob();
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
@@ -1498,6 +1504,7 @@ namespace OnlineMongoMigrationProcessor
                             }                            
                         }
                         mu.SaveToDisk();
+                        mu.UpdateParentJob();
                         _muCache.RemoveMigrationUnit(mu.Id);
                         _job.SaveToDisk(); // Persist state
                     }

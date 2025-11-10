@@ -81,6 +81,7 @@ namespace OnlineMongoMigrationProcessor
                         if (_migrationUnitsToProcess.ContainsKey(key))
                         {
                             var unit=_muCache.GetMigrationUnit(key);
+                            unit.ParentJob = _job;
                             var collectionKey= $"{unit.DatabaseName}.{unit.CollectionName}";
                             collectionProcessed.Add(collectionKey);
                             unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
@@ -399,6 +400,8 @@ namespace OnlineMongoMigrationProcessor
                         }
 
                         mu.ResetChangeStream = false; //reset the start time after setting resume token
+                        mu.SaveToDisk();
+                        mu.UpdateParentJob();
                     }
 
                     using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -568,6 +571,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
                     mu.SaveToDisk();
+                    mu.UpdateParentJob();
                     //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
@@ -593,6 +597,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
                     mu.SaveToDisk();
+                    mu.UpdateParentJob();
                     //_jobList?.Save();
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     return; // Skip this collection, will retry in next batch
@@ -621,6 +626,8 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 mu.CSUpdatesInLastBatch = 0;
                                 mu.CSNormalizedUpdatesInLastBatch = 0;
+                                mu.SaveToDisk();
+                                mu.UpdateParentJob();
                                 return; // Skip processing if the event has already been processed
                             }
 
@@ -686,6 +693,10 @@ namespace OnlineMongoMigrationProcessor
                                             mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
                                             mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
                                         }
+
+                                        mu.SaveToDisk();
+                                        mu.UpdateParentJob();
+
                                         _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
                                     }
 
@@ -764,6 +775,8 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     mu.CSUpdatesInLastBatch = 0;
                                     mu.CSNormalizedUpdatesInLastBatch = 0;
+                                    mu.SaveToDisk();
+                                    mu.UpdateParentJob();
                                     return; // Skip processing if the event has already been processed
                                 }
 
@@ -829,6 +842,10 @@ namespace OnlineMongoMigrationProcessor
                                                 mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
                                                 mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
                                             }
+
+                                            mu.SaveToDisk();
+                                            mu.UpdateParentJob();
+
                                             _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
                                         }
 
@@ -927,6 +944,9 @@ namespace OnlineMongoMigrationProcessor
                             mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
                         }
 
+                        mu.SaveToDisk();
+                        mu.UpdateParentJob();
+
                         _resumeTokenCache[$"{sourceCollection.CollectionNamespace}"] = changeStreamDocuments.LatestResumeToken;
                     }
 
@@ -934,6 +954,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
                     _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
                     mu.SaveToDisk();
+                    mu.UpdateParentJob();
+
                         //_jobList?.Save();
 
                     if (counter > 0)
@@ -1180,6 +1202,9 @@ namespace OnlineMongoMigrationProcessor
                             mu.SyncBackResumeToken = changeStreamDocuments.LatestResumeToken;
                             mu.SyncBackCursorUtcTimestamp = changeStreamDocuments.LatestTimestamp;
                         }
+
+                        mu.SaveToDisk();
+                        mu.UpdateParentJob();
 
                         _resumeTokenCache[$"{collNameSpace}"] = changeStreamDocuments.LatestResumeToken;
 

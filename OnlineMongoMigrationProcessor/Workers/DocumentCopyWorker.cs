@@ -65,6 +65,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             migrationChunk.RestoredFailedDocCount = failureCount;
 
             mu.SaveToDisk();
+            mu.UpdateParentJob();
 
         }
 

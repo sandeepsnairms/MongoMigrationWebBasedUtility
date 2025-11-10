@@ -131,9 +131,9 @@ namespace OnlineMongoMigrationProcessor
                 var token = cts.Token;
 
                 _migrationUnitsToProcess.Clear();
-                foreach (var id in _job.MigrationUnitIds)
+                foreach (var mu in _job.MigrationUnitBasics)
                 {
-                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, id);
+                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, mu.Id);
                     if (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
                     {
                         _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
@@ -594,9 +594,9 @@ namespace OnlineMongoMigrationProcessor
                 int processedCount = 0;
                 int skippedCount = 0;
 
-                foreach (var id in _job.MigrationUnitIds)
+                foreach (var mub in _job.MigrationUnitBasics)
                 {
-                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, id);
+                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, mub.Id);
                     if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
                     {
                         if (!migrationUnit.AggressiveCacheDeleted)

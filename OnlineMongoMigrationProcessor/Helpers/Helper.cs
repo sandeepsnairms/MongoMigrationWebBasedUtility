@@ -70,7 +70,7 @@ namespace OnlineMongoMigrationProcessor
 
         
 
-        public static bool IsMigrationUnitValid(MigrationUnit mu)
+        public static bool IsMigrationUnitValid(MigrationUnitBasic mu)
         {
             return mu.SourceStatus == CollectionStatus.OK;
         }
@@ -268,7 +268,7 @@ namespace OnlineMongoMigrationProcessor
             return (total, inserted, skipped, failed);
         }
 
-        public static string GetChangeStreamLag(MigrationUnit unit, bool isSyncBack)
+        public static string GetChangeStreamLag(MigrationUnitBasic unit, bool isSyncBack)
         {
             DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
             if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
@@ -407,17 +407,18 @@ namespace OnlineMongoMigrationProcessor
             {
                 return;
             }
-            if (job?.MigrationUnitIds == null)
+            if (job?.MigrationUnitBasics == null)
             {
-                job!.MigrationUnitIds = new List<string>();
+                job!.MigrationUnitBasics = new List<MigrationUnitBasic>();
             }
 
             // Check if the MigrationUnit already exists
-            if (job.MigrationUnitIds.Contains(mu.Id))
+            if (job.MigrationUnitBasics.Find(m => m.Id == mu.Id) != null)
             {
                 return;
             }
-            job.MigrationUnitIds.Add(mu.Id);
+            mu.ParentJob = job;
+            job.MigrationUnitBasics.Add(mu.GetBasic());
         }
 
         private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool split=true)
@@ -464,7 +465,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
                             {
-                                var migrationUnit = new MigrationUnit( job.Id, database, collection, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job, database, collection, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -481,7 +482,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
                             {
-                                var migrationUnit = new MigrationUnit( job.Id, database, colName, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job, database, colName, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -495,7 +496,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
                         {
-                            var migrationUnit = new MigrationUnit( job.Id, dbName, collection, new List<MigrationChunk>());
+                            var migrationUnit = new MigrationUnit( job, dbName, collection, new List<MigrationChunk>());
                             unitsToAdd.Add(migrationUnit);
                         }
                     }
@@ -505,7 +506,7 @@ namespace OnlineMongoMigrationProcessor
                     // No wildcards, use as-is
                     if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
                     {
-                        var migrationUnit = new MigrationUnit( job.Id, dbName, colName, new List<MigrationChunk>());
+                        var migrationUnit = new MigrationUnit( job, dbName, colName, new List<MigrationChunk>());
                         unitsToAdd.Add(migrationUnit);
                     }
                 }
@@ -707,20 +708,20 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static List<MigrationUnit> GetMigrationUnitToMigrate(JobList joblist,MigrationJob job)
+        public static List<MigrationUnit> GetMigrationUnitsToMigrate(JobList joblist,MigrationJob job)
         {
             var unitsForMigrate = new List<MigrationUnit>();
 
-            if(job.MigrationUnitIds==null || job.MigrationUnitIds.Count==0)
+            if(job.MigrationUnitBasics==null || job.MigrationUnitBasics.Count==0)
             {
                 return unitsForMigrate;
             }
-            foreach (var id in job.MigrationUnitIds!)
+            foreach (var mub in job.MigrationUnitBasics!)
             {
-                var mu = joblist.GetMigrationUnit(job.Id, id);
+                var mu = joblist.GetMigrationUnit(job.Id, mub.Id);
                 if (mu != null)
                 {
-                    unitsForMigrate.Add(mu);
+                    unitsForMigrate.Add((MigrationUnit)mu);
                 }
             }
             return unitsForMigrate;
@@ -732,9 +733,9 @@ namespace OnlineMongoMigrationProcessor
 
             if (migrationJob.IsSimulatedRun)
             {
-                foreach (var id in migrationJob.MigrationUnitIds)
+                foreach (var mu in migrationJob.MigrationUnitBasics)
                 {
-                    var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
+                    //var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.DumpComplete)
@@ -747,9 +748,9 @@ namespace OnlineMongoMigrationProcessor
             else
             {
 
-                foreach (var id  in migrationJob.MigrationUnitIds)
+                foreach (var mu  in migrationJob.MigrationUnitBasics)
                 {
-                    var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
+                    //var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.RestoreComplete || !mu.DumpComplete)

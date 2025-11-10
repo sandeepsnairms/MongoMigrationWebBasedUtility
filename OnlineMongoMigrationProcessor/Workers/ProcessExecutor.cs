@@ -217,7 +217,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 //jobList.Save();
                 mu.SaveToDisk();
-                
+                mu.UpdateParentJob();
+
                 // Ensure timer is running for this migration unit to handle percentage updates
                 EnsurePercentageTimerRunning(mu, jobList, processType);
             }
@@ -348,6 +349,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 if (mu.RestorePercent >= 99.99)
                                     mu.RestoreComplete = true;
                                 mu.SaveToDisk();
+                                mu.UpdateParentJob();
                             }
                         }
                         else // MongoDump
@@ -372,6 +374,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 if (mu.DumpPercent >= 99.99)
                                     mu.DumpComplete = true;
                                 mu.SaveToDisk();
+                                mu.UpdateParentJob();
                             }
                         }
                         

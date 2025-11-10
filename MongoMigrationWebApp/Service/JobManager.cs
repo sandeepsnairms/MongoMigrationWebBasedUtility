@@ -52,8 +52,8 @@ namespace MongoMigrationWebApp.Service
 
        
         public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
-        {
-            return Helper.GetMigrationUnitToMigrate(_jobList, mj);
+        {            
+            return Helper.GetMigrationUnitsToMigrate(_jobList, mj);
         }
 
         //public bool RestoreJobsFromBackup(out string errorMessage)

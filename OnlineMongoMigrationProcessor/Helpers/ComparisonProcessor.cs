@@ -36,7 +36,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 targetClient = MongoClientFactory.Create(log, joblist.TargetConnectionString[job.Id] ?? string.Empty);
 
 
-                foreach (var mu in Helper.GetMigrationUnitToMigrate(joblist,job) ?? new List<MigrationUnit>())
+                foreach (var mu in Helper.GetMigrationUnitsToMigrate(joblist,job) ?? new List<MigrationUnit>())
                 {
 
                     log.WriteLine($"Processing {mu.DatabaseName}.{mu.CollectionName}.");

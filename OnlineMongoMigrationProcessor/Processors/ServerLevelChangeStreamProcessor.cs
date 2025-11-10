@@ -322,7 +322,7 @@ namespace OnlineMongoMigrationProcessor
                     //}
 
                     migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
-
+                    migrationUnit.ParentJob = _job;
                     // Check user filter condition               
                     var userFilterDoc = MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
 
@@ -358,6 +358,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     //_migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
                     migrationUnit=_muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId("DUMMY", "DUMMY"));
+                    migrationUnit.ParentJob = _job;
                     if (!changeStreamDocuments.ContainsKey(collectionKey))
                     {
                         changeStreamDocuments[collectionKey] = new ChangeStreamDocuments();
@@ -412,6 +413,7 @@ namespace OnlineMongoMigrationProcessor
                         //}
                         var muId = Helper.GenerateMigrationUnitId(collKey);
                         mu= _muCache.GetMigrationUnit(muId);
+                        mu.ParentJob = _job;
                         if (mu != null)
                         {
                             // BACKPRESSURE: Check global pending writes before mid-batch flush
@@ -503,6 +505,7 @@ namespace OnlineMongoMigrationProcessor
                     //}
                     var muId = Helper.GenerateMigrationUnitId(collectionKey);
                     var mu = _muCache.GetMigrationUnit(muId);
+                    mu.ParentJob = _job;
                     if (mu != null)
                     {
 
@@ -518,6 +521,7 @@ namespace OnlineMongoMigrationProcessor
                             //_migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
                             muId = Helper.GenerateMigrationUnitId("DUMMY.DUMMY");
                             migrationUnit = _muCache.GetMigrationUnit(muId);
+                            migrationUnit.ParentJob = _job;
                         }
 
                         IncrementGlobalPendingWrites();
@@ -624,6 +628,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 var migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
+                migrationUnit.ParentJob = _job;
                 IncrementEventCounter(migrationUnit, operationType);
 
                 switch (operationType)

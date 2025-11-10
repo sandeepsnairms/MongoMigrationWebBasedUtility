@@ -870,7 +870,7 @@ namespace OnlineMongoMigrationProcessor
                             var collectionKey = $"{databaseName}.{collectionName}";
 
                             //checking if change is in collections to be migrated.
-                            var migrationUnit = Helper.GetMigrationUnitToMigrate(jobList,job).FirstOrDefault(mu =>
+                            var migrationUnit = Helper.GetMigrationUnitsToMigrate(jobList,job).FirstOrDefault(mu =>
                                 string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
                                 string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
 
@@ -878,7 +878,6 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 // Use common function for server-level resume token setting
                                 SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
-
                                 log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
                                 // Exit immediately after first change detected
                                 return;

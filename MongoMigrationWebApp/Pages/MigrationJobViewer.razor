@@ -151,7 +151,7 @@
 }
 @if (_collectionDetailsDialogOpen && _selectedMigrationUnit != null)
 {
-    <CollectionDetails MigrationJob="@MigrationJob"  MigrationUnit="@_selectedMigrationUnit" OnClose="HandleCollectionDetailsClose" />
+    <CollectionDetails MigrationJob="@MigrationJob" MigrationUnit="@JobManager.GetMigrationUnits(MigrationJob).Find(mu => mu.Id == _selectedMigrationUnit.Id)" OnClose="HandleCollectionDetailsClose" />
 }
 
 @* Collections Loading Spinner *@
@@ -171,7 +171,7 @@
 }
 
 @* Collections Filter and Pagination Controls *@
-@if (@JobManager.GetMigrationUnits(MigrationJob) != null && @JobManager.GetMigrationUnits(MigrationJob).Count > 0 && !_isLoadingCollections)
+@if (MigrationJob.MigrationUnitBasics != null && MigrationJob.MigrationUnitBasics.Count > 0 && !_isLoadingCollections)
 {
     <div class="collections-filter-section">
         <div class="row">
@@ -271,7 +271,7 @@
             </tr>
         </thead>
         <tbody>
-            @if (!_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && GetFilteredAndPagedUnits().Any())
+            @if (!_isLoadingCollections && MigrationJob.MigrationUnitBasics != null && GetFilteredAndPagedUnits().Any())
             {
                 @foreach (var unit in GetFilteredAndPagedUnits())
                 {
@@ -313,7 +313,7 @@
                     </tr>
                 }
             }
-            else if (!_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && !string.IsNullOrWhiteSpace(_filterText))
+            else if (!_isLoadingCollections && @MigrationJob.MigrationUnitBasics!= null && !string.IsNullOrWhiteSpace(_filterText))
             {
                 <tr>
                     <td colspan="10" class="empty-collections-state">
@@ -323,7 +323,7 @@
                     </td>
                 </tr>
             }
-            else if (!_isLoadingCollections && (@JobManager.GetMigrationUnits(MigrationJob) == null || !@JobManager.GetMigrationUnits(MigrationJob).Any()))
+            else if (!_isLoadingCollections && (@MigrationJob.MigrationUnitBasics == null || !@MigrationJob.MigrationUnitBasics.Any()))
             {
                 <tr>
                     <td colspan="10" class="empty-collections-state">
@@ -391,7 +391,7 @@
         @if (MigrationJob != null && Helper.IsOnline(MigrationJob))
         {
             <button class="btn btn-warning mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">
-                @(((@JobManager.GetMigrationUnits(MigrationJob) ?? new List<MigrationUnit>()).Any(MigrationUnit => MigrationUnit.ResetChangeStream)) ? "✓ Reset Change Stream" : "☐ Reset Change Stream")
+                @(((@MigrationJob.MigrationUnitBasics ?? new List<MigrationUnitBasic>()).Any(MigrationUnit => MigrationUnit.ResetChangeStream)) ? "✓ Reset Change Stream" : "☐ Reset Change Stream")
             </button>
 
             @if (MigrationJob?.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
@@ -532,7 +532,7 @@ else if (@_showLogBackupFile)
 
     private bool _showLogBackupFile = false;
     private string _logBackupFile = string.Empty;
-    private MigrationUnit? _selectedMigrationUnit;
+    private MigrationUnitBasic? _selectedMigrationUnit;
 
     // Loading spinner state for collection loading
     private bool _isLoadingCollections = false;
@@ -560,13 +560,13 @@ else if (@_showLogBackupFile)
     private bool _sortAscending = true;
 
     // Pagination helper
-    private PaginationHelper<MigrationUnit> _paginationHelper = new PaginationHelper<MigrationUnit>(
-        new List<MigrationUnit>(),
+    private PaginationHelper<MigrationUnitBasic> _paginationHelper = new PaginationHelper<MigrationUnitBasic>(
+        new List<MigrationUnitBasic>(),
         (unit, filterText) => true // Simple predicate, will be updated in UpdatePaginationHelper
     );
 
     // Cache to prevent re-sorting/filtering on every render
-    private List<MigrationUnit>? _cachedFilteredAndPagedUnits = null;
+    private List<MigrationUnitBasic>? _cachedFilteredAndPagedUnits = null;
     private int _cachedFilteredItemsCount = 0;
     private string _cachedDisplayedItemsInfo = string.Empty;
     private int _cachedTotalPages = 0;
@@ -577,7 +577,7 @@ else if (@_showLogBackupFile)
     private int _lastPageSize = 0;
     private int _lastCurrentPage = 0;
 
-    private Func<MigrationUnit, string, bool> GetFilterPredicate()
+    private Func<MigrationUnitBasic, string, bool> GetFilterPredicate()
     {
         return (unit, filterText) =>
         {
@@ -689,10 +689,10 @@ else if (@_showLogBackupFile)
         return _sortColumn == columnName ? "sorted-column" : "";
     }
 
-    private List<MigrationUnit> ApplySorting(List<MigrationUnit> units)
+    private List<MigrationUnitBasic> ApplySorting(List<MigrationUnitBasic> units)
     {
         if (units == null || !units.Any())
-            return units ?? new List<MigrationUnit>();
+            return units ?? new List<MigrationUnitBasic>();
 
         return _sortColumn switch
         {
@@ -724,7 +724,7 @@ else if (@_showLogBackupFile)
         };
     }
 
-    private object GetSortValueForStatus(MigrationUnit unit, bool isUploadStatus)
+    private object GetSortValueForStatus(MigrationUnitBasic unit, bool isUploadStatus)
     {
         if (unit.SourceStatus == CollectionStatus.NotFound)
             return "0_Skipped (404)"; // Sort skipped items first
@@ -746,7 +746,7 @@ else if (@_showLogBackupFile)
         }
     }
 
-    private DateTime GetSortValueForTimestamp(MigrationUnit unit)
+    private DateTime GetSortValueForTimestamp(MigrationUnitBasic unit)
     {
         if (MigrationJob?.ProcessingSyncBack == true)
             return unit.SyncBackCursorUtcTimestamp;
@@ -761,7 +761,7 @@ else if (@_showLogBackupFile)
     private void UpdatePaginationHelper()
     {
         // Check if we need to invalidate the cache
-        var currentUnitsCount = @JobManager.GetMigrationUnits(MigrationJob)?.Count ?? 0;
+        var currentUnitsCount = @MigrationJob.MigrationUnitBasics?.Count ?? 0;
         bool needsUpdate = _cachedFilteredAndPagedUnits == null ||
                           currentUnitsCount != _lastMigrationUnitsCount ||
                           _sortColumn != _lastSortColumn ||
@@ -775,13 +775,13 @@ else if (@_showLogBackupFile)
             return; // Use cached data
         }
 
-        var currentUnits = @JobManager.GetMigrationUnits(MigrationJob) ?? new List<MigrationUnit>();
+        var currentUnits = @MigrationJob.MigrationUnitBasics ?? new List<MigrationUnitBasic>();
 
         // Apply sorting before pagination
         currentUnits = ApplySorting(currentUnits);
 
         // Recreate the pagination helper only when needed
-        _paginationHelper = new PaginationHelper<MigrationUnit>(
+        _paginationHelper = new PaginationHelper<MigrationUnitBasic>(
             currentUnits,
             GetFilterPredicate()
         );
@@ -813,15 +813,15 @@ else if (@_showLogBackupFile)
         _lastCurrentPage = _currentPage;
     }
 
-    private List<MigrationUnit> GetFilteredAndPagedUnits()
+    private List<MigrationUnitBasic> GetFilteredAndPagedUnits()
     {
         UpdatePaginationHelper();
-        return _cachedFilteredAndPagedUnits ?? new List<MigrationUnit>();
+        return _cachedFilteredAndPagedUnits ?? new List<MigrationUnitBasic>();
     }
 
     private int GetTotalItemsCount()
     {
-        return @JobManager.GetMigrationUnits(MigrationJob)?.Count ?? 0;
+        return @MigrationJob.MigrationUnitBasics?.Count ?? 0;
     }
 
     private int GetFilteredItemsCount()
@@ -964,7 +964,7 @@ else if (@_showLogBackupFile)
                 MigrationJob = JobManager.GetMigrationJobById(JobId);// GetMigrations()(m => m.Id == JobId);
                 if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
                 {
-                    if (_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && @JobManager.GetMigrationUnits(MigrationJob).Count > 0)
+                    if (_isLoadingCollections && @MigrationJob.MigrationUnitBasics != null && @MigrationJob.MigrationUnitBasics.Count > 0)
                     {
                         _isLoadingCollections = false;
                     }
@@ -1004,7 +1004,7 @@ else if (@_showLogBackupFile)
 
     }
 
-    private void ShowCollectionDetails(MigrationUnit unit)
+    private void ShowCollectionDetails(MigrationUnitBasic unit)
     {
         _selectedMigrationUnit = unit;
         _collectionDetailsDialogOpen = true;
@@ -1077,7 +1077,7 @@ else if (@_showLogBackupFile)
             if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
             {
                 // Check if we should hide loading spinner
-                if (_isLoadingCollections && @JobManager.GetMigrationUnits(MigrationJob) != null && @JobManager.GetMigrationUnits(MigrationJob).Count > 0)
+                if (_isLoadingCollections && @MigrationJob.MigrationUnitBasics != null && @MigrationJob.MigrationUnitBasics.Count > 0)
                 {
                     _isLoadingCollections = false;
                 }
@@ -1182,9 +1182,9 @@ else if (@_showLogBackupFile)
 
     private bool CheckCutoverReadiness()
     {
-        var mjCheck = MigrationJob;
-        if (mjCheck?.MigrationUnitIds == null) return false;
-        foreach (var mu in JobManager.GetMigrationUnits(mjCheck))
+        //var mjCheck = MigrationJob;
+        //if (mjCheck?.MigrationUnitIds == null) return false;
+        foreach (var mu in MigrationJob.MigrationUnitBasics)
         {
             if (mu.SourceStatus != CollectionStatus.NotFound)
             {
@@ -1266,7 +1266,7 @@ else if (@_showLogBackupFile)
     // }
 
         // Check if we should show the loading spinner
-        if (mj.MigrationUnitIds == null || mj.MigrationUnitIds.Count == 0)
+        if (mj.MigrationUnitBasics == null || mj.MigrationUnitBasics.Count == 0)
         {
             _isLoadingCollections = true;
             await InvokeAsync(StateHasChanged);
@@ -1447,7 +1447,7 @@ else if (@_showLogBackupFile)
     {
         _resetChangeStreamDialogOpen = false;
         var mj = MigrationJob;
-        if (migrationUnits != null && mj?.MigrationUnitIds != null)
+        if (migrationUnits != null && mj?.MigrationUnitBasics != null)
         {
             var jobList = JobManager.GetJobList();
             var migrationUnitsToReset = JobManager.GetMigrationUnits(mj);
@@ -1459,7 +1459,10 @@ else if (@_showLogBackupFile)
                     migrationUnitsToReset[i].ResetChangeStream = false; // Ensure other collections are not reset
 
                 if (migrationUnitsToReset[i].SaveToDisk())
+
+                if(migrationUnitsToReset[i].UpdateParentJob())
                     return;
+
             }
 
         }
@@ -1481,7 +1484,8 @@ else if (@_showLogBackupFile)
                 if(mu.SaveToDisk())
                     return;
 
-                mj2.MigrationUnitIds.Add(mu.Id);
+                mu.ParentJob = mj2;
+                mj2.MigrationUnitBasics.Add(mu.GetBasic());
                
             }
             if (mj2.SaveToDisk())

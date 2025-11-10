@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -211,10 +212,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 _log.WriteLine("Checking if change stream is enabled on source");
 
-                if (_job.MigrationUnitIds == null || _job.MigrationUnitIds.Count == 0)
+                if (_job.MigrationUnitBasics == null || _job.MigrationUnitBasics.Count == 0)
                     return TaskResult.FailedAfterRetries;
 
-                var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitIds[0]);
+                var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitBasics[0].Id);
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _jobList.SourceConnectionString[_job.Id], migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
                 _jobList.SaveToDisk();
@@ -386,12 +387,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {_job.ChangeStreamLevel}, JobType: {_job.JobType}", LogType.Verbose);
 
             
-            var unitsForPrep = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+            var unitsForPrep = Helper.GetMigrationUnitsToMigrate(_jobList, _job);
 
             _log.WriteLine($"Processing {unitsForPrep.Count} migration units for preparation", LogType.Debug);
 
             foreach (var unit in unitsForPrep)
             {
+                
 
                 if (unit.SourceStatus == CollectionStatus.IsView)
                     continue;
@@ -419,7 +421,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (isCollection == false)
                     {
                         unit.SourceStatus = CollectionStatus.IsView;
-                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);
+                        _log.WriteLine($"{unit.DatabaseName}.{unit.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);                        
                         continue;
                     }
                 }
@@ -558,17 +560,17 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (_job == null)
                 return TaskResult.FailedAfterRetries;
             
-            //var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+            //var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(_jobList, _job);
            
 
-            _log.WriteLine($"Processing {_job.MigrationUnitIds.Count} migration units", LogType.Verbose);
-            foreach (var muId in _job.MigrationUnitIds)
+            _log.WriteLine($"Processing {_job.MigrationUnitBasics.Count} migration units", LogType.Verbose);
+            foreach (var mub in _job.MigrationUnitBasics)
             {
                 if (_migrationCancelled) 
                     return TaskResult.Canceled;
 
-                var migrationUnit = _muCache.GetMigrationUnit(muId);
-
+                var migrationUnit = _muCache.GetMigrationUnit(mub.Id);
+                migrationUnit.ParentJob = _job;
                 if (Helper.IsMigrationUnitValid(migrationUnit))
                 {
                     if (migrationUnit.SourceStatus == CollectionStatus.IsView)
@@ -689,7 +691,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     return TaskResult.FailedAfterRetries;
 
                 _muCache = new ActiveMigrationUnitsCache(_jobList, _job);
-                var unitsForMigrate = Helper.GetMigrationUnitToMigrate(_jobList, _job);
+                var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(_jobList, _job);
 
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Verbose);
                 foreach (var migrationUnit in unitsForMigrate)
@@ -768,16 +770,21 @@ namespace OnlineMongoMigrationProcessor.Workers
             _job.SaveToDisk();
 
 
-            if (_job.MigrationUnitIds == null)
+            if (_job.MigrationUnitBasics == null)
             {
-                _job.MigrationUnitIds = new List<string>();
+                _job.MigrationUnitBasics = new List<MigrationUnitBasic>();
             }
 
             _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate}", LogType.Verbose);
             var unitsToAdd = await Helper.PopulateJobCollectionsAsync(_job,namespacesToMigrate, sourceConnectionString, _job.AllCollectionsUseObjectId);
 
             //find new units to add
-            var newUnits = unitsToAdd.Where(mu => !_job.MigrationUnitIds.Contains(Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName))).ToList();
+
+            var newUnits = unitsToAdd
+                .Where(mu => !_job.MigrationUnitBasics
+                .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
+                .ToList();
+
             if (newUnits.Count > 0)
             {
 
@@ -946,7 +953,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
             _migrationProcessor = new SyncBackProcessor(_log,_jobList, _job,_muCache ,dummySourceClient, _config!);
             _migrationProcessor.ProcessRunning = true;
-            var dummyUnit = new MigrationUnit(_job.Id,"", "", new List<MigrationChunk>());
+            var dummyUnit = new MigrationUnit(_job,"", "", new List<MigrationChunk>());
             //_jobList.SaveMigrationUnit(dummyUnit);
             dummyUnit.SaveToDisk();
             //if run comparison is set by customer.

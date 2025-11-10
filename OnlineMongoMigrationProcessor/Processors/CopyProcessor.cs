@@ -147,7 +147,7 @@ namespace OnlineMongoMigrationProcessor
         {
             ProcessRunning = true;
             var mu=_muCache.GetMigrationUnit(migrationUnitId);
-
+            mu.ParentJob = _job;
             ProcessorContext ctx;
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
@@ -225,6 +225,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.RestoreComplete = true;
 
                     mu.SaveToDisk();
+                    mu.UpdateParentJob();
+
                     _muCache.RemoveMigrationUnit(mu.Id);
                 }
                 else

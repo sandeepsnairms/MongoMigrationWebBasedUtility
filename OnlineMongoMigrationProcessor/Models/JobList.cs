@@ -191,15 +191,19 @@ namespace OnlineMongoMigrationProcessor
                     MigrationJobIds = new List<string>();
                     foreach (var mj in loadedObject.MigrationJobs)
                     {
-                        mj.SaveToDisk();
-                        mj.MigrationUnitIds = new List<string>();
+                        //mj.SaveToDisk();
+                        mj.MigrationUnitBasics = new List<MigrationUnitBasic>();
                         foreach (var mu in mj.MigrationUnits)
                         {
-                            mu.Id = Guid.NewGuid().ToString();
+                            mu.Id = Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName);
                             mu.JobId = mj.Id;
-                            mj.MigrationUnitIds.Add(mu.Id);
+                            mu.ParentJob = mj;
+                            var mub =mu.GetBasic();
+                           
+                            mj.MigrationUnitBasics.Add(mub);
                             
                             mu.SaveToDisk();
+                            //mu.UpdateParentJob();
                         }
                         mj.SaveToDisk();
                         MigrationJobIds.Add(mj.Id);
