@@ -22,6 +22,10 @@ namespace OnlineMongoMigrationProcessor
 
     public  class MigrationUnitBasic
     {
+
+        [JsonIgnore]
+        public MigrationJob? ParentJob;
+
         public string Id { get; set; }
         public string JobId { get; set; }
         public string DatabaseName { get; set; }
@@ -36,15 +40,54 @@ namespace OnlineMongoMigrationProcessor
 
         public CollectionStatus SourceStatus { get; set; }
         public bool ResetChangeStream { get; set; }
-                
+
+        public bool Remove()
+        {
+
+            if (this.ParentJob == null) return false;
+
+            try
+            {
+                var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
+                if (index == -1) return false; // not found
+
+                ParentJob.MigrationUnitBasics.RemoveAt(index);
+
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
+                System.IO.File.Delete(filePath);
+
+                return ParentJob.Persist();
+
+            }
+            catch
+            {
+                return false;
+            }
+            
+        }
+
+
+        public bool Persist()
+        {
+
+            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
+
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+
+            return Helper.WriteAtomicFile(filePath, json);
+
+        }
+
+       
+
     }
 
 
     public class MigrationUnit:MigrationUnitBasic
     {
        
-        private static readonly object _writeLock = new object();
-               
+       
         public string? ResumeToken { get; set; }
         public string? OriginalResumeToken { get; set; }
 
@@ -79,8 +122,7 @@ namespace OnlineMongoMigrationProcessor
         //            .ToList();
         //    }
         //}
-        [JsonIgnore]
-        public MigrationJob? ParentJob;
+        
 
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
@@ -150,21 +192,6 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        
-        public bool SaveToDisk()
-        {
-            lock (_writeLock)
-            {
-                Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json"; 
-
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-
-                return Helper.WriteAtomicFile(filePath, json);
-
-            }
-        }
-
         public bool UpdateParentJob()
         {
             if (this.ParentJob == null) return false;
@@ -174,9 +201,9 @@ namespace OnlineMongoMigrationProcessor
                 var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
                 if (index == -1) return false; // not found
 
-                ParentJob.MigrationUnitBasics[index] = GetBasic();
+                GetBasic(ParentJob.MigrationUnitBasics[index]);
 
-                return ParentJob.SaveToDisk();
+                return true;
             }
             catch
             {
@@ -184,10 +211,11 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-
-        public MigrationUnitBasic GetBasic()
+        public MigrationUnitBasic GetBasic(MigrationUnitBasic? mub=null)
         {
-            var mub = new MigrationUnitBasic();
+            if (mub == null)
+                mub = new MigrationUnitBasic();
+
             mub.Id = Helper.GenerateMigrationUnitId(this.DatabaseName, this.CollectionName);
             mub.JobId = this.JobId;
             mub.DatabaseName = this.DatabaseName;

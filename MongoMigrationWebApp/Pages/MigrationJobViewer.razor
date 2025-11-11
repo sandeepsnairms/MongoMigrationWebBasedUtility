@@ -2,6 +2,7 @@
 @using OnlineMongoMigrationProcessor
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
+@using OnlineMongoMigrationProcessor.Helpers
 @using MigrationJobType = OnlineMongoMigrationProcessor.MigrationJob
 @inject Service.JobManager JobManager
 @inject NavigationManager NavigationManager
@@ -9,7 +10,6 @@
 @inject Service.FileService FileService
 @inject HttpClient HttpClient
 @implements IDisposable
-
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3>
@@ -895,12 +895,8 @@ else if (@_showLogBackupFile)
     {
         // Save the job when log level changes
         var jobList = JobManager.GetJobList();
-        MigrationJob.SaveToDisk();
+        FileManager.SaveMigrationJob(MigrationJob);
 
-        // if (!string.IsNullOrEmpty(errorMessage))
-        // {
-        //     _errorMessage = errorMessage;
-        // }
         await InvokeAsync(StateHasChanged);
     }
     #endregion
@@ -1239,10 +1235,10 @@ else if (@_showLogBackupFile)
         }
 
         if (!string.IsNullOrEmpty(sourceConnectionString))
-            JobManager.SourceConnectionString[job.Id] = sourceConnectionString;
+            JobManager.SourceConnectionString[mj.Id] = sourceConnectionString;
 
         if (!string.IsNullOrEmpty(targetConnectionString))
-            JobManager.TargetConnectionString[job.Id] = targetConnectionString;
+            JobManager.TargetConnectionString[mj.Id] = targetConnectionString;
 
         // Copy connection strings from the provided job into the current migration
         // mj.SourceConnectionString = job.SourceConnectionString;
@@ -1252,18 +1248,14 @@ else if (@_showLogBackupFile)
         mj.IsCancelled = false;
 
         if (!mj.StartedOn.HasValue)
-        mj.StartedOn = DateTime.UtcNow;
+            mj.StartedOn = DateTime.UtcNow;
 
         mj.IsStarted = true;  
 
         var jobList = JobManager.GetJobList();
-        mj.SaveToDisk();
-        jobList.SaveToDisk();
-    // if(!string.IsNullOrEmpty(errorMessage))
-    // {
-    //     _errorMessage = errorMessage;         
-    //     return false;
-    // }
+        FileManager.SaveMigrationJob(mj);
+        FileManager.SaveJobList(jobList);
+        
 
         // Check if we should show the loading spinner
         if (mj.MigrationUnitBasics == null || mj.MigrationUnitBasics.Count == 0)
@@ -1272,27 +1264,27 @@ else if (@_showLogBackupFile)
             await InvokeAsync(StateHasChanged);
         }
 
-    // Run the long task on a separate thread
-    await Task.Run(() =>
-        {
-            // JobManager.DisposeLogs();
+        // Run the long task on a separate thread
+        await Task.Run(() =>
+            {
+                // JobManager.DisposeLogs();
 
-            if (mj!.ProcessingSyncBack && !mj.IsSimulatedRun)
-            {
-                JobManager.SyncBackToSource(JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
-                JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
-                mj);
-            }
-            else
-            {
-                JobManager.StartMigrationAsync(mj,
-                JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
-                JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
-                mj.NameSpaces ?? string.Empty,
-                mj.JobType,
-                Helper.IsOnline(mj));
-            }
-        });
+                if (mj!.ProcessingSyncBack && !mj.IsSimulatedRun)
+                {
+                    JobManager.SyncBackToSource(JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
+                    JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
+                    mj);
+                }
+                else
+                {
+                    JobManager.StartMigrationAsync(mj,
+                    JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
+                    JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
+                    mj.NameSpaces ?? string.Empty,
+                    mj.JobType,
+                    Helper.IsOnline(mj));
+                }
+            });
 
         StartAutoRefresh();
         return true;
@@ -1458,13 +1450,14 @@ else if (@_showLogBackupFile)
                 else
                     migrationUnitsToReset[i].ResetChangeStream = false; // Ensure other collections are not reset
 
-                if (migrationUnitsToReset[i].SaveToDisk())
+                migrationUnitsToReset[i].ParentJob = MigrationJob;
+                migrationUnitsToReset[i].UpdateParentJob();
 
-                if(migrationUnitsToReset[i].UpdateParentJob())
-                    return;
-
+                FileManager.SaveMigrationUnit(migrationUnitsToReset[i]);
             }
 
+            if (FileManager.SaveMigrationJob(MigrationJob))
+                return;
         }
     }
 
@@ -1477,34 +1470,39 @@ else if (@_showLogBackupFile)
         var mj2 = MigrationJob;
         if (migrationUnits != null && mj2 != null)
         {
-            mj2.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
+            // Get IDs for comparison
+            var existingIds = mj2.MigrationUnitBasics.Select(mu => mu.Id).ToHashSet();
+            var newIds = migrationUnits.Select(mu => mu.Id).ToHashSet();
 
+            //get ids that are no llonger present in newUnits
+            var delList = mj2.MigrationUnitBasics.FindAll(mu => !newIds.Contains(mu.Id));
+
+            foreach (var tobDel in delList)
+            {
+                tobDel.ParentJob = mj2;
+                tobDel.Remove();
+            }
+
+
+            // Add new units that don’t exist in existingUnits
             foreach (var mu in migrationUnits)
             {
-                if(mu.SaveToDisk())
-                    return;
-
-                mu.ParentJob = mj2;
-                mj2.MigrationUnitBasics.Add(mu.GetBasic());
-               
+                if (!mj2.MigrationUnitBasics.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
+                {                    
+                    FileManager.SaveMigrationUnit(mu, mj2);
+                    mj2.MigrationUnitBasics.Add(mu.GetBasic());
+                }
             }
-            if (mj2.SaveToDisk())
+
+            mj2.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
+
+            if (FileManager.SaveMigrationJob(mj2))
                 return;
-            
-            //if (!SaveJobs()) return;
+
         }
     }
 
-    // private bool SaveJobs()
-    // {
-    //     JobManager.SaveJobs(out string errorMessage);
-    //     if (!string.IsNullOrEmpty(errorMessage))
-    //     {
-    //         _errorMessage = errorMessage;
-    //         return false;
-    //     }
-    //     return true;
-    // }
+    
 
 
     private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
@@ -1524,7 +1522,7 @@ else if (@_showLogBackupFile)
                     mjc.IsCompleted = true;
                 }
 
-                if (mjc.SaveToDisk())
+                if (FileManager.SaveMigrationJob(mjc))
                     return;
 
                 _refreshTimer = null;
@@ -1538,7 +1536,7 @@ else if (@_showLogBackupFile)
                                                 JobManager.TargetConnectionString[mjs.Id] ?? string.Empty,
                                                 mjs);
                 }
-                if (mjs.SaveToDisk())
+                if (FileManager.SaveMigrationJob(mjs))
                     return;
             }
             else if( result.DiaLogType == YesNoDialog.Category.RunComparisonNot)
@@ -1548,7 +1546,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr.RunComparison = true;
                 }
-                if (mjr.SaveToDisk())
+                if (FileManager.SaveMigrationJob(mjr))
                     return;
             }
 
@@ -1562,7 +1560,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr2.RunComparison = false;
                 }
-                if (mjr2.SaveToDisk())
+                if (FileManager.SaveMigrationJob(mjr2))
                     return;
             }
         }
@@ -1573,7 +1571,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
         JobManager.StopMigration();
         var jobList = JobManager.GetJobList();
-        if (MigrationJob.SaveToDisk())
+        if (FileManager.SaveMigrationJob(MigrationJob))
             return;
         _refreshTimer = null;
     }
@@ -1584,7 +1582,7 @@ else if (@_showLogBackupFile)
         JobManager.ControlledPauseMigration();
 
         var jobList = JobManager.GetJobList();
-        if (MigrationJob.SaveToDisk())
+        if (FileManager.SaveMigrationJob(MigrationJob))
             return;
     }
 

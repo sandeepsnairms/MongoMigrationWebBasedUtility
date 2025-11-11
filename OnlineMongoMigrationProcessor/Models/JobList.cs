@@ -112,7 +112,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public bool SaveToDisk()
+        public bool Persist()
         {
             lock (_writeLock)
             {
@@ -201,14 +201,12 @@ namespace OnlineMongoMigrationProcessor
                             var mub =mu.GetBasic();
                            
                             mj.MigrationUnitBasics.Add(mub);
-                            
-                            mu.SaveToDisk();
-                            //mu.UpdateParentJob();
+                            FileManager.SaveMigrationUnit(mu, mj);
                         }
-                        mj.SaveToDisk();
+                        
                         MigrationJobIds.Add(mj.Id);
-                    }                    
-                    SaveToDisk();
+                    }                   
+                   
                 }
                 errorMessage= string.Empty; 
                 return true;

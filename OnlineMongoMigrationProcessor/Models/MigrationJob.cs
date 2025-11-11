@@ -10,7 +10,6 @@ namespace OnlineMongoMigrationProcessor
 {
     public class MigrationJob
     {
-        private static readonly object _writeLock = new object();
 
         public string Id { get; set; }
         public string? Name { get; set; }
@@ -187,18 +186,16 @@ namespace OnlineMongoMigrationProcessor
         //    }
         //}
 
-        public bool SaveToDisk()
+        public bool Persist()
         {
-            lock (_writeLock)
-            {
-                Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}\\jobdefinition.json";
 
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}\\jobdefinition.json";
 
-                return Helper.WriteAtomicFile(filePath, json);
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
 
-            }
+            return Helper.WriteAtomicFile(filePath, json);
+            
         }
     }
 }

@@ -50,16 +50,19 @@ namespace OnlineMongoMigrationProcessor
         protected static readonly object _cleanupLock = new object();
 
         // Global backpressure tracking across ALL collections/processors to prevent OOM
-        protected static int _globalPendingWrites = 0;
+        //protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
-        protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
-        protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
+        //protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
+        //protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
 
         // UI update throttling to prevent Blazor rendering OOM (max 1 update per second per collection)
+        const int GLOBAL_UI_UPDATE_INTERVAL_MS = 500; // 500ms global throttling across all collections
         protected readonly ConcurrentDictionary<string, DateTime> _lastUIUpdateTime = new ConcurrentDictionary<string, DateTime>();
-        protected const int UI_UPDATE_INTERVAL_MS = 1000; // 1 second between UI updates
+
+        protected bool StopProcessing = false;
 
         private bool _disposed = false;
+        protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
 
         public bool ExecutionCancelled { 
             get => _executionCancelled; 
@@ -90,10 +93,13 @@ namespace OnlineMongoMigrationProcessor
             _concurrentProcessors = _config?.ChangeStreamMaxCollsInBatch ?? 5;
             _processorRunMaxDurationInSec = _config?.ChangeStreamBatchDuration ?? 120;
             _processorRunMinDurationInSec = _config?.ChangeStreamBatchDurationMin ?? 30;
+            StopProcessing = false;
+
         }
 
-        public bool AddCollectionsToProcess(MigrationUnit mu, CancellationTokenSource cts)
+        public bool AddCollectionsToProcess(string migrationUnitId, CancellationTokenSource cts)
         {
+            var mu = _jobList.GetMigrationUnit(_job.Id,migrationUnitId);
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
             if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
             {
@@ -134,7 +140,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var mu in _job.MigrationUnitBasics)
                 {
                     var migrationUnit = _jobList.GetMigrationUnit(_job.Id, mu.Id);
-                    if (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream))
+                    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream)))
                     {
                         _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
 
@@ -167,8 +173,9 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 _job.CSPostProcessingStarted = true;
-                _job.SaveToDisk(); // persist state
-                //_jobList?.Save(); // persist state
+
+                FileManager.SaveMigrationJob(_job); // persist state
+
 
                 if (_migrationUnitsToProcess.Count == 0)
                 {
@@ -181,8 +188,8 @@ namespace OnlineMongoMigrationProcessor
                 await ProcessChangeStreamsAsync(token);
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
-                //_jobList?.Save();
-                _job.SaveToDisk();; // persist state
+
+                FileManager.SaveMigrationJob(_job);
 
             }
             catch (OperationCanceledException)
@@ -206,43 +213,7 @@ namespace OnlineMongoMigrationProcessor
 
         #region Global Backpressure Methods - Shared by All Processors
 
-        protected int GetGlobalPendingWriteCount()
-        {
-            lock (_pendingWritesLock)
-            {
-                return _globalPendingWrites;
-            }
-        }
-
-        protected void IncrementGlobalPendingWrites()
-        {
-            lock (_pendingWritesLock)
-            {
-                _globalPendingWrites++;
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes incremented to {_globalPendingWrites}", LogType.Verbose);
-            }
-        }
-
-        protected void DecrementGlobalPendingWrites()
-        {
-            lock (_pendingWritesLock)
-            {
-                _globalPendingWrites = Math.Max(0, _globalPendingWrites - 1);
-                _log.WriteLine($"{_syncBackPrefix}Global pending writes decremented to {_globalPendingWrites}", LogType.Verbose);
-            }
-        }
-
-        protected async Task WaitWithExponentialBackoffAsync(int pendingWrites, string collectionName)
-        {
-            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, max 5000ms
-            int delayMs = Math.Min(5000, 100 * (int)Math.Pow(2, Math.Min(pendingWrites - MAX_GLOBAL_PENDING_WRITES, 6)));
-            
-            _log.WriteLine($"{_syncBackPrefix}Backpressure activated for {collectionName}: {pendingWrites} total pending writes, waiting {delayMs}ms", LogType.Warning);
-            _log.ShowInMonitor($"{_syncBackPrefix}BACKPRESSURE: System overloaded ({pendingWrites} pending writes), pausing {collectionName}");
-            
-            await Task.Delay(delayMs);
-        }
-
+        
         //protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
         //{
         //    GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
@@ -458,6 +429,7 @@ namespace OnlineMongoMigrationProcessor
                     isSimulatedRun);
 
                 _log.WriteLine($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.TotalFailures} for {collectionKey}", LogType.Debug);
+				_log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
 
                 if (!result.Success)
                 {
@@ -554,8 +526,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: No documents to delete");
                 }
                 // Save the updated state
-                //_jobList?.Save();
-                _job.SaveToDisk();; // persist state
+                FileManager.SaveMigrationJob(_job);
             }
             catch (Exception ex)
             {
@@ -635,6 +606,73 @@ namespace OnlineMongoMigrationProcessor
                     _finalCleanupExecuted = false;
                 }
             }
+        }
+
+        protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
+        {
+            totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +
+                                  accumulatedChangesInColl.DocsToBeUpdated.Count +
+                                  accumulatedChangesInColl.DocsToBeDeleted.Count;
+            if (totalAccumulated >= _config?.ChangeStreamMaxCollsInBatch)
+                return true;
+            else
+                return false;
+        }
+        protected bool ShowInMonitor(ChangeStreamDocument<BsonDocument> change, string collNameSpace, DateTime timeStamp, long counter)
+        {
+            DateTime now = DateTime.UtcNow;
+            bool shouldUpdateUI = false;
+
+            // Check if enough time has passed since last global UI update (500ms throttling across all collections)
+            if (_lastGlobalUIUpdate == DateTime.MinValue ||
+                (now - _lastGlobalUIUpdate).TotalMilliseconds >= GLOBAL_UI_UPDATE_INTERVAL_MS)
+            {
+                // Update the global last UI update time and allow UI update
+                _lastGlobalUIUpdate = now;
+                shouldUpdateUI = true;
+            }
+
+            // Show on monitor only if global UI update is allowed (once per 500ms), but always log to file
+            if (shouldUpdateUI)
+            {
+                if (timeStamp == DateTime.MinValue)
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");
+                }
+                else
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}");
+                }
+            }
+
+            return shouldUpdateUI;
+        }
+        protected async Task WaitForPendingChnagesAsync(Dictionary<string, AccumulatedChangesTracker> accumulatedChangesPerCollection)
+        {
+            //count pending changes in accumulated changes tracker across keys in batch
+            long pendingChanges = 0;
+            bool loop = true;
+            int counter = 1;
+            while (loop)
+            {
+                foreach (var c in accumulatedChangesPerCollection.Values)
+                {
+                    var count = c.DocsToBeDeleted.Count + c.DocsToBeInserted.Count + c.DocsToBeUpdated.Count;
+                    pendingChanges += count;
+                }
+                if (pendingChanges > _config.ChangeStreamMaxDocsInBatch * 10)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Pending changes exceeded limit -  Round {counter} pausing for {counter}seconds,  PendingChanges: {pendingChanges}, Limit: {_config.ChangeStreamMaxDocsInBatch * 5}", LogType.Warning);
+                    Thread.Sleep(1000 * counter);//sleep for some time
+                    loop = true;
+                    counter++;
+                }
+                else
+                {
+                    loop = false;
+                }
+            }
+
         }
 
         #region Critical Failure Tracking - Common for Server and Collection Level

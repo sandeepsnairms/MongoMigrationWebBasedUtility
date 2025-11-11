@@ -49,7 +49,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 _job.IsStarted = false;
             }
 
-            _job.SaveToDisk();;
+            FileManager.SaveMigrationJob(_job);
 
             if (updateStatus)
                 ProcessRunning = false;
@@ -99,7 +99,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 return false; // Skip processing if aggressive change stream resume is enabled
 
 
-            if (_postUploadCSProcessing)
+            if (_postUploadCSProcessing && Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_jobList, _job))
                 return true; // Skip processing if post-upload CS processing is already in progress
 
             if (Helper.IsOnline(_job) && Helper.IsOfflineJobCompleted(_jobList,_job) && !_postUploadCSProcessing)
@@ -125,7 +125,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             return false;
         }
 
-        public void AddCollectionToChangeStreamQueue(MigrationUnit mu, string targetConnectionString)
+        public void AddCollectionToChangeStreamQueue(string migrationUnitId, string targetConnectionString)
         {
 
             if (Helper.IsOnline(_job) && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads )
@@ -137,7 +137,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 if (_changeStreamProcessor == null && _sourceClient != null)
                     _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _jobList, _job, _muCache, _config);
 
-                _changeStreamProcessor?.AddCollectionsToProcess(mu, _cts);
+                _changeStreamProcessor?.AddCollectionsToProcess(migrationUnitId, _cts);
             }
         }
 
@@ -169,8 +169,9 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
 
 
-        protected Task PostCopyChangeStreamProcessor(ProcessorContext ctx, MigrationUnit mu)
+        protected Task PostCopyChangeStreamProcessor(ProcessorContext ctx, string migratioUnitId)
         {
+            var mu=_jobList.GetMigrationUnit(_job.Id, migratioUnitId);
             if (mu.RestoreComplete && mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
                 try
@@ -178,12 +179,12 @@ namespace OnlineMongoMigrationProcessor.Processors
                     // For aggressive change stream, process cleanup when collection is complete
                     if (_job.AggresiveChangeStream && Helper.IsOnline(_job) && mu.RestoreComplete)
                     {
-                        AddCollectionToChangeStreamQueue(mu, ctx.TargetConnectionString);
+                        AddCollectionToChangeStreamQueue(migratioUnitId, ctx.TargetConnectionString);
                     }
 
                     if (Helper.IsOnline(_job) && !_cts.Token.IsCancellationRequested && !_job.CSStartsAfterAllUploads && !_job.AggresiveChangeStream)
                     {
-                        AddCollectionToChangeStreamQueue(mu, ctx.TargetConnectionString);
+                        AddCollectionToChangeStreamQueue(migratioUnitId, ctx.TargetConnectionString);
                     }
 
                     if (!_cts.Token.IsCancellationRequested)
@@ -203,7 +204,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 {
                                     _log.WriteLine($"{_job.Id} completed.");
                                     _job.IsCompleted = true;
-                                    _job.SaveToDisk();
+                                    FileManager.SaveMigrationJob(_job);
                                 }
                                 else
                                 {
@@ -230,7 +231,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
 
 
-        public virtual Task<TaskResult> StartProcessAsync(string MigrationunitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public virtual Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         { return Task.FromResult(TaskResult.Success); }
     }
 }

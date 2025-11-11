@@ -133,11 +133,8 @@ namespace MongoMigrationWebApp.Service
             if (_jobList.MigrationJobIds == null)
             {
                 _jobList.MigrationJobIds = new List<string>();
-                _jobList.SaveToDisk();
-                //if (isSucess || force)
-                //{
-                //    SaveJobs(out errorMessage);
-                //}
+                FileManager.SaveJobList(_jobList);
+
             }
             return _jobList.MigrationJobIds;
         }
@@ -145,7 +142,8 @@ namespace MongoMigrationWebApp.Service
         public void ClearJobFiles(string jobId)
         {
             _jobList.MigrationJobIds?.Remove(jobId);
-            _jobList.SaveToDisk();
+            FileManager.SaveJobList(_jobList);
+;
             try
             {
                 Task.Run(() =>

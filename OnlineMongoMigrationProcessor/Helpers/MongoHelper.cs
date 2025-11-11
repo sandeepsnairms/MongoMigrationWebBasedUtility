@@ -763,7 +763,7 @@ namespace OnlineMongoMigrationProcessor
             }
             finally
             {
-                unit.SaveToDisk();
+                FileManager.SaveMigrationUnit(unit);   
             }
         }
         return;

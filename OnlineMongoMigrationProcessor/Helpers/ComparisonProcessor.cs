@@ -112,7 +112,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                     mu.VarianceCount = mismatched;
                     mu.ComparedOn = currTime;
-                    mu.SaveToDisk();
+                    FileManager.SaveMigrationUnit(mu);
                 }
             }           
             catch (Exception ex)

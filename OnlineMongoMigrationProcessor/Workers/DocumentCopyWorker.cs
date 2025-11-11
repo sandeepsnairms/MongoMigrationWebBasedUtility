@@ -9,6 +9,7 @@ using System.Reflection.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
+using OnlineMongoMigrationProcessor.Helpers;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 namespace OnlineMongoMigrationProcessor.Workers
@@ -28,6 +29,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         private void UpdateProgress(
             string segmentId,
             JobList jobList,
+            MigrationJob job,
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -64,8 +66,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
-            mu.SaveToDisk();
-            mu.UpdateParentJob();
+            FileManager.SaveMigrationUnit(mu, job);
 
         }
 
@@ -87,6 +88,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task<TaskResult> CopyDocumentsAsync(
             JobList jobList,
+            MigrationJob job,   
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -159,7 +161,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 						{
 							// Directly return the awaited enum value
 							return await ProcessSegmentAsync(
-								segment, combinedFilter, jobList, mu,
+								segment, combinedFilter, jobList,job, mu,
 								migrationChunkIndex, basePercent, contribFactor,
 								targetCount, errors, cancellationToken, isWriteSimulated
 							);
@@ -226,8 +228,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 					return TaskResult.Retry;
 				}
 
-                mu.SaveToDisk();
-                 //jobList?.Save(); //persists state
+                FileManager.SaveMigrationUnit(mu);
+
             }
             return TaskResult.Success;
         }
@@ -244,6 +246,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             Segment segment,
             FilterDefinition<BsonDocument> combinedFilter,
             JobList jobList,
+            MigrationJob job,
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -266,7 +269,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
-            mu.SaveToDisk();
+            FileManager.SaveMigrationUnit(mu);
 
             try
             {
@@ -378,7 +381,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     finally
                     {
-                        UpdateProgress(segmentId, jobList, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
+                        UpdateProgress(segmentId, jobList,job, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
                         pageIndex++;
                     }
 
@@ -401,7 +404,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
                     }
                     segment.IsProcessed = !failed;
-                    mu.SaveToDisk();
+                    FileManager.SaveMigrationUnit(mu);
                     return TaskResult.Success;
                 }
                 else
@@ -478,7 +481,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex}", LogType.Warning);
             }
 
-            mu.SaveToDisk();
+            FileManager.SaveMigrationUnit(mu);
         }
 
         private async Task CompareChunkDocumentsAsync(

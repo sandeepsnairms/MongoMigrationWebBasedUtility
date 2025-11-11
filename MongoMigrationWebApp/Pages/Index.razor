@@ -7,7 +7,7 @@
 
 @using MongoMigrationWebApp.Components
 @using OnlineMongoMigrationProcessor
-
+@using OnlineMongoMigrationProcessor.Helpers
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h3 class="mb-0">
@@ -77,9 +77,11 @@
             </tbody>
         </table>        
     }
+    <!--
     <div class="d-flex align-items-center mb-3">
         <button class="btn btn-warning mx-2" title="Use backup to recover job data if current data is corrupted or lost." @onclick="RestoreBackup">Recover Jobs</button>
     </div>
+    -->
 }
 
 @if (_migrationDetailsPopUpOpen)
@@ -126,8 +128,12 @@
 
     private string GetTootTip(MigrationJob migrationJob)
     {
+        // return string.Join(",",
+        //     @JobManager.GetMigrationUnits(migrationJob)?
+        //         .Select(mu => $"{mu.DatabaseName}.{mu.CollectionName}") ?? Enumerable.Empty<string>());
+
         return string.Join(",",
-            @JobManager.GetMigrationUnits(migrationJob)?
+            migrationJob.MigrationUnitBasics?
                 .Select(mu => $"{mu.DatabaseName}.{mu.CollectionName}") ?? Enumerable.Empty<string>());
     }
 
@@ -313,11 +319,11 @@
                     {
                         // Task.Run(() =>
                         //    {
-                               JobManager.ClearJobFiles(jobId);
-                           // });
-                         
+                        JobManager.ClearJobFiles(jobId);
+                        // });
+
                         // var jobList = JobManager.GetJobList();
-                        
+
                         // if (!jobList.SaveJobList())
                         // {
                         //     _message = "Failed to save job list."; 
@@ -328,7 +334,7 @@
                 }
 
             }
-            
+
             _selectedMigrationJob = null;
         }
     }
@@ -372,7 +378,7 @@
 
     private void StartMigrationAsync()
     {
-        
+
 
         _selectedMigrationJob = null;
         _migrationDetailsPopUpOpen = true;
@@ -392,23 +398,20 @@
             if (_selectedMigrationJob == null)
             {
                 var jobList = JobManager.GetJobList();
-       
+
                 // Store connection strings if provided
                 if (!string.IsNullOrEmpty(sourceConnectionString))
                     JobManager.SourceConnectionString[job.Id] = sourceConnectionString;
 
                 if (!string.IsNullOrEmpty(targetConnectionString))
                     JobManager.TargetConnectionString[job.Id] = targetConnectionString;
-         
+
                 jobList.MigrationJobIds.Add(job.Id);
                 job.IsStarted = true;
-                job.SaveToDisk();
-                jobList.SaveToDisk();
-                // if (!string.IsNullOrEmpty(errorMessage))
-                // {
-                //     _message = errorMessage;
-                //     _messageDialogOpen = true;
-                // }
+
+                FileManager.SaveMigrationJob(job);
+                FileManager.SaveJobList(jobList);
+                
                 ViewMigration(job.Id);
             }
         }

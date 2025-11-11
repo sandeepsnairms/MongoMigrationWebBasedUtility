@@ -115,7 +115,7 @@ namespace OnlineMongoMigrationProcessor
 
             var documentCopier = new DocumentCopyWorker();
             documentCopier.Initialize(_log, _targetClient!, ctx.Collection, ctx.DatabaseName, ctx.CollectionName, _config.MongoCopyPageSize);
-            var result = await documentCopier.CopyDocumentsAsync(_jobList, mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, _job.IsSimulatedRun);
+            var result = await documentCopier.CopyDocumentsAsync(_jobList,_job, mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, _job.IsSimulatedRun);
 
             if (result == TaskResult.Success)
             {
@@ -124,8 +124,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.MigrationChunks[chunkIndex].IsDownloaded = true;
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
                 }
-                mu.SaveToDisk();
-                //_jobList?.Save(); // Persist state
+
+                FileManager.SaveMigrationUnit(mu);
                 return TaskResult.Success;
             }
             else if(result == TaskResult.Canceled)
@@ -145,10 +145,11 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-            ProcessRunning = true;
             var mu=_muCache.GetMigrationUnit(migrationUnitId);
-            mu.ParentJob = _job;
+            mu.ParentJob= _job;
+            ProcessRunning = true;
             ProcessorContext ctx;
+
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
             //when resuming a job, we need to check if post-upload change stream processing is already in progress
@@ -224,8 +225,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
 
-                    mu.SaveToDisk();
-                    mu.UpdateParentJob();
+
+                    FileManager.SaveMigrationUnit(mu, _job);
 
                     _muCache.RemoveMigrationUnit(mu.Id);
                 }
@@ -238,7 +239,7 @@ namespace OnlineMongoMigrationProcessor
   
             }
 
-            await PostCopyChangeStreamProcessor(ctx, mu);
+            await PostCopyChangeStreamProcessor(ctx, mu.Id);
 
             return TaskResult.Success;
         }

@@ -128,8 +128,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpPercent = progressPercent;
                 mu.RestorePercent = progressPercent;
 
-                mu.SaveToDisk();
-                mu.UpdateParentJob();
+                FileManager.SaveMigrationUnit(mu, _job);
             }
 
             if (mu.MigrationChunks.All(s => s.IsUploaded == true))
@@ -137,8 +136,8 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpComplete = true;
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
-                mu.SaveToDisk();
-                mu.UpdateParentJob();   
+   
+                FileManager.SaveMigrationUnit(mu, _job);   
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"RU copy completed for {ctx.DatabaseName}.{ctx.CollectionName}.");
                 return TaskResult.Success;
@@ -158,7 +157,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             IMongoCollection<BsonDocument> targetCollection, CancellationToken timeoutCts, CancellationToken manualToken, bool isSimulated)
         {
             int counter = 0;
-            List<ChangeStreamDocument<BsonDocument>> changeStreamDocuments = new List<ChangeStreamDocument<BsonDocument>>();
+            List<ChangeStreamDocument<BsonDocument>> accumulatedChangesInColl = new List<ChangeStreamDocument<BsonDocument>>();
 
             long currentLSN;
             BsonDocument? resumeToken = null;
@@ -208,7 +207,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                         var document = change.FullDocument;
 
-                        changeStreamDocuments.Add(change);
+                        accumulatedChangesInColl.Add(change);
 
                         // Save the latest token
                         resumeToken = change.ResumeToken;
@@ -218,14 +217,14 @@ namespace OnlineMongoMigrationProcessor.Processors
                         if (manualToken.IsCancellationRequested)
                             return TaskResult.Canceled;
 
-                        if (changeStreamDocuments.Count > _config.ChangeStreamMaxDocsInBatch)
+                        if (accumulatedChangesInColl.Count > _config.ChangeStreamMaxDocsInBatch)
                         {
-                            await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                            await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                          }
                     }
                    
                     _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
-                    await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
 
                     if (resumeToken == null)
                         continue;
@@ -235,7 +234,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     {
                         // Save the latest resume token to the chunk
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                        mu.SaveToDisk();
+                        FileManager.SaveMigrationUnit(mu);
                     }
                     
 
@@ -250,7 +249,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                             lock (_processingLock)
                             {
                                 chunk.IsUploaded = true;
-                                mu.SaveToDisk();
+                                FileManager.SaveMigrationUnit(mu);
                             }
                             _log.WriteLine($"Partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}] offline copy completed.");
                             return TaskResult.Success;
@@ -271,7 +270,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 {
                     // Save the latest resume token to the chunk
                     chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                    mu.SaveToDisk();
+                    FileManager.SaveMigrationUnit(mu);
                 }
 
             }
@@ -283,22 +282,22 @@ namespace OnlineMongoMigrationProcessor.Processors
                     lock (_processingLock)
                     {
                         chunk.IsUploaded = true;
-                        mu.SaveToDisk();
+                        FileManager.SaveMigrationUnit(mu);
                     }
                     _log.WriteLine($"Partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}] offline copy completed.");
                     return TaskResult.Success;
                 }
 
                 //save the remaining items in the batch
-                if (changeStreamDocuments.Count>0)
+                if (accumulatedChangesInColl.Count>0)
                 {
                     _log.ShowInMonitor($"Processing partition {mu.DatabaseName}.{mu.CollectionName}.[{chunk.Id}], processed {counter}.");
                     if (resumeToken != null)
                     {
                         chunk.RUPartitionResumeToken = resumeToken.ToJson();
-                        mu.SaveToDisk();
+                        FileManager.SaveMigrationUnit(mu);
                     }
-                    await BulkProcessChangesAsync(chunk, targetCollection, changeStreamDocuments);
+                    await BulkProcessChangesAsync(chunk, targetCollection, accumulatedChangesInColl);
                 }
             }
             catch (OperationCanceledException) when (!timeoutCts.IsCancellationRequested && manualToken.IsCancellationRequested)
@@ -313,9 +312,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             return TaskResult.Retry;
         }
 
-        private async Task BulkProcessChangesAsync(MigrationChunk chunk, IMongoCollection<BsonDocument> targetCollection, List<ChangeStreamDocument<BsonDocument>> changeStreamDocuments)
+        private async Task BulkProcessChangesAsync(MigrationChunk chunk, IMongoCollection<BsonDocument> targetCollection, List<ChangeStreamDocument<BsonDocument>> accumulatedChangesInColl)
         {
-            if(targetCollection==null || changeStreamDocuments.Count == 0)
+            if(targetCollection==null || accumulatedChangesInColl.Count == 0)
             {
                 // No changes to process
                 return;
@@ -325,12 +324,12 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 // Create the counter delegate implementation
                 CounterDelegate<MigrationChunk> counterDelegate = (t, counterType, operationType, count) => IncrementDocCounter(chunk, count);
-                await MongoHelper.ProcessInsertsAsync<MigrationChunk>(chunk, targetCollection, changeStreamDocuments, counterDelegate, _log, $"Processing partition {targetCollection.CollectionNamespace}.[{chunk.Id}].");
+                await MongoHelper.ProcessInsertsAsync<MigrationChunk>(chunk, targetCollection, accumulatedChangesInColl, counterDelegate, _log, $"Processing partition {targetCollection.CollectionNamespace}.[{chunk.Id}].");
             }
             else
-                IncrementDocCounter(chunk, changeStreamDocuments.Count);
+                IncrementDocCounter(chunk, accumulatedChangesInColl.Count);
 
-            changeStreamDocuments.Clear();
+            accumulatedChangesInColl.Clear();
         }
 
         private void IncrementSkippedCounter(MigrationChunk chunk, int incrementBy = 1)
@@ -427,7 +426,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             //check if any partiton split ocuured during the copy process
             TaskResult vresult = await new RetryHelper().ExecuteTask(
-                () => CheckForPartitionSplitsAsync(mu),
+                () => CheckForPartitionSplitsAsync(mu,_job),
                 (ex, attemptCount, currentBackoff) => RUProcess_ExceptionHandler(
                     ex, attemptCount,
                     "Verification processor", ctx.DatabaseName, ctx.CollectionName, "all", currentBackoff
@@ -441,12 +440,12 @@ namespace OnlineMongoMigrationProcessor.Processors
                 return vresult;
             }
 
-            await PostCopyChangeStreamProcessor(ctx, mu);
+            await PostCopyChangeStreamProcessor(ctx, mu.Id);
 
             return TaskResult.Success;
         }
 
-        private async Task<TaskResult> CheckForPartitionSplitsAsync(MigrationUnit unit)
+        private async Task<TaskResult> CheckForPartitionSplitsAsync(MigrationUnit unit, MigrationJob job)
         {
             bool newChunksFound = false;
             List<string> intactPartitions = new List<string>();
@@ -479,7 +478,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             var stopChunks = unit.MigrationChunks
                 .Where(c => !intactPartitions.Contains(c.Id))
                 .ToList();
-            unit.SaveToDisk();
+
+            FileManager.SaveMigrationUnit(unit);
 
             foreach (var chunk in stopChunks)
             {
@@ -492,15 +492,13 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 unit.DumpComplete = false;
                 unit.RestoreComplete = false;
-                //_jobList?.Save();
 
-                unit.SaveToDisk();
-                unit.UpdateParentJob();
+                FileManager.SaveMigrationUnit(unit, _job);
                 throw new Exception("New partitions found during copy process. Please pause and re-run the job to process new partitions.");
             }
             else
             {
-                unit.SaveToDisk();
+                FileManager.SaveMigrationUnit(unit);
                 return TaskResult.Success;
             }
         }

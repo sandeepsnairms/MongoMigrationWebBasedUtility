@@ -181,8 +181,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            _job.SaveToDisk();;
-            //_jobList?.Save();
+            FileManager.SaveMigrationJob(_job);
         }
 
         /// <summary>
@@ -226,9 +225,8 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            
-            //_jobList?.Save();
-            _job.SaveToDisk();;  
+
+            FileManager.SaveMigrationJob(_job);
         }
 
         /// <summary>
@@ -244,8 +242,8 @@ namespace OnlineMongoMigrationProcessor
             
             _log.WriteLine($"Set insertion workers per collection to {newCount}. Will apply to new restore operations.");
             
-            //_jobList?.Save();
-            _job.SaveToDisk();;
+            
+            FileManager.SaveMigrationJob(_job);
         }
 
         private int CalculateOptimalConcurrency(int? configOverride, bool isDump)
@@ -340,7 +338,7 @@ namespace OnlineMongoMigrationProcessor
             if ((DateTime.UtcNow - _lastSave).TotalSeconds > SAVE_DEBOUNCE_SECONDS)
             {
                 //_jobList.Save();
-                _job.SaveToDisk();;
+                FileManager.SaveMigrationJob(_job);
                 _lastSave = DateTime.UtcNow;
             }
         }
@@ -397,7 +395,7 @@ namespace OnlineMongoMigrationProcessor
                 _jobList.ActiveRestoreProcessIds.Clear();
 
                 //_jobList.Save();
-                _job.SaveToDisk();;
+                FileManager.SaveMigrationJob(_job);
                 _log.WriteLine("All active processes terminated");
             }
         }
@@ -1031,6 +1029,7 @@ namespace OnlineMongoMigrationProcessor
 
                 var task = Task.Run(() => processExecutor.Execute(
                     _jobList, 
+                    _job,
                     mu, 
                     mu.MigrationChunks[chunkIndex], 
                     chunkIndex, 
@@ -1111,9 +1110,8 @@ namespace OnlineMongoMigrationProcessor
                 mu.RestorePercent = Math.Min(progress, 100);
                 
                 _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
-                //_jobList?.Save();
-                mu.SaveToDisk();
-                mu.UpdateParentJob();
+
+                FileManager.SaveMigrationUnit(mu, _job);
 
                 // Small delay to simulate processing time (50ms per chunk)
                 try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
@@ -1170,6 +1168,7 @@ namespace OnlineMongoMigrationProcessor
 
                 var task = Task.Run(() => processExecutor.Execute(
                     _jobList, 
+                    _job,
                     mu, 
                     mu.MigrationChunks[chunkIndex], 
                     chunkIndex, 
@@ -1219,8 +1218,8 @@ namespace OnlineMongoMigrationProcessor
                                 skipFinalize = true;
                                 _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] Documents missing, Chunk will be reprocessed", LogType.Error);
                             }
-                            mu.SaveToDisk();
-                            //_jobList?.Save();
+
+                            FileManager.SaveMigrationUnit(mu);
                         }
                         catch (Exception ex)
                         {
@@ -1235,8 +1234,7 @@ namespace OnlineMongoMigrationProcessor
                     if (!skipFinalize)
                     {
                         mu.MigrationChunks[chunkIndex].IsUploaded = true;
-                        mu.SaveToDisk();
-                        //_jobList?.Save();
+                        FileManager.SaveMigrationUnit(mu);
 
                         try { File.Delete($"{folder}\\{chunkIndex}.bson"); } catch { }
 
@@ -1252,7 +1250,7 @@ namespace OnlineMongoMigrationProcessor
                     if (mu.MigrationChunks[chunkIndex].IsUploaded == true)
                     {
                         // Already uploaded, treat as success
-                        mu.SaveToDisk();
+                        FileManager.SaveMigrationUnit(mu);
                         return Task.FromResult(TaskResult.Success);
                     }
 
@@ -1310,7 +1308,7 @@ namespace OnlineMongoMigrationProcessor
                         if (task.IsCompletedSuccessfully)
                         {
                             mu.ActualDocCount = task.Result;
-                            mu.SaveToDisk();
+                            FileManager.SaveMigrationUnit(mu);
                             _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
                         }
                     }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
@@ -1351,8 +1349,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpGap = Helper.GetMigrationUnitDocCount(mu) - downloadCount;
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
-                    mu.SaveToDisk();
-                    mu.UpdateParentJob();
+                                        
+                    FileManager.SaveMigrationUnit(mu, _job);
 
                     // BulkCopyEndedOn will be set after restore completes, not here
 
@@ -1411,7 +1409,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if ((mu.RestoreComplete && mu.DumpComplete) || (mu.DumpComplete && _job.IsSimulatedRun))
                 {
-                    FinalizeUpload(mu, key, folder, targetConnectionString, jobId);
+                    FinalizeUpload(mu.Id, key, folder, targetConnectionString, jobId);
                 }
             }
             finally
@@ -1471,8 +1469,8 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
 
-                mu.SaveToDisk();
-                mu.UpdateParentJob();
+
+                FileManager.SaveMigrationUnit(mu, _job);
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
@@ -1503,10 +1501,10 @@ namespace OnlineMongoMigrationProcessor
                                 mu.BulkCopyEndedOn = DateTime.UtcNow;
                             }                            
                         }
-                        mu.SaveToDisk();
-                        mu.UpdateParentJob();
+
+                        FileManager.SaveMigrationUnit(mu, _job);
                         _muCache.RemoveMigrationUnit(mu.Id);
-                        _job.SaveToDisk(); // Persist state
+                        FileManager.SaveMigrationJob(_job); // Persist state
                     }
                     else
                     {
@@ -1581,7 +1579,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
         // Finalization after restore completes or simulated run concludes
-        private void FinalizeUpload(MigrationUnit mu, string key, string folder, string targetConnectionString, string jobId)
+        private void FinalizeUpload(string migrationunitId, string key, string folder, string targetConnectionString, string jobId)
         {
             
 
@@ -1594,11 +1592,11 @@ namespace OnlineMongoMigrationProcessor
             catch { }
 
             // Start change stream immediately if configured
-            AddCollectionToChangeStreamQueue(mu, targetConnectionString);
+            AddCollectionToChangeStreamQueue(migrationunitId, targetConnectionString);
 
             // Remove from upload queue
             //MigrationUnitsPendingUpload.Remove(key);
-            _migrationUnitsPendingUpload.Remove(mu.Id);
+            _migrationUnitsPendingUpload.Remove(migrationunitId);
 
             // Process next pending upload if any
             if (_migrationUnitsPendingUpload.Count>0)
@@ -1622,7 +1620,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             _log.WriteLine($"Job {_job.Id} Completed");
                             _job.IsCompleted = true;
-                            _job.SaveToDisk();
+                            FileManager.SaveMigrationJob(_job);
                     }
                         else
                         {

@@ -74,9 +74,9 @@ namespace OnlineMongoMigrationProcessor
         }
 
         // Delegate methods to the underlying processor
-        public bool AddCollectionsToProcess(MigrationUnit mu, CancellationTokenSource cts)
+        public bool AddCollectionsToProcess(string  migrationUnitId, CancellationTokenSource cts)
         {
-            return _processor.AddCollectionsToProcess(mu, cts);
+            return _processor.AddCollectionsToProcess(migrationUnitId, cts);
         }
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
