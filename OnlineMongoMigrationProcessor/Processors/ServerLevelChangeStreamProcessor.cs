@@ -197,7 +197,8 @@ namespace OnlineMongoMigrationProcessor
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
                         collectionKey = change.CollectionNamespace.ToString();
-                        if (_migrationUnitsToProcess.ContainsKey(collectionKey) || _monitorAllCollections)
+                        var id = Helper.GenerateMigrationUnitId(collectionKey);
+                        if (_migrationUnitsToProcess.ContainsKey(id) || _monitorAllCollections)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             if (ExecutionCancelled) break;
@@ -226,7 +227,9 @@ namespace OnlineMongoMigrationProcessor
 
                             collectionKey = change.CollectionNamespace.ToString();
 
-                            if (_migrationUnitsToProcess.ContainsKey(collectionKey) || _monitorAllCollections)
+                            var id= Helper.GenerateMigrationUnitId(collectionKey);
+
+                            if (_migrationUnitsToProcess.ContainsKey(id) || _monitorAllCollections)
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
                                 if (ExecutionCancelled) break;
@@ -307,7 +310,8 @@ namespace OnlineMongoMigrationProcessor
                     //{
                     //    return (true, counter); // Skip changes for collections not in our job
                     //}
-                    if (!_migrationUnitsToProcess.ContainsKey(collectionKey))
+                    var id = Helper.GenerateMigrationUnitId(collectionKey);
+                    if (!_migrationUnitsToProcess.ContainsKey(id))
                     {
                         return (true, counter); // Skip changes for collections not in our job
                     }
@@ -477,7 +481,8 @@ namespace OnlineMongoMigrationProcessor
             var filter = MongoHelper.BuildFilterFromDocumentKey(bsonDoc);
 
             // Validate that the collection key is in our migration units
-            if (!_migrationUnitsToProcess.ContainsKey(collectionKey))
+            var id = Helper.GenerateMigrationUnitId(collectionKey);
+            if (!_migrationUnitsToProcess.ContainsKey(id))
             {
                 _log.WriteLine($"Collection {collectionKey} for server-level auto replay is not in migration units. Skipping replay.");
                 return true;

@@ -693,7 +693,7 @@ namespace OnlineMongoMigrationProcessor
         public static string GenerateMigrationUnitId(string databaseName, string collectionName)
         {
             using var sha256 = SHA256.Create();
-            var input = $"{databaseName}:{collectionName}";
+            var input = $"{databaseName}.{collectionName}";
             return GenerateMigrationUnitId(input);
         }
 

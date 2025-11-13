@@ -31,6 +31,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         private bool _migrationCancelled = false;
         private JobList _jobList;
         private MigrationJob? _job;
+        private string _activeJobId = string.Empty;
         private Log _log;
         private MongoClient? _sourceClient;
         private MigrationProcessor? _migrationProcessor;
@@ -72,6 +73,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public string GetRunningJobId()
         {
+            return _activeJobId;
             if (_job != null)
             {
                 if (_migrationProcessor != null && _migrationProcessor.ProcessRunning)
@@ -89,7 +91,12 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public bool IsProcessRunning(string id)
         {
-            if (id != null && _job!=null && id == _job.Id)
+            if(string.IsNullOrWhiteSpace(_activeJobId))
+                return false;
+            else
+                return _activeJobId == id;
+
+            if (id != null && _job != null && id == _job.Id)
             {
                 if (_migrationProcessor != null)
                     return _migrationProcessor.ProcessRunning;
@@ -106,6 +113,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             try
             {
+                _activeJobId=string.Empty;
                 _log.WriteLine("StopMigration called - cancelling all tokens and stopping processor", LogType.Debug);
                 _cts?.Cancel();
                 _compare_cts?.Cancel();
@@ -218,7 +226,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitBasics[0].Id);
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _jobList.SourceConnectionString[_job.Id], migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
-                FileManager.SaveJobList(_jobList);
+                FileManager.SaveMigrationJob(_job);
 
                 if (!retValue.IsCSEnabled)
                 {
@@ -737,6 +745,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(MigrationJob job, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
+            _activeJobId =job.Id;
             _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
             _job = job;
             _log.SetJob(_job); // Set job reference for log level filtering
