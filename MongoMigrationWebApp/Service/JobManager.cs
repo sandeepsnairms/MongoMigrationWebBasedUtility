@@ -1,20 +1,65 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using Microsoft.Extensions.Configuration;
 using OnlineMongoMigrationProcessor;
+using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
-using OnlineMongoMigrationProcessor.Helpers;
+using System;
+using System.Collections.Generic;
+
 
 namespace MongoMigrationWebApp.Service
 {
 
     public class JobManager
     {
-    private JobList? _jobList;
+        private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
         private string _lastJobID = string.Empty;
+
+        public JobManager(IConfiguration configuration)
+        {
+            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Resuming migration job after application restart...");
+            var migrationJobs = GetMigrations(out string errorMessage);
+
+            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 0");
+
+            if (migrationJobs != null && migrationJobs.Count == 1)
+            {
+
+                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
+                if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
+                {
+                    try
+                    {
+                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step2 : before reading config"); 
+
+
+                        var sourceConnectionString = configuration.GetConnectionString("SourceConnectionString");
+                        var targetConnectionString = configuration.GetConnectionString("TargetConnectionString");
+
+                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
+
+                        var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
+                        var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
+                        if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+                        {
+
+                            migrationJobs[0].SourceConnectionString = sourceConnectionString;
+                            migrationJobs[0].TargetConnectionString = targetConnectionString;
+                            //ViewMigration(migrationJobs[0].Id);
+                            StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                        }
+                    }
+                    catch(Exception ex)
+                    {
+                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Exception : {ex}"); //DO NOTHING
+
+                    }
+                }
+            }
+        }
 
         #region _configuration Management
 

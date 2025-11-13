@@ -19,6 +19,7 @@ namespace OnlineMongoMigrationProcessor
         protected int _concurrentProcessors;
         protected int _processorRunMaxDurationInSec;
         protected int _processorRunMinDurationInSec;
+        protected long _pendingUpdateCount = 0;
 
         protected MongoClient _sourceClient;
         protected MongoClient _targetClient;
@@ -230,16 +231,46 @@ namespace OnlineMongoMigrationProcessor
         //    }
         //}
 
-        protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
-        {
-            totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +
-                                  accumulatedChangesInColl.DocsToBeUpdated.Count +
-                                  accumulatedChangesInColl.DocsToBeDeleted.Count;
-            if (totalAccumulated >= _config?.ChangeStreamMaxCollsInBatch)
-                return true;
-            else
-                return false;
-        }
+
+        //protected async Task<bool> CheckPendingChangesQueueAsync()
+        //{
+        //    int backoffTime = 100; // initial backoff time in milliseconds
+        //    int maxBackoffTime = (_config.ChangeStreamBatchDuration / 5) * 1000; // maximum backoff time in milliseconds
+
+        //    while (true)
+        //    {
+        //        _log.WriteLine($"{_syncBackPrefix} Checking for pending changes to flush. Current count :{_pendingUpdateCount}, Limit{_config.ChangeStreamMaxDocsInBatch} ",LogType.Verbose);
+        //        // Check if the condition is met (replace with your actual condition)
+        //        if (_pendingUpdateCount < _config.ChangeStreamMaxDocsInBatch)
+        //        {
+        //            return true;
+        //        }
+
+        //        _log.ShowInMonitor($"{_syncBackPrefix} Waiting for {backoffTime}ms for pending changes to flush. Current count :{_pendingUpdateCount}, Limit{_config.ChangeStreamMaxDocsInBatch} ");
+
+        //        // Wait for the specified backoff time
+        //        await Task.Delay(backoffTime);
+
+        //        // Increase the backoff time
+        //        backoffTime = Math.Min(backoffTime * 2, maxBackoffTime);
+
+        //        if (backoffTime == maxBackoffTime)
+        //        {
+        //            throw new Exception($"{_syncBackPrefix}Maximum backoff time reached while waiting for pending updates to decrease. Current pending updates: {_pendingUpdateCount}") ;                    
+        //        }
+        //    }
+        //}
+
+        //protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
+        //{
+        //    totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +
+        //                          accumulatedChangesInColl.DocsToBeUpdated.Count +
+        //                          accumulatedChangesInColl.DocsToBeDeleted.Count;
+        //    if (totalAccumulated >= _config?.ChangeStreamMaxCollsInBatch)
+        //        return true;
+        //    else
+        //        return false;
+        //}
         protected bool ShowInMonitor(ChangeStreamDocument<BsonDocument> change, string collNameSpace, DateTime timeStamp, long counter)
         {
             DateTime now = DateTime.UtcNow;
@@ -467,6 +498,9 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
             int batchSize = 50)
         {
+            //increment pending update count
+            Interlocked.Add(ref _pendingUpdateCount, insertEvents.Count + updateEvents.Count + deleteEvents.Count);
+
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
 
@@ -514,6 +548,9 @@ namespace OnlineMongoMigrationProcessor
                     jobId,
                     _targetClient,
                     isSimulatedRun);
+
+                //decrement pending update count
+                Interlocked.Add(ref _pendingUpdateCount,(-1)*(result.TotalProcessed));
 
                 _log.WriteLine($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.TotalFailures} for {collectionKey}", LogType.Debug);
 

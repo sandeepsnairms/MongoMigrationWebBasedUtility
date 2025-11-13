@@ -17,6 +17,9 @@ namespace OnlineMongoMigrationProcessor
     {
         private Dictionary<string, AccumulatedChangesTracker> _accumulatedChangesPerCollection = new Dictionary<string, AccumulatedChangesTracker>();
 
+     
+
+
         public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
             : base(log, sourceClient, targetClient, jobList, job, config, syncBack)
         {
@@ -83,7 +86,7 @@ namespace OnlineMongoMigrationProcessor
                             // Initialize accumulated changes tracker if not present
                             if (!_accumulatedChangesPerCollection.ContainsKey(key))                              
                             {
-                                _accumulatedChangesPerCollection[key] = new AccumulatedChangesTracker();
+                                _accumulatedChangesPerCollection[key] = new AccumulatedChangesTracker(key);
                             }
 
                             collectionProcessed.Add(key);
@@ -408,7 +411,7 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task FlushPendingChangesAsync(MigrationUnit mu, IMongoCollection<BsonDocument> targetCollection, AccumulatedChangesTracker accumulatedChangesInColl)
         {
-
+            
             // Flush accumulated changes
             await BulkProcessChangesAsync(
                 mu,
@@ -418,6 +421,12 @@ namespace OnlineMongoMigrationProcessor
                 deleteEvents: accumulatedChangesInColl.DocsToBeDeleted);
 
             // Update resume token after successful flush
+            if (accumulatedChangesInColl.CollectionKey != $"{mu.DatabaseName}.{mu.CollectionName}")
+            {
+                _log.WriteLine($"{_syncBackPrefix}CollectionKey is not maching. Expected '{mu.DatabaseName}.{mu.CollectionName}' Received: '{accumulatedChangesInColl.CollectionKey}'", LogType.Error);
+                throw new Exception($"{_syncBackPrefix}CollectionKey is not maching. Expected '{mu.DatabaseName}.{mu.CollectionName}' Received: '{accumulatedChangesInColl.CollectionKey}'");
+            }
+
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
             {
                 if(accumulatedChangesInColl.LatestResumeToken=="")
@@ -744,6 +753,8 @@ namespace OnlineMongoMigrationProcessor
             string collectionKey,
             long counter)
         {
+            //await CheckPendingChangesQueueAsync();
+
             foreach (var change in cursor.ToEnumerable(cancellationToken))
             {
                 if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
@@ -775,13 +786,12 @@ namespace OnlineMongoMigrationProcessor
                     break; // Exit loop on exception, let finally block handle cleanup
                 }
 
-                // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                if (IsReadyForFlush(accumulatedChangesInColl, out int total))
-                {
-                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                }
             }
-            
+
+            //Task.Run(async () =>
+            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+            //);
+
             return counter;
         }
 
@@ -925,6 +935,7 @@ namespace OnlineMongoMigrationProcessor
                             break; // Stream closed or no more data
                         }
                         int changeCount = 0;
+                        //await CheckPendingChangesQueueAsync();
                         foreach (var change in cursor.Current)
                         {
                             changeCount++;
@@ -960,7 +971,10 @@ namespace OnlineMongoMigrationProcessor
 
                         }
 
-                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                        //Task.Run(async () =>
+                        //{
+                            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                        //});                       
 
                     }
                 }
@@ -970,7 +984,9 @@ namespace OnlineMongoMigrationProcessor
                 }
                 finally
                 {
-                   await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);                   
+
+                   await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+
                 }                
             }
             return counter;
@@ -996,7 +1012,10 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Final batch processing - Total: {totalChanges}, Inserts: {accumulatedChangesInColl.DocsToBeInserted.Count}, Updates: {accumulatedChangesInColl.DocsToBeUpdated.Count}, Deletes: {accumulatedChangesInColl.DocsToBeDeleted.Count}", LogType.Debug);
                 }
 
-                await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                //Task.Run(async () =>
+                //{
+                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                //});
 
                 mu.CSUpdatesInLastBatch = counter;
                 mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
