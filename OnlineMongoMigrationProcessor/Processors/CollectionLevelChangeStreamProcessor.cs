@@ -4,6 +4,7 @@ using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -51,7 +52,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 var totalKeys = sortedKeys.Count;
 
-
+                loops++;
                 while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
                 {
                     var tasks = new List<Task>();
@@ -77,7 +78,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Batch duration computed - Seconds: {seconds}, Collections: {batchKeys.Count}", LogType.Debug);
 
                     await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
-
+                   
                     foreach (var key in batchKeys)
                     {
                         if (_migrationUnitsToProcess.TryGetValue(key, out var unit))
@@ -100,7 +101,7 @@ namespace OnlineMongoMigrationProcessor
                                 var task = Task.Run(async () =>
                                 {
                                     try
-                                    {
+                                    {                                        
                                         await SetChangeStreamOptionandWatch(unit, true, seconds);
                                     }
                                     catch (Exception ex)
@@ -117,16 +118,14 @@ namespace OnlineMongoMigrationProcessor
                                 throw;
                             }
                         }
-                    }
-
-                    _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
+                    } 
                     
-                    // Log memory stats before batch processing
-                    //LogMemoryStats("BeforeBatch");
 
                     try
                     {
+                        _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
                         await Task.WhenAll(tasks);
+                        _log.WriteLine($"{_syncBackPrefix}Completed processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Debug);
                     }
                     catch (Exception ex)
                     {
@@ -161,17 +160,10 @@ namespace OnlineMongoMigrationProcessor
 
                     // Pause between batches to allow memory recovery and reduce CPU spikes
                     // Increased to 5000ms to address OOM issues and server CPU spikes
-                    Thread.Sleep(5000);
-                    
-                    // Force garbage collection between batches to prevent memory buildup
-                    //GC.Collect(2, GCCollectionMode.Aggressive, true, true);
-                    //GC.WaitForPendingFinalizers();
-                    
-                    // Log memory stats after batch processing and GC
-                    //LogMemoryStats("AfterBatch");
+                    Thread.Sleep(5000);                    
                 }
 
-                _log.WriteLine($"{_syncBackPrefix}Completed round {loops + 1} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...");
+                _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...");
 
                 //static collections resume tokens need adjustment
                 AdjustCusrsorTimeForStaticCollections();
@@ -303,7 +295,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             startedOn = DateTime.MinValue; // Example default value
                         }
-                        startedOn= startedOn.AddHours(mu.CSAddHours); //to adjust for expiring rsume tokens
+                        startedOn = startedOn.AddHours(mu.CSAddHours); //to adjust for expiring rsume tokens
                     }
                     else
                     {
@@ -342,7 +334,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream &&  string.IsNullOrEmpty(resumeToken) && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
+                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && string.IsNullOrEmpty(resumeToken) && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
@@ -407,7 +399,11 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{_syncBackPrefix}Error processing change stream for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
                 StopProcessing = true;
             }
+
+            _log.WriteLine($"{_syncBackPrefix}Exiting  processing change stream for {mu.DatabaseName}.{mu.CollectionName}. ", LogType.Debug);
+
         }
+
 
         private async Task FlushPendingChangesAsync(MigrationUnit mu, IMongoCollection<BsonDocument> targetCollection, AccumulatedChangesTracker accumulatedChangesInColl)
         {
@@ -509,8 +505,52 @@ namespace OnlineMongoMigrationProcessor
 
                 try
                 {
-                    var cursor = await CreateChangeStreamCursorAsync(sourceCollection, pipelineArray, options, cancellationToken, seconds, collectionKey);
-                    counter = await ProcessChangeStreamCursorAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, seconds, userFilterDoc, counter);
+                    counter = await MongoSafeTaskExecutor.ExecuteAsync(
+                    async (ct) =>
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Starting cursor creation for {collectionKey}", LogType.Verbose);
+
+                        // 1. Create cursor
+                        var cursor = await CreateChangeStreamCursorAsync(
+                            sourceCollection,
+                            pipelineArray,
+                            options,
+                            ct,
+                            collectionKey
+                        );
+
+                        if (cursor == null)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Cursor is null for {collectionKey}", LogType.Debug);
+                            return 0;
+                        }
+
+                        _log.WriteLine($"{_syncBackPrefix} Cursor created for {collectionKey}. Starting processing...", LogType.Verbose);
+
+                        // 2. Process cursor
+                        var result = await ProcessChangeStreamCursorAsync(
+                            cursor,
+                            mu,
+                            sourceCollection,
+                            targetCollection,
+                            accumulatedChangesInColl,
+                            ct,
+                            seconds,
+                            userFilterDoc,
+                            counter
+                        );
+
+                        _log.WriteLine($"{_syncBackPrefix} Finished processing for {collectionKey}.", LogType.Verbose);
+
+                        return result;
+                    },
+                    timeoutSeconds: seconds + 10, // Entire block must finish within seconds+ 10 seconds
+                    operationName: $"WatchAndProcess({collectionKey})",
+                    logAction: msg => _log.WriteLine($"{_syncBackPrefix}{msg}", LogType.Debug),
+                    externalToken: cancellationToken
+                );
+
+
                 }
                 catch (TimeoutException)
                 {
@@ -586,126 +626,158 @@ namespace OnlineMongoMigrationProcessor
         }
 
         private async Task<IChangeStreamCursor<ChangeStreamDocument<BsonDocument>>> CreateChangeStreamCursorAsync(
-            IMongoCollection<BsonDocument> sourceCollection, 
-            BsonDocument[] pipelineArray, 
-            ChangeStreamOptions options, 
+            IMongoCollection<BsonDocument> sourceCollection,
+            BsonDocument[] pipelineArray,
+            ChangeStreamOptions options,
             CancellationToken cancellationToken,
-            int seconds,
             string collectionKey)
         {
-            // Calculate watch timeout: Add 30-second buffer to batch duration to allow full processing
-            // This prevents premature timeout while waiting for MongoDB to return change stream events
-            // The buffer accounts for network latency and MongoDB internal processing time
-            int watchTimeoutSeconds = seconds + 30;
-            _log.WriteLine($"{_syncBackPrefix}Watch task timeout set to {watchTimeoutSeconds}s for {collectionKey}", LogType.Verbose);
-
-            // Create linked cancellation token source to enable independent cancellation of watch operation
-            // This allows us to cancel the watch task specifically without affecting the parent operation
-            // The linked token will be cancelled if either the parent token or our local token is cancelled
-            using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var watchToken = watchCts.Token;
-
-            // Execute the Watch() operation in a separate task to enable timeout control
-            // MongoDB's Watch() can hang indefinitely under certain conditions (network issues, server overload)
-            // Running in Task.Run() allows us to apply timeout and cancellation independently
-            var watchTask = Task.Run(() =>
+            return await Task.Run(() =>
             {
+                _log.WriteLine($"[DEBUG] Starting Watch() for {collectionKey}...", LogType.Debug);
                 try
                 {
-                    // Create internal heartbeat mechanism to detect if Watch() operation hangs
-                    // This provides additional monitoring beyond the main timeout mechanism
-                    using var heartbeatCts = new CancellationTokenSource();
-                    var heartbeatTask = Task.Run(async () =>
-                    {
-                        int elapsedSeconds = 0;
-                        // Send heartbeat every 5 seconds while watch operation is in progress
-                        while (!heartbeatCts.Token.IsCancellationRequested)
-                        {
-                            await Task.Delay(5000, heartbeatCts.Token);
-                            elapsedSeconds += 5;
-                            // Could add heartbeat logging here if needed for debugging
-                        }
-                    });
-                    
-                    // Create the actual MongoDB change stream cursor
-                    // This is the core operation that can potentially hang
-                    var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, watchToken);
-                    
-                    // Stop the heartbeat task since Watch() completed successfully
-                    heartbeatCts.Cancel();
-                    
-                    // Wait briefly for heartbeat task to complete cleanly, ignore any exceptions
-                    // The try-catch prevents heartbeat cleanup from affecting the main operation
-                    try { heartbeatTask.Wait(1000); } catch { /* Heartbeat cleanup - ignore exceptions */ }
-                    
+                    var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
+                    _log.WriteLine($"[DEBUG] Successfully created Watch cursor for {collectionKey}.", LogType.Debug);
                     return cursor;
                 }
                 catch (OperationCanceledException)
                 {
-                    // Preserve cancellation exceptions for proper timeout handling
-                    // Don't wrap this exception as it's part of normal timeout flow
+                    _log.WriteLine($"[DEBUG] Watch() cancelled for {collectionKey}.", LogType.Debug);
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    // Log other exceptions for debugging while preserving the original exception
-                    // This helps diagnose MongoDB connection issues or configuration problems
-                    _log.WriteLine($"{_syncBackPrefix}Exception in Watch Task.Run for {collectionKey}: {ex}", LogType.Error);
-                    throw; // Re-throw to maintain exception context
+                    _log.WriteLine($"[ERROR] Exception in Watch() for {collectionKey}: {ex}", LogType.Error);
+                    throw;
                 }
-            }, watchToken);
-
-            // Create competing timeout task to race against the watch operation
-            // Uses CancellationToken.None to ensure timeout isn't cancelled by parent operations
-            // This timeout is independent and will always fire after the specified duration
-            var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds), CancellationToken.None);
-            
-            // Race the watch task against the timeout - whichever completes first wins
-            // This pattern prevents indefinite blocking on MongoDB operations
-            var completedTask = await Task.WhenAny(watchTask, watchTimeoutTask);
-
-            // Handle timeout scenario: cleanup and throw timeout exception
-            if (completedTask == watchTimeoutTask)
-            {
-                _log.WriteLine($"{_syncBackPrefix}Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}, cancelling watch task", LogType.Debug);
-                
-                // Cancel the watch task to free MongoDB resources and prevent resource leaks
-                // This signals the watch operation to stop trying to create the cursor
-                watchCts.Cancel();
-                
-                // Allow brief grace period for watch task to respond to cancellation
-                // This prevents abrupt termination and allows MongoDB driver to cleanup properly
-                try
-                {
-                    // Race the watch task against a 2-second grace period
-                    await Task.WhenAny(watchTask, Task.Delay(2000));
-                }
-                catch (Exception ex)
-                {
-                    // Log but don't propagate grace period exceptions as they're not critical
-                    _log.WriteLine($"{_syncBackPrefix}Exception while cancelling watch task for {collectionKey}: {ex.Message}", LogType.Debug);
-                }
-                
-                // Throw timeout exception to signal that cursor creation failed due to timeout
-                // This allows the calling code to handle timeout appropriately (retry, skip, etc.)
-                throw new TimeoutException($"Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}");
-            }
-
-            // Watch task completed first - retrieve the result
-            try
-            {
-                // Await the watch task to get the cursor or propagate any exceptions
-                // This will throw if the watch operation failed for any reason
-                return await watchTask;
-            }
-            catch (Exception ex)
-            {
-                // Log cursor creation failure for debugging while preserving original exception
-                // This helps distinguish between timeout and other MongoDB-related failures
-                _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Verbose);
-                throw; // Re-throw to maintain exception context for caller
-            }
+            }, cancellationToken);
         }
+
+
+
+
+        //private async Task<IChangeStreamCursor<ChangeStreamDocument<BsonDocument>>> CreateChangeStreamCursorAsync(
+        //    IMongoCollection<BsonDocument> sourceCollection, 
+        //    BsonDocument[] pipelineArray, 
+        //    ChangeStreamOptions options, 
+        //    CancellationToken cancellationToken,
+        //    int seconds,
+        //    string collectionKey)
+        //{
+        //    // Calculate watch timeout: Add 30-second buffer to batch duration to allow full processing
+        //    // This prevents premature timeout while waiting for MongoDB to return change stream events
+        //    // The buffer accounts for network latency and MongoDB internal processing time
+        //    int watchTimeoutSeconds = seconds + 30;
+        //    _log.WriteLine($"{_syncBackPrefix}Watch task timeout set to {watchTimeoutSeconds}s for {collectionKey}", LogType.Verbose);
+
+        //    // Create linked cancellation token source to enable independent cancellation of watch operation
+        //    // This allows us to cancel the watch task specifically without affecting the parent operation
+        //    // The linked token will be cancelled if either the parent token or our local token is cancelled
+        //    using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        //    var watchToken = watchCts.Token;
+
+        //    // Execute the Watch() operation in a separate task to enable timeout control
+        //    // MongoDB's Watch() can hang indefinitely under certain conditions (network issues, server overload)
+        //    // Running in Task.Run() allows us to apply timeout and cancellation independently
+        //    var watchTask = Task.Run(() =>
+        //    {
+        //        try
+        //        {
+        //            // Create internal heartbeat mechanism to detect if Watch() operation hangs
+        //            // This provides additional monitoring beyond the main timeout mechanism
+        //            using var heartbeatCts = new CancellationTokenSource();
+        //            var heartbeatTask = Task.Run(async () =>
+        //            {
+        //                int elapsedSeconds = 0;
+        //                // Send heartbeat every 5 seconds while watch operation is in progress
+        //                while (!heartbeatCts.Token.IsCancellationRequested)
+        //                {
+        //                    await Task.Delay(5000, heartbeatCts.Token);
+        //                    elapsedSeconds += 5;
+        //                    // Could add heartbeat logging here if needed for debugging
+        //                }
+        //            });
+
+        //            // Create the actual MongoDB change stream cursor
+        //            // This is the core operation that can potentially hang
+        //            var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, watchToken);
+
+        //            // Stop the heartbeat task since Watch() completed successfully
+        //            heartbeatCts.Cancel();
+
+        //            // Wait briefly for heartbeat task to complete cleanly, ignore any exceptions
+        //            // The try-catch prevents heartbeat cleanup from affecting the main operation
+        //            try { heartbeatTask.Wait(1000); } catch { /* Heartbeat cleanup - ignore exceptions */ }
+
+        //            return cursor;
+        //        }
+        //        catch (OperationCanceledException)
+        //        {
+        //            // Preserve cancellation exceptions for proper timeout handling
+        //            // Don't wrap this exception as it's part of normal timeout flow
+        //            throw;
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            // Log other exceptions for debugging while preserving the original exception
+        //            // This helps diagnose MongoDB connection issues or configuration problems
+        //            _log.WriteLine($"{_syncBackPrefix}Exception in Watch Task.Run for {collectionKey}: {ex}", LogType.Error);
+        //            throw; // Re-throw to maintain exception context
+        //        }
+        //    }, watchToken);
+
+        //    // Create competing timeout task to race against the watch operation
+        //    // Uses CancellationToken.None to ensure timeout isn't cancelled by parent operations
+        //    // This timeout is independent and will always fire after the specified duration
+        //    var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds), CancellationToken.None);
+
+        //    // Race the watch task against the timeout - whichever completes first wins
+        //    // This pattern prevents indefinite blocking on MongoDB operations
+        //    var completedTask = await Task.WhenAny(watchTask, watchTimeoutTask);
+
+        //    // Handle timeout scenario: cleanup and throw timeout exception
+        //    if (completedTask == watchTimeoutTask)
+        //    {
+        //        _log.WriteLine($"{_syncBackPrefix}Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}, cancelling watch task", LogType.Debug);
+
+        //        // Cancel the watch task to free MongoDB resources and prevent resource leaks
+        //        // This signals the watch operation to stop trying to create the cursor
+        //        watchCts.Cancel();
+
+        //        // Allow brief grace period for watch task to respond to cancellation
+        //        // This prevents abrupt termination and allows MongoDB driver to cleanup properly
+        //        try
+        //        {
+        //            // Race the watch task against a 2-second grace period
+        //            await Task.WhenAny(watchTask, Task.Delay(2000));
+        //        }
+        //        catch (Exception ex)
+        //        {
+        //            // Log but don't propagate grace period exceptions as they're not critical
+        //            _log.WriteLine($"{_syncBackPrefix}Exception while cancelling watch task for {collectionKey}: {ex.Message}", LogType.Debug);
+        //        }
+
+        //        // Throw timeout exception to signal that cursor creation failed due to timeout
+        //        // This allows the calling code to handle timeout appropriately (retry, skip, etc.)
+        //        throw new TimeoutException($"Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}");
+        //    }
+
+        //    // Watch task completed first - retrieve the result
+        //    try
+        //    {
+        //        // Await the watch task to get the cursor or propagate any exceptions
+        //        // This will throw if the watch operation failed for any reason
+        //        return await watchTask;
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        // Log cursor creation failure for debugging while preserving original exception
+        //        // This helps distinguish between timeout and other MongoDB-related failures
+        //        _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Verbose);
+        //        throw; // Re-throw to maintain exception context for caller
+        //    }
+        //}
 
         private async Task<long> ProcessChangeStreamCursorAsync(
             IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,

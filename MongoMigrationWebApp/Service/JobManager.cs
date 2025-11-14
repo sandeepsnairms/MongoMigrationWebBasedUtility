@@ -39,7 +39,8 @@ namespace MongoMigrationWebApp.Service
                         var sourceConnectionString = configuration.GetConnectionString("SourceConnectionString");
                         var targetConnectionString = configuration.GetConnectionString("TargetConnectionString");
 
-                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
+                        if(sourceConnectionString != null && targetConnectionString != null)
+                            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
 
                         var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
                         var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
