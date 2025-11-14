@@ -718,7 +718,7 @@ namespace OnlineMongoMigrationProcessor
             }
             foreach (var mub in job.MigrationUnitBasics!)
             {
-                var mu = joblist.GetMigrationUnit(job.Id, mub.Id);
+                var mu = FileManager.GetMigrationUnit(job.Id, mub.Id);
                 if (mu != null)
                 {
                     unitsForMigrate.Add((MigrationUnit)mu);

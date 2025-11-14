@@ -1255,7 +1255,7 @@ else if (@_showLogBackupFile)
         var jobList = JobManager.GetJobList();
         FileManager.SaveMigrationJob(mj);
         FileManager.SaveJobList(jobList);
-        
+
 
         // Check if we should show the loading spinner
         if (mj.MigrationUnitBasics == null || mj.MigrationUnitBasics.Count == 0)
@@ -1462,24 +1462,24 @@ else if (@_showLogBackupFile)
     }
 
 
-    private void OnCollectionsUpdated(List<MigrationUnit> migrationUnits)
+    private async void OnCollectionsUpdated(List<MigrationUnit> migrationUnits)
     {
         _manageCollectionDialogOpen = false;
         var jobList = JobManager.GetJobList();
 
-        var mj2 = MigrationJob;
-        if (migrationUnits != null && mj2 != null)
+        //var mj2 = MigrationJob;
+        if (migrationUnits != null && MigrationJob != null)
         {
             // Get IDs for comparison
-            var existingIds = mj2.MigrationUnitBasics.Select(mu => mu.Id).ToHashSet();
+            var existingIds = MigrationJob.MigrationUnitBasics.Select(mu => mu.Id).ToHashSet();
             var newIds = migrationUnits.Select(mu => mu.Id).ToHashSet();
 
             //get ids that are no llonger present in newUnits
-            var delList = mj2.MigrationUnitBasics.FindAll(mu => !newIds.Contains(mu.Id));
+            var delList = MigrationJob.MigrationUnitBasics.FindAll(mu => !newIds.Contains(mu.Id));
 
             foreach (var tobDel in delList)
             {
-                tobDel.ParentJob = mj2;
+                tobDel.ParentJob = MigrationJob;
                 tobDel.Remove();
             }
 
@@ -1487,18 +1487,18 @@ else if (@_showLogBackupFile)
             // Add new units that don’t exist in existingUnits
             foreach (var mu in migrationUnits)
             {
-                if (!mj2.MigrationUnitBasics.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
+                if (!MigrationJob.MigrationUnitBasics.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
                 {                    
-                    FileManager.SaveMigrationUnit(mu, mj2);
-                    mj2.MigrationUnitBasics.Add(mu.GetBasic());
+                    FileManager.SaveMigrationUnit(mu, MigrationJob);
+                    MigrationJob.MigrationUnitBasics.Add(mu.GetBasic());
                 }
             }
 
-            mj2.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
+            MigrationJob.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
 
-            if (FileManager.SaveMigrationJob(mj2))
-                return;
-
+            FileManager.SaveMigrationJob(MigrationJob);
+            
+            Refresh(null);
         }
     }
 

@@ -99,7 +99,7 @@ namespace OnlineMongoMigrationProcessor
 
         public bool AddCollectionsToProcess(string migrationUnitId, CancellationTokenSource cts)
         {
-            var mu = _jobList.GetMigrationUnit(_job.Id,migrationUnitId);
+            var mu = FileManager.GetMigrationUnit(_job.Id,migrationUnitId);
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
             if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && !_job.AggresiveChangeStream))
             {
@@ -139,7 +139,7 @@ namespace OnlineMongoMigrationProcessor
                 _migrationUnitsToProcess.Clear();
                 foreach (var mu in _job.MigrationUnitBasics)
                 {
-                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, mu.Id);
+                    var migrationUnit = FileManager.GetMigrationUnit(_job.Id, mu.Id);
                     if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || _job.AggresiveChangeStream)))
                     {
                         _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
@@ -567,7 +567,7 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var mub in _job.MigrationUnitBasics)
                 {
-                    var migrationUnit = _jobList.GetMigrationUnit(_job.Id, mub.Id);
+                    var migrationUnit = FileManager.GetMigrationUnit(_job.Id, mub.Id);
                     if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
                     {
                         if (!migrationUnit.AggressiveCacheDeleted)

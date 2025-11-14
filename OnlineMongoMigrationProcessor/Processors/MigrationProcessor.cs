@@ -171,7 +171,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         protected Task PostCopyChangeStreamProcessor(ProcessorContext ctx, string migratioUnitId)
         {
-            var mu=_jobList.GetMigrationUnit(_job.Id, migratioUnitId);
+            var mu= FileManager.GetMigrationUnit(_job.Id, migratioUnitId);
             if (mu.RestoreComplete && mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
                 try

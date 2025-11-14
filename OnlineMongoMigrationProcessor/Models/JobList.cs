@@ -78,39 +78,6 @@ namespace OnlineMongoMigrationProcessor
             Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs");
         }        
 
-        public MigrationJob GetMigrationJob(string jobId)
-        {
-            try
-            {
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
-                string json = File.ReadAllText(filePath);
-                var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
-                return loadedObject;
-            }
-            catch (Exception ex)
-            {
-                _log.WriteLine($" Error Laoding Migration Job. Details:{ex}");
-                return null;
-            }
-        }
-
-        public MigrationUnit GetMigrationUnit(string jobId, string unitId)
-        {
-            try
-            {
-                //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
-                string json = File.ReadAllText(filePath);
-                var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
-                return loadedObject;
-            }
-            catch (Exception ex)
-            {
-                _log.WriteLine($" Error Laoding Migration Unit. Details:{ex}");
-                return null;
-            }
-        }
-
 
         public bool Persist()
         {

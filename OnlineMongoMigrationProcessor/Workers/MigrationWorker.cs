@@ -73,6 +73,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public string GetRunningJobId()
         {
+            Console.WriteLine($"GetRunningJobId :{_activeJobId}");
             return _activeJobId;
             if (_job != null)
             {
@@ -91,10 +92,16 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public bool IsProcessRunning(string id)
         {
-            if(string.IsNullOrWhiteSpace(_activeJobId))
+            if (string.IsNullOrWhiteSpace(_activeJobId))
+            {
+                Console.WriteLine( $"IsProcessRunning  IsNullOrWhiteSpace :true");
                 return false;
+            }
             else
+            {
+                Console.WriteLine($"IsProcessRunning :{_activeJobId == id}");
                 return _activeJobId == id;
+            }
 
             if (id != null && _job != null && id == _job.Id)
             {
@@ -223,7 +230,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (_job.MigrationUnitBasics == null || _job.MigrationUnitBasics.Count == 0)
                     return TaskResult.FailedAfterRetries;
 
-                var migrationUnit = _jobList.GetMigrationUnit(_job.Id, _job.MigrationUnitBasics[0].Id);
+                var migrationUnit = FileManager.GetMigrationUnit(_job.Id, _job.MigrationUnitBasics[0].Id);
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, _jobList.SourceConnectionString[_job.Id], migrationUnit);
                 _job.SourceServerVersion = retValue.Version;
                 FileManager.SaveMigrationJob(_job);
@@ -745,13 +752,15 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(MigrationJob job, string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
-            _activeJobId =job.Id;
+
+
             _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
             _job = job;
             _log.SetJob(_job); // Set job reference for log level filtering
             StopMigration(); //stop any existing
             ProcessRunning = true;
-
+            _activeJobId = job.Id;
+            Console.WriteLine($"_activeJobId: {_activeJobId}");
             _muCache = new ActiveMigrationUnitsCache(_jobList,_job);
 
             //encoding speacial characters

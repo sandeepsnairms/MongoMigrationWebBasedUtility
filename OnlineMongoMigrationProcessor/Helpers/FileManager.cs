@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace OnlineMongoMigrationProcessor.Helpers
 {
@@ -80,6 +81,37 @@ namespace OnlineMongoMigrationProcessor.Helpers
             catch
             {
                 return false;
+            }
+        }
+
+        public static MigrationJob GetMigrationJob(string jobId)
+        {
+            try
+            {
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
+                string json = File.ReadAllText(filePath);
+                var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
+                return loadedObject;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public static MigrationUnit GetMigrationUnit(string jobId, string unitId)
+        {
+            try
+            {
+                //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
+                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
+                string json = File.ReadAllText(filePath);
+                var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
+                return loadedObject;
+            }
+            catch
+            {
+                return null;
             }
         }
 

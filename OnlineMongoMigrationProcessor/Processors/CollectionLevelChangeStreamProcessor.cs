@@ -199,7 +199,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var unitId in _migrationUnitsToProcess.Keys)
                 {
-                    var mu = _jobList.GetMigrationUnit(_job.Id, unitId);
+                    var mu = FileManager.GetMigrationUnit(_job.Id, unitId);
                     mu.ParentJob = _job;
                     if (!_syncBack)
                     {

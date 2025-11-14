@@ -90,12 +90,13 @@ namespace MongoMigrationWebApp.Service
             {
                 if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
                 {
+                    Console.WriteLine($"GetMigrationJobById from MigrationWorker.CurrentJob");
                     var ret= MigrationWorker.CurrentJob;
                     if(ret != null)
                         return ret;
                 }
             }
-            var job = GetJobList().GetMigrationJob(id);
+            var job = FileManager.GetMigrationJob(id);
             return job;
         }
 
@@ -104,7 +105,7 @@ namespace MongoMigrationWebApp.Service
             List<MigrationJob> jobs = new List<MigrationJob>();
             foreach (var id in ids)
             {
-                var job = GetJobList().GetMigrationJob(id);
+                var job = FileManager.GetMigrationJob(id);
                 if (job != null)
                 {
                     jobs.Add(job);
@@ -262,7 +263,7 @@ namespace MongoMigrationWebApp.Service
             //var list = GetJobList().MigrationJobs;
             //if (list != null)
             //{
-            var migration = _jobList.GetMigrationJob(id);
+            var migration = FileManager.GetMigrationJob(id);
             if (migration != null)
             {
                 migration.IsCancelled = true;
@@ -282,6 +283,9 @@ namespace MongoMigrationWebApp.Service
 
             // Fire-and-forget: UI should not block on long-running migration
             _ = MigrationWorker?.StartMigrationAsync(job, namespacesToMigrate, jobType, trackChangeStreams);
+            
+            Console.WriteLine($"Started migration for Job ID: {job.Id}");
+
             return Task.CompletedTask;
         }
 

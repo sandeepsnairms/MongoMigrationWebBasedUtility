@@ -390,7 +390,7 @@
         return Task.FromResult(migrationJob != null);
     }
 
-    private Task<bool> OnMigrationDetailsPopUpSubmit(MigrationJob job, string sourceConnectionString, string targetConnectionString)
+    private async Task<bool> OnMigrationDetailsPopUpSubmit(MigrationJob job, string sourceConnectionString, string targetConnectionString)
     {
         _migrationDetailsPopUpOpen = false;
         if (job != null)

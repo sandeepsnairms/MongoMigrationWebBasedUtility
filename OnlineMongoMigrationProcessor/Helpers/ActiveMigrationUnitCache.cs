@@ -29,7 +29,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (mu == null)
             {
-                mu = _jobList.GetMigrationUnit(_job.Id, migrationUnitId);
+                mu = FileManager.GetMigrationUnit(_job.Id, migrationUnitId);
 
                 if (mu != null)
                     _migrationUnits.Add(mu);
