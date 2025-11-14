@@ -636,57 +636,90 @@ namespace OnlineMongoMigrationProcessor
         public static bool WriteAtomicFile(string filePath, string content, int maxRetries = 5)
         {
             string tempFile = filePath + ".tmp";
-            string backupFile = filePath + ".backup";
 
-            // Step 1: Write to temp file
-            using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            //Log($"WriteAtomicFile: Writing to {filePath}");
+
+            // Write to temp file (fully flushed)
+            using (var fs = new FileStream(
+                tempFile,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough))
+
             using (var sw = new StreamWriter(fs))
             {
                 sw.Write(content);
                 sw.Flush();
-                fs.Flush(true); // ensure fully written to disk
+                fs.Flush(true);
             }
 
-            // Step 2: Attempt atomic replace or move, with retry logic
+            //Log($"Flush complete {filePath}");
+
             int attempt = 0;
-            while (true)
+
+            while (attempt < maxRetries)
             {
                 try
                 {
+                    string backupFile = $"{filePath}.backup";
+
+                    // If original exists → back it up
                     if (File.Exists(filePath))
                     {
-                        if (File.Exists(backupFile))
-                            File.Delete(backupFile);
-
-                        File.Replace(tempFile, filePath, backupFile);
-
-                        // Clean up backup (optional)
-                        if (File.Exists(backupFile))
-                            File.Delete(backupFile);
-                    }
-                    else
-                    {
-                        File.Move(tempFile, filePath);
+                        SafeDelete(backupFile);
+                        SafeMove(filePath, backupFile);
                     }
 
-                    return true; // success
+                    // Move new file into place
+                    SafeMove(tempFile, filePath);
+
+                    // Cleanup backup (best effort)
+                    SafeDelete(backupFile);
+
+                    return true; // DONE
                 }
-                catch (IOException ex)
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
-                    // This typically happens when file is temporarily locked
                     attempt++;
+                    //Log($"{ex.GetType().Name} attempt {attempt}/{maxRetries} for {filePath}: {ex.Message}");
+
                     if (attempt >= maxRetries)
                     {
-                        // Clean up on repeated failure
-                        if (File.Exists(tempFile))
-                            File.Delete(tempFile);
-
-                        throw new IOException($"Failed to write file '{filePath}' after {maxRetries} attempts due to locking issues.", ex);
+                        SafeDelete(tempFile);
+                        throw new IOException(
+                            $"Failed to write atomic file '{filePath}' after {maxRetries} attempts.",
+                            ex);
                     }
 
-                    Thread.Sleep(1000); // wait 1 second before retrying
+                    Thread.Sleep(1000);
                 }
             }
+
+            return false;
+        }
+
+        private static void SafeDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch { }
+        }
+
+        private static void SafeMove(string src, string dest)
+        {
+            File.Move(src, dest); // keep exceptions — this is the "atomic" part
+        }
+
+        private static void Log(string message)
+        {
+            System.IO.File.AppendAllLines(
+                Helper.GetWorkingFolder() + "log_debug_log.txt",
+                new[] { $"{DateTime.Now}: {message}" });
         }
 
 
@@ -792,84 +825,3 @@ namespace OnlineMongoMigrationProcessor
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

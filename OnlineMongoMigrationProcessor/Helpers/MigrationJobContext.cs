@@ -105,7 +105,13 @@ namespace OnlineMongoMigrationProcessor.Helpers
             try
             {
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\jobdefinition.json";
-                string json = File.ReadAllText(filePath);
+                using var fs = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var sr = new StreamReader(fs);
+                string json = sr.ReadToEnd();
                 var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
                 return loadedObject;
             }
@@ -121,7 +127,13 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {
                 //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}\\{unitId}.json";
-                string json = File.ReadAllText(filePath);
+                using var fs = new FileStream(
+                    filePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+                using var sr = new StreamReader(fs);
+                string json = sr.ReadToEnd();
                 var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
                 return loadedObject;
             }

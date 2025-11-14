@@ -103,7 +103,13 @@ namespace OnlineMongoMigrationProcessor
                     }
 
                     var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
-                    string json = File.ReadAllText(filePath);
+                    using var fs = new FileStream(
+                        filePath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    using var sr = new StreamReader(fs);
+                    string json = sr.ReadToEnd();
                     var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
                     if (loadedObject != null)
                     {
