@@ -1,41 +1,57 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
+using static OnlineMongoMigrationProcessor.JobList;
 
 namespace OnlineMongoMigrationProcessor.Helpers
 {
-    public static class FileManager
+    public static class MigrationJobContext
     {
         private static readonly object _writeMULock = new object();
         private static readonly object _writeJobLock = new object();
         private static readonly object _writeJobListLock = new object();
 
-        public static bool SaveMigrationUnit(MigrationUnit unit, MigrationJob? job=null)
+
+        // Thread-safe process ID tracking for parallel execution
+        public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
+        public static List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
+
+
+        private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
+        private static readonly Dictionary<string, string> _targetConnectionStrings = new();
+
+        public static ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
+        public static ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
+
+        public static MigrationJob MigrationJob { get; set; }
+        
+        
+        public static bool SaveMigrationUnit(MigrationUnit mu)
         {
             try
             {
-                if (unit == null)
+                if (mu == null)
                     return false;
 
-                if (job != null)
-                {
-                    unit.ParentJob = job;
-                    unit.UpdateParentJob();
-                }
+                if (MigrationJob != null)
+                    mu.ParentJob = MigrationJob;
+
+                if(mu.ParentJob != null)
+                    mu.UpdateParentJob();      
 
                 lock (_writeMULock)
                 {
-                    unit.Persist();
+                    mu.Persist();
                 }
 
-                if (job != null)
+                if (MigrationJob != null)
                 {
                     lock (_writeJobLock)
                     {
-                        job.Persist();
+                        MigrationJob.Persist();
                     }
                 }
                 return true;

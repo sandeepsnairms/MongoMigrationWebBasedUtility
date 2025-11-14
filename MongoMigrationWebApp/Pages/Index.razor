@@ -401,21 +401,21 @@
 
                 // Store connection strings if provided
                 if (!string.IsNullOrEmpty(sourceConnectionString))
-                    JobManager.SourceConnectionString[job.Id] = sourceConnectionString;
+                    MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
 
                 if (!string.IsNullOrEmpty(targetConnectionString))
-                    JobManager.TargetConnectionString[job.Id] = targetConnectionString;
+                    MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
 
                 jobList.MigrationJobIds.Add(job.Id);
                 job.IsStarted = true;
 
-                FileManager.SaveMigrationJob(job);
-                FileManager.SaveJobList(jobList);
+                MigrationJobContext.SaveMigrationJob(job);
+                MigrationJobContext.SaveJobList(jobList);
                 
                 ViewMigration(job.Id);
             }
         }
         
-        return Task.FromResult(true);
+        return true;
     }
 }

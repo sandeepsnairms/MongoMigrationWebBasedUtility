@@ -8,15 +8,20 @@ namespace OnlineMongoMigrationProcessor.Helpers
 {
     public class ActiveMigrationUnitsCache
     {
-        private readonly JobList _jobList;
-        private readonly MigrationJob _job;
+        public MigrationJob CurrentlyActiveJob
+        {
+            get => MigrationJobContext.MigrationJob;
+        }
+        //private readonly JobList _jobList;
+        //private readonly MigrationJob CurrentlyActiveJob;
+
 
         private List<MigrationUnit> _migrationUnits;
-        public ActiveMigrationUnitsCache(JobList jobList, MigrationJob job)
+        public ActiveMigrationUnitsCache()
         {
-            _jobList = jobList;
-            _job = job;
-            _migrationUnits=new List<MigrationUnit>();
+            //_jobList = jobList;
+            //CurrentlyActiveJob = job;
+            _migrationUnits = new List<MigrationUnit>();
         }
 
 
@@ -29,7 +34,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (mu == null)
             {
-                mu = FileManager.GetMigrationUnit(_job.Id, migrationUnitId);
+                mu = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, migrationUnitId);
 
                 if (mu != null)
                     _migrationUnits.Add(mu);

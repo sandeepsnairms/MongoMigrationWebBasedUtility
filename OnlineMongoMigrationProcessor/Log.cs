@@ -21,7 +21,7 @@ namespace OnlineMongoMigrationProcessor
         private LogBucket _logBucket = new LogBucket();
         private List<LogObject> _verboseMessages = new List<LogObject>();
         private string _currentId = string.Empty;
-        private MigrationJob? _job;
+        private MigrationJob? CurrentlyActiveJob;
 
         private static readonly object _verboseLock = new object();
         private static readonly object _readLock = new object();
@@ -35,7 +35,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void SetJob(MigrationJob? job)
         {
-            _job = job;
+            CurrentlyActiveJob = job;
         }
 
         public void ShowInMonitor(string message, LogType LogType = LogType.Info)
@@ -116,7 +116,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 // Filter based on minimum log level - only log if the message type is at or below the minimum level
                 // Lower numeric values = more severe (Error=0, Info=1, Debug=2, Verbose=3)
-                if (_job != null && LogType > _job.MinimumLogLevel)
+                if (CurrentlyActiveJob != null && LogType > CurrentlyActiveJob.MinimumLogLevel)
                 {
                     return; // Skip this log entry
                 }

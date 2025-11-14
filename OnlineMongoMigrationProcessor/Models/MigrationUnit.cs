@@ -57,7 +57,7 @@ namespace OnlineMongoMigrationProcessor
                 var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
                 System.IO.File.Delete(filePath);
 
-                return FileManager.SaveMigrationJob(ParentJob);
+                return MigrationJobContext.SaveMigrationJob(ParentJob);
 
             }
             catch

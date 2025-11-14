@@ -27,9 +27,7 @@ namespace OnlineMongoMigrationProcessor
 
         public List<string>? MigrationJobIds { get; set; }
         
-        // Thread-safe process ID tracking for parallel execution
-        public List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
-        public List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
+        
               
 
         //private string _filePath = string.Empty;
@@ -44,14 +42,6 @@ namespace OnlineMongoMigrationProcessor
         //private readonly string[] SlotNames =
         //{ "backup_slot0.json", "backup_slot1.json", "backup_slot2.json", "backup_slot3.json" };
 
-
-        private readonly Dictionary<string, string> _sourceConnectionStrings = new();
-        private readonly Dictionary<string, string> _targetConnectionStrings = new();
-
-        [JsonIgnore]
-        public ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
-        [JsonIgnore]
-        public ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
 
         public class ConnectionAccessor
         {
@@ -119,9 +109,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         MigrationJobs = loadedObject.MigrationJobs;
 
-                        MigrationJobIds = loadedObject.MigrationJobIds;
-                        ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
-                        ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
+                        MigrationJobIds = loadedObject.MigrationJobIds;                        
 
                         errorMessage = string.Empty;
                         return true;
@@ -151,10 +139,6 @@ namespace OnlineMongoMigrationProcessor
                 if (loadedObject != null)
                 {
                    
-                    //MigrationJobIds = loadedObject.MigrationJobIds;
-                    ActiveDumpProcessIds = loadedObject.ActiveDumpProcessIds;
-                    ActiveRestoreProcessIds = loadedObject.ActiveRestoreProcessIds;
-
                     MigrationJobIds = new List<string>();
                     foreach (var mj in loadedObject.MigrationJobs)
                     {
@@ -168,7 +152,7 @@ namespace OnlineMongoMigrationProcessor
                             var mub =mu.GetBasic();
                            
                             mj.MigrationUnitBasics.Add(mub);
-                            FileManager.SaveMigrationUnit(mu, mj);
+                            MigrationJobContext.SaveMigrationUnit(mu);
                         }
                         
                         MigrationJobIds.Add(mj.Id);
@@ -483,7 +467,7 @@ namespace OnlineMongoMigrationProcessor
 
         ///// <summary>
         ///// Emergency save method when regular serialization fails due to OOM
-        ///// Saves only essential job metadata without detailed migration unit data
+        ///// Saves only essential job metadata without detailed migration mu data
         ///// </summary>
         //private bool TryEmergencySave(string filePath, out string errorMessage)
         //{
@@ -515,18 +499,18 @@ namespace OnlineMongoMigrationProcessor
         //                    IsStarted = job.IsStarted,
         //                    JobType = job.JobType,
         //                    // Create minimal migration units without detailed chunk data
-        //                    MigrationUnits = job.MigrationUnits?.Select(unit => new MigrationUnit(
-        //                        unit.DatabaseName, 
-        //                        unit.CollectionName, 
+        //                    MigrationUnits = job.MigrationUnits?.Select(mu => new MigrationUnit(
+        //                        mu.DatabaseName, 
+        //                        mu.CollectionName, 
         //                        new List<MigrationChunk>()) // Empty chunks to save memory
         //                    {
-        //                        DumpComplete = unit.DumpComplete,
-        //                        RestoreComplete = unit.RestoreComplete,
-        //                        DumpPercent = unit.DumpPercent,
-        //                        RestorePercent = unit.RestorePercent,
-        //                        SourceStatus = unit.SourceStatus,
-        //                        EstimatedDocCount = unit.EstimatedDocCount,
-        //                        ActualDocCount = unit.ActualDocCount
+        //                        DumpComplete = mu.DumpComplete,
+        //                        RestoreComplete = mu.RestoreComplete,
+        //                        DumpPercent = mu.DumpPercent,
+        //                        RestorePercent = mu.RestorePercent,
+        //                        SourceStatus = mu.SourceStatus,
+        //                        EstimatedDocCount = mu.EstimatedDocCount,
+        //                        ActualDocCount = mu.ActualDocCount
         //                    }).ToList()
         //                };
         //                minimalJobList.MigrationJobs.Add(minimalJob);

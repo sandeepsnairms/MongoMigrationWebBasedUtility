@@ -28,7 +28,11 @@ namespace OnlineMongoMigrationProcessor
     {
         private ChangeStreamProcessor _processor;
         private readonly Log _log;
-        private readonly MigrationJob _job;
+        //private readonly MigrationJob CurrentlyActiveJob;
+        public MigrationJob CurrentlyActiveJob
+        {
+            get => MigrationJobContext.MigrationJob;
+        }
 
         public bool ExecutionCancelled
         {
@@ -40,28 +44,27 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
+        public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient,  ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
         {
             _log = log;
-            _job = job;
 
             // Create the appropriate processor based on configuration
-            _processor = CreateProcessor(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack);
+            _processor = CreateProcessor(log, sourceClient, targetClient,muCache, config, syncBack);
         }
 
-        private ChangeStreamProcessor CreateProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache,  MigrationSettings config, bool syncBack)
+        private ChangeStreamProcessor CreateProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache,  MigrationSettings config, bool syncBack)
         {
             // Determine which processor to use
-            bool useServerLevel = job.ChangeStreamLevel == ChangeStreamLevel.Server && job.JobType != JobType.RUOptimizedCopy;
+            bool useServerLevel = CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
 
             if (useServerLevel)
             {
                 _log.WriteLine($"{(syncBack ? "SyncBack: " : "")}Using server-level change stream processor.");
-                return new ServerLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, muCache ,config, syncBack);
+                return new ServerLevelChangeStreamProcessor(log, sourceClient, targetClient,  muCache ,config, syncBack);
             }
             else
             {
-                if (job.ChangeStreamLevel == ChangeStreamLevel.Server && job.JobType == JobType.RUOptimizedCopy)
+                if (CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
                 {
                     _log.WriteLine($"{(syncBack ? "SyncBack: " : "")}RUOptimizedCopy jobs do not support server-level change streams. Using collection-level processor.");
                 }
@@ -69,7 +72,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _log.WriteLine($"{(syncBack ? "SyncBack: " : "")}Using collection-level change stream processor.");
                 }
-                return new CollectionLevelChangeStreamProcessor(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack);
+                return new CollectionLevelChangeStreamProcessor(log, sourceClient, targetClient, muCache, config, syncBack);
             }
         }
 

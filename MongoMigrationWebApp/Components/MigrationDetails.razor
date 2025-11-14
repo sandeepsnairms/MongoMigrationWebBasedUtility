@@ -5,6 +5,7 @@
 @using OnlineMongoMigrationProcessor
 @using OnlineMongoMigrationProcessor.Models
 @using Microsoft.JSInterop
+@using OnlineMongoMigrationProcessor.Helpers
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
     <div class="modal-dialog bg-dark">
@@ -357,8 +358,8 @@
         else
         {
             name = Job?.Name ?? string.Empty;
-            sourceConnectionString = JobManager.SourceConnectionString[Job?.Id] ?? string.Empty;
-            targetConnectionString = JobManager.TargetConnectionString[Job?.Id] ?? string.Empty;
+            sourceConnectionString = MigrationJobContext.SourceConnectionString[Job?.Id] ?? string.Empty;
+            targetConnectionString = MigrationJobContext.TargetConnectionString[Job?.Id] ?? string.Empty;
             namespaces = Job?.NameSpaces ?? string.Empty;
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;

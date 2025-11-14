@@ -268,10 +268,10 @@ namespace OnlineMongoMigrationProcessor
             return (total, inserted, skipped, failed);
         }
 
-        public static string GetChangeStreamLag(MigrationUnitBasic unit, bool isSyncBack)
+        public static string GetChangeStreamLag(MigrationUnitBasic mu, bool isSyncBack)
         {
-            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
-            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+            DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return "NA";
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
@@ -285,19 +285,19 @@ namespace OnlineMongoMigrationProcessor
                 return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
         }
 
-        public static double GetChangeStreamLagSeconds(MigrationUnit unit, bool isSyncBack)
+        public static double GetChangeStreamLagSeconds(MigrationUnit mu, bool isSyncBack)
         {
-            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
-            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+            DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return 0;
             var lag = DateTime.UtcNow - timestamp;
             return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
         }
 
-        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit unit, bool isSyncBack, double maxAcceptableLagSeconds = 30)
+        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit mu, bool isSyncBack, double maxAcceptableLagSeconds = 30)
         {
-            var lagSeconds = GetChangeStreamLagSeconds(unit, isSyncBack);
-            var lagDisplay = GetChangeStreamLag(unit, isSyncBack);
+            var lagSeconds = GetChangeStreamLagSeconds(mu, isSyncBack);
+            var lagDisplay = GetChangeStreamLag(mu, isSyncBack);
             var isHighLag = lagSeconds > maxAcceptableLagSeconds;
             
             return (lagDisplay, lagSeconds, isHighLag);
@@ -708,7 +708,7 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public static List<MigrationUnit> GetMigrationUnitsToMigrate(JobList joblist,MigrationJob job)
+        public static List<MigrationUnit> GetMigrationUnitsToMigrate(MigrationJob job)
         {
             var unitsForMigrate = new List<MigrationUnit>();
 
@@ -718,7 +718,7 @@ namespace OnlineMongoMigrationProcessor
             }
             foreach (var mub in job.MigrationUnitBasics!)
             {
-                var mu = FileManager.GetMigrationUnit(job.Id, mub.Id);
+                var mu = MigrationJobContext.GetMigrationUnit(job.Id, mub.Id);
                 if (mu != null)
                 {
                     unitsForMigrate.Add((MigrationUnit)mu);
@@ -727,7 +727,7 @@ namespace OnlineMongoMigrationProcessor
             return unitsForMigrate;
         }
 
-        public static bool IsOfflineJobCompleted(JobList jobList, MigrationJob migrationJob)
+        public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
         {
             if (migrationJob == null) return true;
 

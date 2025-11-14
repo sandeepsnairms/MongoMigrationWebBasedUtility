@@ -28,8 +28,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private void UpdateProgress(
             string segmentId,
-            JobList jobList,
-            MigrationJob job,
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -39,6 +37,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             long failureCount,
             long skippedCount)
         {
+            
             MigrationChunk migrationChunk = mu.MigrationChunks[migrationChunkIndex];
             var percent = Math.Round((double)(successCount + skippedCount) / targetCount * 100, 3);
             if (percent > 100)
@@ -66,7 +65,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
-            FileManager.SaveMigrationUnit(mu, job);
+            MigrationJobContext.SaveMigrationUnit(mu);
 
         }
 
@@ -86,9 +85,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _pageSize=pageSize;
         }
 
-        public async Task<TaskResult> CopyDocumentsAsync(
-            JobList jobList,
-            MigrationJob job,   
+        public async Task<TaskResult> CopyDocumentsAsync(            
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -161,7 +158,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 						{
 							// Directly return the awaited enum value
 							return await ProcessSegmentAsync(
-								segment, combinedFilter, jobList,job, mu,
+								segment, combinedFilter, mu,
 								migrationChunkIndex, basePercent, contribFactor,
 								targetCount, errors, cancellationToken, isWriteSimulated
 							);
@@ -183,7 +180,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 // Check for segments with missing documents after all segments are processed
                 //typically caused because of online changes, we saw in some cases some documents are missed.
-                await CheckForMissingDocumentsAsync(jobList, mu, migrationChunkIndex, filter, cancellationToken, isWriteSimulated);
+                await CheckForMissingDocumentsAsync(mu, migrationChunkIndex, filter, cancellationToken, isWriteSimulated);
             }
             catch (OperationCanceledException)
             {
@@ -228,7 +225,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 					return TaskResult.Retry;
 				}
 
-                FileManager.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu);
 
             }
             return TaskResult.Success;
@@ -245,8 +242,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> ProcessSegmentAsync(
             Segment segment,
             FilterDefinition<BsonDocument> combinedFilter,
-            JobList jobList,
-            MigrationJob job,
             MigrationUnit mu,
             int migrationChunkIndex,
             double basePercent,
@@ -269,7 +264,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
-            FileManager.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu);
 
             try
             {
@@ -381,7 +376,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     finally
                     {
-                        UpdateProgress(segmentId, jobList,job, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
+                        UpdateProgress(segmentId,  mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
                         pageIndex++;
                     }
 
@@ -404,7 +399,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
                     }
                     segment.IsProcessed = !failed;
-                    FileManager.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu);
                     return TaskResult.Success;
                 }
                 else
@@ -430,7 +425,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         }
 
         private async Task CheckForMissingDocumentsAsync(
-            JobList jobList,
             MigrationUnit mu,
             int migrationChunkIndex,
             FilterDefinition<BsonDocument> baseFilter,
@@ -481,7 +475,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex}", LogType.Warning);
             }
 
-            FileManager.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu);
         }
 
         private async Task CompareChunkDocumentsAsync(

@@ -199,10 +199,10 @@
         // Initialize pagination helper with filter predicate
         _paginationHelper = new PaginationHelper<MigrationUnit>(
             GetAllMigrationUnits(),
-            (unit, filterText) =>
-                $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+            (mu, filterText) =>
+                $"{mu.DatabaseName}.{mu.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
         );
     }
 
@@ -215,10 +215,10 @@
     {
         _paginationHelper = new PaginationHelper<MigrationUnit>(
             GetAllMigrationUnits(),
-            (unit, filterText) =>
-                $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+            (mu, filterText) =>
+                $"{mu.DatabaseName}.{mu.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
         );
     }
 

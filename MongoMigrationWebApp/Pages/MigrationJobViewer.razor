@@ -28,7 +28,7 @@
                 </button>
                 <ul class="dropdown-menu" aria-labelledby="resumeJobDropdown">
                     <li><a class="dropdown-item" @onclick="ResumeJobWithNewConnectionString">With Updated Connection Strings</a></li>
-                    @if (MigrationJob != null && !string.IsNullOrEmpty(JobManager.SourceConnectionString[MigrationJob.Id]) && !string.IsNullOrEmpty(JobManager.TargetConnectionString[MigrationJob.Id]))
+                    @if (MigrationJob != null && !string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[MigrationJob.Id]) && !string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[MigrationJob.Id]))
                     {
                         <li><a class="dropdown-item" @onclick="ResumeJobWithExistingConnectionString">With Existing Connection Strings</a></li>
                     }
@@ -142,7 +142,7 @@
 }
 @if (_manageCollectionDialogOpen && MigrationJob != null)
 {
-    <ManageCollections MigrationJob="@MigrationJob" MigrationUnits="@JobManager.GetMigrationUnits(MigrationJob)" SourceConnectionString="@JobManager.SourceConnectionString[MigrationJob.Id]" OnCollectionsUpdated="@OnCollectionsUpdated" />
+    <ManageCollections MigrationJob="@MigrationJob" MigrationUnits="@JobManager.GetMigrationUnits(MigrationJob)" SourceConnectionString="@MigrationJobContext.SourceConnectionString[MigrationJob.Id]" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
 @if (_resetChangeStreamDialogOpen && MigrationJob != null)
@@ -273,28 +273,28 @@
         <tbody>
             @if (!_isLoadingCollections && MigrationJob.MigrationUnitBasics != null && GetFilteredAndPagedUnits().Any())
             {
-                @foreach (var unit in GetFilteredAndPagedUnits())
+                @foreach (var mu in GetFilteredAndPagedUnits())
                 {
                     <tr>
                         <td>
                             <i class="bi bi-info-circle-fill me-2 collection-info-icon" title="More info" style="cursor: pointer;"
-                               @onclick="() => ShowCollectionDetails(unit)"></i>
-                            @unit.DatabaseName
+                               @onclick="() => ShowCollectionDetails(mu)"></i>
+                            @mu.DatabaseName
                         </td>
-                        <td>@unit.CollectionName</td>
+                        <td>@mu.CollectionName</td>
                         <td>
-                            @(unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
-                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
-                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%"))
+                            @(mu.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
+                                                : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (mu.DumpComplete ? "Success" : $"{mu.DumpPercent:F1}%"))
 
                         </td>
 
                         @if (MigrationJob != null && MigrationJob.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
                         {
                             <td>
-                                @(unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
-                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
-                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%"))
+                                @(mu.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
+                                                    : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (mu.RestoreComplete || mu.RestorePercent == 100 ? "Success" : $"{mu.RestorePercent:F1}%"))
 
                             </td>
                         }
@@ -303,11 +303,11 @@
                             @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || MigrationJob.ProcessingSyncBack)
                             {
                                 <td>                           
-                                   @Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack)                            
+                                   @Helper.GetChangeStreamLag(mu, MigrationJob.ProcessingSyncBack)                            
                                 </td>
                             }
                             <td>
-                                @unit.CSUpdatesInLastBatch
+                                @mu.CSUpdatesInLastBatch
                             </td>
                         }
                     </tr>
@@ -562,7 +562,7 @@ else if (@_showLogBackupFile)
     // Pagination helper
     private PaginationHelper<MigrationUnitBasic> _paginationHelper = new PaginationHelper<MigrationUnitBasic>(
         new List<MigrationUnitBasic>(),
-        (unit, filterText) => true // Simple predicate, will be updated in UpdatePaginationHelper
+        (mu, filterText) => true // Simple predicate, will be updated in UpdatePaginationHelper
     );
 
     // Cache to prevent re-sorting/filtering on every render
@@ -579,7 +579,7 @@ else if (@_showLogBackupFile)
 
     private Func<MigrationUnitBasic, string, bool> GetFilterPredicate()
     {
-        return (unit, filterText) =>
+        return (mu, filterText) =>
         {
             // Return true if any of the column values match the filter text
             if (string.IsNullOrWhiteSpace(filterText))
@@ -588,30 +588,30 @@ else if (@_showLogBackupFile)
             var searchText = filterText.ToLower();
 
             // Database Name
-            if (unit.DatabaseName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            if (mu.DatabaseName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Collection Name
-            if (unit.CollectionName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            if (mu.CollectionName.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Database.Collection combined
-            if ($"{unit.DatabaseName}.{unit.CollectionName}".Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            if ($"{mu.DatabaseName}.{mu.CollectionName}".Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Source Status / Download Status
-            var sourceStatus = unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
-                                                : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
-                                                : (unit.DumpComplete ? "Success" : $"{unit.DumpPercent:F1}%");
+            var sourceStatus = mu.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
+                                                : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                : (mu.DumpComplete ? "Success" : $"{mu.DumpPercent:F1}%");
             if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Upload/Restore Status (for DumpAndRestore jobs)
             if (MigrationJob?.JobType == OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore)
             {
-                var uploadStatus = unit.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
-                                                    : unit.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
-                                                    : (unit.RestoreComplete || unit.RestorePercent == 100 ? "Success" : $"{unit.RestorePercent:F1}%");
+                var uploadStatus = mu.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
+                                                    : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
+                                                    : (mu.RestoreComplete || mu.RestorePercent == 100 ? "Success" : $"{mu.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
@@ -619,7 +619,7 @@ else if (@_showLogBackupFile)
             // Change Stream Lag (Time Since Last Change/Sync Back)
             if (MigrationJob!=null & Helper.IsOnline(MigrationJob) == true)
             {
-                var lagText = Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack);
+                var lagText = Helper.GetChangeStreamLag(mu, MigrationJob.ProcessingSyncBack);
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
@@ -627,18 +627,18 @@ else if (@_showLogBackupFile)
             // Last Batch Changes Count
             if (Helper.IsOnline(MigrationJob) == true)
             {
-                var batchCount = unit.CSUpdatesInLastBatch.ToString();
+                var batchCount = mu.CSUpdatesInLastBatch.ToString();
                 if (batchCount.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
 
             // Collection Status text variants
-            if (unit.SourceStatus == CollectionStatus.NotFound && 
+            if (mu.SourceStatus == CollectionStatus.NotFound && 
                 ("missing".Contains(searchText) || "empty".Contains(searchText) || "notfound".Contains(searchText)))
                 return true;
 
-            if ((unit.DumpComplete && "success".Contains(searchText)) || 
-                (unit.RestoreComplete && "success".Contains(searchText)))
+            if ((mu.DumpComplete && "success".Contains(searchText)) || 
+                (mu.RestoreComplete && "success".Contains(searchText)))
                 return true;
 
             // Percentage values
@@ -647,9 +647,9 @@ else if (@_showLogBackupFile)
                 var percentText = searchText.Replace("%", "").Trim();
                 if (double.TryParse(percentText, out var searchPercent))
                 {
-                    if (Math.Abs(unit.DumpPercent - searchPercent) < 0.1)
+                    if (Math.Abs(mu.DumpPercent - searchPercent) < 0.1)
                         return true;
-                    if (Math.Abs(unit.RestorePercent - searchPercent) < 0.1)
+                    if (Math.Abs(mu.RestorePercent - searchPercent) < 0.1)
                         return true;
                 }
             }
@@ -724,34 +724,34 @@ else if (@_showLogBackupFile)
         };
     }
 
-    private object GetSortValueForStatus(MigrationUnitBasic unit, bool isUploadStatus)
+    private object GetSortValueForStatus(MigrationUnitBasic mu, bool isUploadStatus)
     {
-        if (unit.SourceStatus == CollectionStatus.NotFound)
+        if (mu.SourceStatus == CollectionStatus.NotFound)
             return "0_Skipped (404)"; // Sort skipped items first
 
-        if (unit.SourceStatus == CollectionStatus.IsView)
+        if (mu.SourceStatus == CollectionStatus.IsView)
             return "0_Skipped (VIEW)"; // Sort skipped items first
 
         if (isUploadStatus)
         {
-            if (unit.RestoreComplete || unit.RestorePercent == 100)
+            if (mu.RestoreComplete || mu.RestorePercent == 100)
                 return "2_Success"; // Sort completed items last
-            return $"1_{unit.RestorePercent:000.0}%"; // Sort by percentage in middle
+            return $"1_{mu.RestorePercent:000.0}%"; // Sort by percentage in middle
         }
         else
         {
-            if (unit.DumpComplete)
+            if (mu.DumpComplete)
                 return "2_Success"; // Sort completed items last
-            return $"1_{unit.DumpPercent:000.0}%"; // Sort by percentage in middle
+            return $"1_{mu.DumpPercent:000.0}%"; // Sort by percentage in middle
         }
     }
 
-    private DateTime GetSortValueForTimestamp(MigrationUnitBasic unit)
+    private DateTime GetSortValueForTimestamp(MigrationUnitBasic mu)
     {
         if (MigrationJob?.ProcessingSyncBack == true)
-            return unit.SyncBackCursorUtcTimestamp;
+            return mu.SyncBackCursorUtcTimestamp;
         else
-            return unit.CursorUtcTimestamp;
+            return mu.CursorUtcTimestamp;
     }
 
     #endregion
@@ -895,7 +895,7 @@ else if (@_showLogBackupFile)
     {
         // Save the job when log level changes
         var jobList = JobManager.GetJobList();
-        FileManager.SaveMigrationJob(MigrationJob);
+        MigrationJobContext.SaveMigrationJob(MigrationJob);
 
         await InvokeAsync(StateHasChanged);
     }
@@ -1000,9 +1000,9 @@ else if (@_showLogBackupFile)
 
     }
 
-    private void ShowCollectionDetails(MigrationUnitBasic unit)
+    private void ShowCollectionDetails(MigrationUnitBasic mu)
     {
-        _selectedMigrationUnit = unit;
+        _selectedMigrationUnit = mu;
         _collectionDetailsDialogOpen = true;
     }
 
@@ -1148,19 +1148,19 @@ else if (@_showLogBackupFile)
         return Task.FromResult(false);
     }
 
-    // private string GetChangeStreamLag(MigrationUnit unit, bool isSyncBack=false)
+    // private string GetChangeStreamLag(MigrationUnit mu, bool isSyncBack=false)
     // {
     //     DateTime timestamp;
     //     if (isSyncBack)
     //     {
-    //         timestamp = unit.SyncBackCursorUtcTimestamp;
+    //         timestamp = mu.SyncBackCursorUtcTimestamp;
     //     }
     //     else
     //     {
-    //         timestamp = unit.CursorUtcTimestamp;
+    //         timestamp = mu.CursorUtcTimestamp;
     //     }
 
-    //     if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+    //     if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
     //     {
     //         return "NA";
     //     }
@@ -1235,10 +1235,10 @@ else if (@_showLogBackupFile)
         }
 
         if (!string.IsNullOrEmpty(sourceConnectionString))
-            JobManager.SourceConnectionString[mj.Id] = sourceConnectionString;
+            MigrationJobContext.SourceConnectionString[mj.Id] = sourceConnectionString;
 
         if (!string.IsNullOrEmpty(targetConnectionString))
-            JobManager.TargetConnectionString[mj.Id] = targetConnectionString;
+            MigrationJobContext.TargetConnectionString[mj.Id] = targetConnectionString;
 
         // Copy connection strings from the provided job into the current migration
         // mj.SourceConnectionString = job.SourceConnectionString;
@@ -1253,8 +1253,8 @@ else if (@_showLogBackupFile)
         mj.IsStarted = true;  
 
         var jobList = JobManager.GetJobList();
-        FileManager.SaveMigrationJob(mj);
-        FileManager.SaveJobList(jobList);
+        MigrationJobContext.SaveMigrationJob(mj);
+        MigrationJobContext.SaveJobList(jobList);
 
 
         // Check if we should show the loading spinner
@@ -1266,25 +1266,25 @@ else if (@_showLogBackupFile)
 
         // Run the long task on a separate thread
         await Task.Run(() =>
-            {
-                // JobManager.DisposeLogs();
+        {
+            // JobManager.DisposeLogs();
 
-                if (mj!.ProcessingSyncBack && !mj.IsSimulatedRun)
-                {
-                    JobManager.SyncBackToSource(JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
-                    JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
-                    mj);
-                }
-                else
-                {
-                    JobManager.StartMigrationAsync(mj,
-                    JobManager.SourceConnectionString[mj.Id] ?? string.Empty,
-                    JobManager.TargetConnectionString[mj.Id] ?? string.Empty,
-                    mj.NameSpaces ?? string.Empty,
-                    mj.JobType,
-                    Helper.IsOnline(mj));
-                }
-            });
+            if (mj!.ProcessingSyncBack && !mj.IsSimulatedRun)
+            {
+                JobManager.SyncBackToSource(MigrationJobContext.SourceConnectionString[mj.Id] ?? string.Empty,
+                MigrationJobContext.TargetConnectionString[mj.Id] ?? string.Empty,
+                mj);
+            }
+            else
+            {
+                JobManager.StartMigrationAsync(mj,
+                MigrationJobContext.SourceConnectionString[mj.Id] ?? string.Empty,
+                MigrationJobContext.TargetConnectionString[mj.Id] ?? string.Empty,
+                mj.NameSpaces ?? string.Empty,
+                mj.JobType,
+                Helper.IsOnline(mj));
+            }
+        });
 
         StartAutoRefresh();
         return true;
@@ -1295,7 +1295,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
 
         // Check if SourceConnectionString is blank
-        if (string.IsNullOrWhiteSpace(JobManager.SourceConnectionString[MigrationJob.Id]))
+        if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[MigrationJob.Id]))
         {
             _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before running comparison.";
             return;
@@ -1335,7 +1335,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
 
         // Check if SourceConnectionString is blank
-        if (string.IsNullOrWhiteSpace(JobManager.SourceConnectionString[MigrationJob.Id]))
+        if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[MigrationJob.Id]))
         {
             _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before updating collections.";
             return;
@@ -1364,7 +1364,7 @@ else if (@_showLogBackupFile)
         {
             var mjResume = MigrationJob;
             if (mjResume != null)
-                await OnMigrationDetailsPopUpSubmit(mjResume,string.Empty,string.Empty);
+                await OnMigrationDetailsPopUpSubmit(mjResume, string.Empty, string.Empty);
             else
                 _migrationDetailsPopUpOpen = true;
         }
@@ -1453,10 +1453,10 @@ else if (@_showLogBackupFile)
                 migrationUnitsToReset[i].ParentJob = MigrationJob;
                 migrationUnitsToReset[i].UpdateParentJob();
 
-                FileManager.SaveMigrationUnit(migrationUnitsToReset[i]);
+                MigrationJobContext.SaveMigrationUnit(migrationUnitsToReset[i]);
             }
 
-            if (FileManager.SaveMigrationJob(MigrationJob))
+            if (MigrationJobContext.SaveMigrationJob(MigrationJob))
                 return;
         }
     }
@@ -1465,7 +1465,9 @@ else if (@_showLogBackupFile)
     private async void OnCollectionsUpdated(List<MigrationUnit> migrationUnits)
     {
         _manageCollectionDialogOpen = false;
-        var jobList = JobManager.GetJobList();
+        //var mj = MigrationJob;
+        
+        //var jobList = JobManager.GetJobList();
 
         //var mj2 = MigrationJob;
         if (migrationUnits != null && MigrationJob != null)
@@ -1488,16 +1490,16 @@ else if (@_showLogBackupFile)
             foreach (var mu in migrationUnits)
             {
                 if (!MigrationJob.MigrationUnitBasics.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
-                {                    
-                    FileManager.SaveMigrationUnit(mu, MigrationJob);
+                {
+                    MigrationJobContext.SaveMigrationUnit(mu);
                     MigrationJob.MigrationUnitBasics.Add(mu.GetBasic());
                 }
             }
 
             MigrationJob.NameSpaces = string.Join(",", migrationUnits.Select(x => x.DatabaseName + "." + x.CollectionName));
 
-            FileManager.SaveMigrationJob(MigrationJob);
-            
+            MigrationJobContext.SaveMigrationJob(MigrationJob);
+
             Refresh(null);
         }
     }
@@ -1522,7 +1524,7 @@ else if (@_showLogBackupFile)
                     mjc.IsCompleted = true;
                 }
 
-                if (FileManager.SaveMigrationJob(mjc))
+                if (MigrationJobContext.SaveMigrationJob(mjc))
                     return;
 
                 _refreshTimer = null;
@@ -1532,11 +1534,11 @@ else if (@_showLogBackupFile)
                 var mjs = MigrationJob;
                 if (mjs != null)
                 {
-                    JobManager.SyncBackToSource(JobManager.SourceConnectionString[mjs.Id] ?? string.Empty,
-                                                JobManager.TargetConnectionString[mjs.Id] ?? string.Empty,
+                    JobManager.SyncBackToSource(MigrationJobContext.SourceConnectionString[mjs.Id] ?? string.Empty,
+                                                MigrationJobContext.TargetConnectionString[mjs.Id] ?? string.Empty,
                                                 mjs);
                 }
-                if (FileManager.SaveMigrationJob(mjs))
+                if (MigrationJobContext.SaveMigrationJob(mjs))
                     return;
             }
             else if( result.DiaLogType == YesNoDialog.Category.RunComparisonNot)
@@ -1546,7 +1548,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr.RunComparison = true;
                 }
-                if (FileManager.SaveMigrationJob(mjr))
+                if (MigrationJobContext.SaveMigrationJob(mjr))
                     return;
             }
 
@@ -1560,7 +1562,7 @@ else if (@_showLogBackupFile)
                 {
                     mjr2.RunComparison = false;
                 }
-                if (FileManager.SaveMigrationJob(mjr2))
+                if (MigrationJobContext.SaveMigrationJob(mjr2))
                     return;
             }
         }
@@ -1571,7 +1573,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
         JobManager.StopMigration();
         var jobList = JobManager.GetJobList();
-        if (FileManager.SaveMigrationJob(MigrationJob))
+        if (MigrationJobContext.SaveMigrationJob(MigrationJob))
             return;
         _refreshTimer = null;
     }
@@ -1582,7 +1584,7 @@ else if (@_showLogBackupFile)
         JobManager.ControlledPauseMigration();
 
         var jobList = JobManager.GetJobList();
-        if (FileManager.SaveMigrationJob(MigrationJob))
+        if (MigrationJobContext.SaveMigrationJob(MigrationJob))
             return;
     }
 
@@ -1673,7 +1675,7 @@ else if (@_showLogBackupFile)
     {
         var mj = MigrationJob;
         if (IsResumeEnabled() && NoOtherActiveJobs() && mj != null && mj.IsStarted &&
-            (!string.IsNullOrEmpty(JobManager.SourceConnectionString[mj.Id]) || !string.IsNullOrEmpty(JobManager.TargetConnectionString[mj.Id])))
+            (!string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id]) || !string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])))
         {
             return true;
         }

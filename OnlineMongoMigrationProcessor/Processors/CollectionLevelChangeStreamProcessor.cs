@@ -17,8 +17,8 @@ namespace OnlineMongoMigrationProcessor
     {
         private Dictionary<string, AccumulatedChangesTracker> _accumulatedChangesPerCollection = new Dictionary<string, AccumulatedChangesTracker>();
 
-        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
-            : base(log, sourceClient, targetClient, jobList, job, muCache, config, syncBack)
+        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
+            : base(log, sourceClient, targetClient, muCache, config, syncBack)
         {
         }
 
@@ -27,7 +27,7 @@ namespace OnlineMongoMigrationProcessor
             _log.ShowInMonitor($"{_syncBackPrefix}ProcessChangeStreamsAsync started. Token cancelled: {token.IsCancellationRequested}, ExecutionCancelled: {ExecutionCancelled}");
             _log.WriteLine($"{_syncBackPrefix}ProcessChangeStreamsAsync initialization - ConcurrentProcessors: {_concurrentProcessors}, ProcessorRunMaxDuration: {_processorRunMaxDurationInSec}s, MigrationUnits: {_migrationUnitsToProcess.Count}", LogType.Verbose);
 
-            bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
+            bool isVCore = (_syncBack ? CurrentlyActiveJob.TargetEndpoint : CurrentlyActiveJob.SourceEndpoint)
                 .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
             _log.WriteLine($"{_syncBackPrefix}Environment detection - IsVCore: {isVCore}, SyncBack: {_syncBack}", LogType.Debug);
 
@@ -57,7 +57,7 @@ namespace OnlineMongoMigrationProcessor
                     // Determine the batch
                     var batchKeys = sortedKeys.Skip(index).Take(_concurrentProcessors).ToList();
                     //var batchUnits = batchKeys
-                    //    .Select(k => _migrationUnitsToProcess.TryGetValue(k, out var unit) ? unit : null)
+                    //    .Select(k => _migrationUnitsToProcess.TryGetValue(k, out var mu) ? mu : null)
                     //    .Where(u => u != null)
                     //    .ToList();
 
@@ -83,9 +83,9 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (_migrationUnitsToProcess.ContainsKey(key))
                         {
-                            var unit = _muCache.GetMigrationUnit(key);
+                            var mu = _muCache.GetMigrationUnit(key);
                             
-                            var collectionKey = $"{unit.DatabaseName}.{unit.CollectionName}";
+                            var collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
                             collectionProcessed.Add(collectionKey);
                             // Initialize accumulated changes tracker if not present
                             if (!_accumulatedChangesPerCollection.ContainsKey(key))
@@ -93,7 +93,7 @@ namespace OnlineMongoMigrationProcessor
                                 _accumulatedChangesPerCollection[key] = new AccumulatedChangesTracker();
                             }
 
-                            unit.CSLastBatchDurationSeconds = seconds; // Store the factor for each unit
+                            mu.CSLastBatchDurationSeconds = seconds; // Store the factor for each mu
                             // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside SetChangeStreamOptionandWatch
                             string collectionName = key; // Capture for closure
 
@@ -104,7 +104,7 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     try
                                     {
-                                        await SetChangeStreamOptionandWatch(unit, true, seconds);
+                                        await SetChangeStreamOptionandWatch(mu, true, seconds);
                                     }
                                     catch (Exception ex)
                                     {
@@ -199,8 +199,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var unitId in _migrationUnitsToProcess.Keys)
                 {
-                    var mu = FileManager.GetMigrationUnit(_job.Id, unitId);
-                    mu.ParentJob = _job;
+                    var mu = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, unitId);
+                    mu.ParentJob = CurrentlyActiveJob;
                     if (!_syncBack)
                     {
                         TimeSpan gap;
@@ -232,7 +232,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    FileManager.SaveMigrationUnit(mu, _job);
+                    MigrationJobContext.SaveMigrationUnit(mu);
                 }
                 return true;
             }
@@ -266,7 +266,7 @@ namespace OnlineMongoMigrationProcessor
                     sourceDb = _sourceClient.GetDatabase(databaseName);
                     sourceCollection = sourceDb.GetCollection<BsonDocument>(collectionName);
 
-                    if (!_job.IsSimulatedRun)
+                    if (!CurrentlyActiveJob.IsSimulatedRun)
                     {
                         targetDb = _targetClient.GetDatabase(databaseName);
                         targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
@@ -305,7 +305,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         timeStamp = mu.CursorUtcTimestamp.AddHours(mu.CSAddHours);//to adjust for expiring rsume tokens
                         resumeToken = mu.ResumeToken ?? string.Empty;
-                        version = _job.SourceServerVersion;
+                        version = CurrentlyActiveJob.SourceServerVersion;
                         if (mu.ChangeStreamStartedOn.HasValue)
                         {
                             startedOn = mu.ChangeStreamStartedOn.Value;
@@ -332,7 +332,7 @@ namespace OnlineMongoMigrationProcessor
                         startedOn = startedOn.AddHours(mu.SyncBackAddHours); //to adjust for expiring rsume tokens
                     }
 
-                    if (!mu.InitialDocumenReplayed && !_job.IsSimulatedRun && !_job.AggresiveChangeStream)
+                    if (!mu.InitialDocumenReplayed && !CurrentlyActiveJob.IsSimulatedRun && !CurrentlyActiveJob.AggresiveChangeStream)
                     {
                         // Guard targetCollection for non-simulated runs
                         if (targetCollection == null)
@@ -344,7 +344,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             // If the first change was replayed, we can proceed
                             mu.InitialDocumenReplayed = true;
-                            FileManager.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu);
                         }
                         else
                         {
@@ -353,7 +353,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && string.IsNullOrEmpty(resumeToken) && !(_job.JobType == JobType.RUOptimizedCopy && !_job.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
+                    if (timeStamp > DateTime.MinValue && !mu.ResetChangeStream && string.IsNullOrEmpty(resumeToken) && !(CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
@@ -382,7 +382,7 @@ namespace OnlineMongoMigrationProcessor
 
                         mu.ResetChangeStream = false; //reset the start time after setting resume token
 
-                        FileManager.SaveMigrationUnit(mu, _job);
+                        MigrationJobContext.SaveMigrationUnit(mu);
                     }
 
                     using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -391,7 +391,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.ShowInMonitor($"{_syncBackPrefix}Monitoring change stream with new batch for {sourceCollection!.CollectionNamespace}. Batch Duration {seconds} seconds");
 
                     // In simulated runs, use source collection as a placeholder to avoid null target warnings
-                    if (_job.IsSimulatedRun && targetCollection == null)
+                    if (CurrentlyActiveJob.IsSimulatedRun && targetCollection == null)
                     {
                         targetCollection = sourceCollection;
                     }
@@ -492,7 +492,7 @@ namespace OnlineMongoMigrationProcessor
             mu.CSUpdatesInLastBatch = 0;
             mu.CSNormalizedUpdatesInLastBatch = 0;
 
-            FileManager.SaveMigrationUnit(mu, _job);
+            MigrationJobContext.SaveMigrationUnit(mu);
             
 
         }
@@ -502,7 +502,7 @@ namespace OnlineMongoMigrationProcessor
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}WatchCollection started for {collectionKey} - Duration: {seconds}s", LogType.Verbose);
 
-            bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
+            bool isVCore = (_syncBack ? CurrentlyActiveJob.TargetEndpoint : CurrentlyActiveJob.SourceEndpoint)
                 .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
 
             long counter = 0;
@@ -574,7 +574,7 @@ namespace OnlineMongoMigrationProcessor
         private BsonDocument[] CreateChangeStreamPipeline()
         {
             List<BsonDocument> pipeline;
-            if (_job.JobType == JobType.RUOptimizedCopy)
+            if (CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
             {
                 pipeline = new List<BsonDocument>()
                 {
@@ -742,7 +742,7 @@ namespace OnlineMongoMigrationProcessor
                 string lastProcessedToken = string.Empty;
                 _log.WriteLine($"{_syncBackPrefix}Change stream cursor created successfully for {collectionKey}, starting enumeration", LogType.Verbose);
 
-                if (_job.SourceServerVersion.StartsWith("3"))
+                if (CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
                     counter = await ProcessMongoDB3xChangeStreamAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, userFilterDoc, collectionKey, counter);
                 }
@@ -783,7 +783,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
  
-                    FileManager.SaveMigrationUnit(mu, _job);
+                    MigrationJobContext.SaveMigrationUnit(mu);
                     return counter; // Skip processing if the event has already been processed
                 }
 
@@ -879,7 +879,7 @@ namespace OnlineMongoMigrationProcessor
                     _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
                     lastProcessedToken = token2 ?? string.Empty;
 
-                    if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
+                    if (lastProcessedToken == change.ResumeToken.ToJson() && CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy)
                     {
                         mu.CSUpdatesInLastBatch = 0;
                         mu.CSNormalizedUpdatesInLastBatch = 0;
@@ -963,12 +963,12 @@ namespace OnlineMongoMigrationProcessor
                             _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
                             lastProcessedToken = token2 ?? string.Empty;
 
-                            if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
+                            if (lastProcessedToken == change.ResumeToken.ToJson() && CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy)
                             {
                                 mu.CSUpdatesInLastBatch = 0;
                                 mu.CSNormalizedUpdatesInLastBatch = 0;
 
-                                FileManager.SaveMigrationUnit(mu, _job);
+                                MigrationJobContext.SaveMigrationUnit(mu);
                                 return counter; // Skip processing if the event has already been processed
                             }
 
@@ -1027,7 +1027,7 @@ namespace OnlineMongoMigrationProcessor
                 mu.CSUpdatesInLastBatch = counter;
                 mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
 
-                FileManager.SaveMigrationUnit(mu, _job);
+                MigrationJobContext.SaveMigrationUnit(mu);
                 _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
                 
 
@@ -1135,11 +1135,11 @@ namespace OnlineMongoMigrationProcessor
 
                 DateTime timeStamp = DateTime.MinValue;
 
-                if (!_job.SourceServerVersion.StartsWith("3") && change.ClusterTime != null)
+                if (!CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.ClusterTime != null)
                 {
                     timeStamp = MongoHelper.BsonTimestampToUtcDateTime(change.ClusterTime); // Convert BsonTimestamp to DateTime
                 }
-                else if (!_job.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for 4.0 and above
+                else if (!CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.WallTime != null) //for 4.0 and above
                 {
                     timeStamp = change.WallTime.Value; // Use WallTime for 4.0 and above
                 }
@@ -1148,7 +1148,7 @@ namespace OnlineMongoMigrationProcessor
                 bool shouldUpdateUI = ShowInMonitor(change, collNameSpace, timeStamp, counter);
 
 
-                ProcessChange(change, targetCollection, collNameSpace, accumulatedChangesInColl, _job.IsSimulatedRun, mu);
+                ProcessChange(change, targetCollection, collNameSpace, accumulatedChangesInColl, CurrentlyActiveJob.IsSimulatedRun, mu);
 
                 // NOTE: Resume token and timestamp are NOT persisted here anymore
                 // They will only be persisted after successful batch write completion

@@ -11,8 +11,8 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-        public CopyProcessor(Log log, JobList jobList, MigrationJob job,ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
-            : base(log, jobList, job, muCache, sourceClient, config)
+        public CopyProcessor(Log log,ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+            : base(log,  muCache, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -110,12 +110,12 @@ namespace OnlineMongoMigrationProcessor
             //checkCounts(ctx.Collection, mu.MigrationChunks[chunkIndex], MongoHelper.GetFilterDoc(mu.UserFilter));
 
 
-            if (_targetClient == null && !_job.IsSimulatedRun)
+            if (_targetClient == null && !CurrentlyActiveJob.IsSimulatedRun)
                 _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
             var documentCopier = new DocumentCopyWorker();
             documentCopier.Initialize(_log, _targetClient!, ctx.Collection, ctx.DatabaseName, ctx.CollectionName, _config.MongoCopyPageSize);
-            var result = await documentCopier.CopyDocumentsAsync(_jobList,_job, mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, _job.IsSimulatedRun);
+            var result = await documentCopier.CopyDocumentsAsync(mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, CurrentlyActiveJob.IsSimulatedRun);
 
             if (result == TaskResult.Success)
             {
@@ -125,7 +125,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
                 }
 
-                FileManager.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu);
                 return TaskResult.Success;
             }
             else if(result == TaskResult.Canceled)
@@ -146,7 +146,7 @@ namespace OnlineMongoMigrationProcessor
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             var mu=_muCache.GetMigrationUnit(migrationUnitId);
-            mu.ParentJob= _job;
+            mu.ParentJob= CurrentlyActiveJob;
             ProcessRunning = true;
             ProcessorContext ctx;
 
@@ -226,7 +226,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.RestoreComplete = true;
 
 
-                    FileManager.SaveMigrationUnit(mu, _job);
+                    MigrationJobContext.SaveMigrationUnit(mu);
 
                     _muCache.RemoveMigrationUnit(mu.Id);
                 }
