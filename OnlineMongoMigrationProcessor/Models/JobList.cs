@@ -87,51 +87,81 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public bool LoadJobList(out string errorMessage,bool loadBackup = false)
+        public bool LoadJobList(out string errorMessage)
         {
-            try
+            errorMessage = string.Empty;
+
+            lock (_loadLock)
             {
-                lock (_loadLock)
+
+                string oldFormatPath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
+                string newFormatPath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
+
+                try
                 {
-                    var old_filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\list.json";
-                    if (System.IO.File.Exists(old_filePath))
+                    int max = 5;
+                    if (!File.Exists(oldFormatPath) && !File.Exists(newFormatPath))
                     {
-                        if (ConvertToNewFormat(old_filePath, out errorMessage))
-                        {
-                            System.IO.File.Move(old_filePath, old_filePath + ".bak");
-                        }
-                    }
-
-                    var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\joblist.json";
-                    using var fs = new FileStream(
-                        filePath,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete);
-                    using var sr = new StreamReader(fs);
-                    string json = sr.ReadToEnd();
-                    var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                    if (loadedObject != null)
-                    {
-                        MigrationJobs = loadedObject.MigrationJobs;
-
-                        MigrationJobIds = loadedObject.MigrationJobIds;                        
-
-                        errorMessage = string.Empty;
-                        return true;
+                        errorMessage = "No suitable file found.";
+                        return false;
                     }
                     else
                     {
-                        errorMessage = "Error Loading Job List";
-                        return false;
+                        for (int i = 0; i < max; i++) 
+                        {
+                            try
+                            {
+                                //convert old format to new format
+                                if (File.Exists(oldFormatPath))
+                                {
+                                    if (ConvertToNewFormat(oldFormatPath, out errorMessage))
+                                    {
+                                        File.Move(oldFormatPath, oldFormatPath + ".bak");
+                                    }
+                                }
+
+                                //load new format
+                                if (!File.Exists(newFormatPath))
+                                {
+                                    errorMessage = "No suitable file in new format found.";
+                                    return false;
+                                }
+
+                                using var fs = new FileStream(
+                                    newFormatPath,
+                                    FileMode.Open,
+                                    FileAccess.Read,
+                                    FileShare.ReadWrite | FileShare.Delete);
+                                using var sr = new StreamReader(fs);
+                                string json = sr.ReadToEnd();
+                                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                                if (loadedObject != null)
+                                {
+                                    MigrationJobs = loadedObject.MigrationJobs;
+                                    MigrationJobIds = loadedObject.MigrationJobIds;
+                                }
+
+                                if (MigrationJobs != null)
+                                {
+                                    errorMessage = string.Empty;
+                                    return true;
+                                }
+                            }
+                            catch (JsonException)
+                            {
+                                // If deserialization fails, wait and retry
+                                Thread.Sleep(100); // Wait for 100 milliseconds before retrying
+                            }
+                        }
+                        errorMessage = $"Error loading migration jobs.";
+                        return false;                        
                     }
+                }                   
+                catch (Exception ex)
+                {
+                    errorMessage = $"Error loading migration jobs: {ex}";
+                    return false;
                 }
-            }
-            catch (Exception ex)
-            {
-                errorMessage = $"Error loading job list: {ex}";
-                _log?.WriteLine(errorMessage, LogType.Error);
-                return false;
             }
 
         }

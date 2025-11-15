@@ -116,27 +116,29 @@ namespace MongoMigrationWebApp.Service
 
 
 
-        public List<string> GetMigrationIds(out string errorMessage, bool force = false)
+        public List<string> GetMigrationIds(out string errorMessage)
         {
             errorMessage = string.Empty;
             bool isSucess = true;
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                isSucess = _jobList.LoadJobList(out errorMessage, false);
+                isSucess = _jobList.LoadJobList(out errorMessage);          
             }
             else
             {
                 errorMessage = string.Empty;
                 return _jobList.MigrationJobIds ?? new List<string>();
             }
-            // Ensure we always return a non-null list
+
+            // create a empty list if no file found
             if (_jobList.MigrationJobIds == null)
             {
                 _jobList.MigrationJobIds = new List<string>();
-                MigrationJobContext.SaveJobList(_jobList);
-
+                if(isSucess)
+                    MigrationJobContext.SaveJobList(_jobList);
             }
+
             return _jobList.MigrationJobIds;
         }
 

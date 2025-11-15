@@ -160,7 +160,7 @@
             return;
 
         _loadingComplete = false;
-        migrationJobs = GetMigrationsFromManager(false, true);
+        migrationJobs = GetMigrationsFromManager(false);
         _loadingComplete = true;
     }
 #pragma warning restore CS1998
@@ -258,18 +258,18 @@
 
     private List<MigrationJob> GetMigrations()
     {
-        return GetMigrationsFromManager(true, true);
+        return GetMigrationsFromManager(true);
     }
 
-    private List<MigrationJob> GetMigrationsFromManager(bool silent, bool force = false)
+    private List<MigrationJob> GetMigrationsFromManager(bool silent)
     {
-        var ids = JobManager.GetMigrationIds(out string errorMessage, force);
+        var ids = JobManager.GetMigrationIds(out string errorMessage);
         var result = JobManager.GetMigrationJobs(ids);
         if(!string.IsNullOrEmpty(errorMessage) || result==null)
         {
             if (!silent)
             {
-                _message = "Unable to load job details at the moment. Please wait a while, and if the issue continues, you can recover the jobs from the backup.";
+                _message = "Unable to load job details at the moment. Please wait a while and try again.";
                 _messageDialogOpen = true;            
             }
             return new List<MigrationJob>();
