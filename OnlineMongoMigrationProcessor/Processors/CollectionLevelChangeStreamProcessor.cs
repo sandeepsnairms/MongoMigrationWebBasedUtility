@@ -232,7 +232,7 @@ namespace OnlineMongoMigrationProcessor
                         }
                     }
 
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,false);
                 }
                 return true;
             }
@@ -344,7 +344,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             // If the first change was replayed, we can proceed
                             mu.InitialDocumenReplayed = true;
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                         }
                         else
                         {
@@ -382,7 +382,7 @@ namespace OnlineMongoMigrationProcessor
 
                         mu.ResetChangeStream = false; //reset the start time after setting resume token
 
-                        MigrationJobContext.SaveMigrationUnit(mu);
+                        MigrationJobContext.SaveMigrationUnit(mu,true);
                     }
 
                     using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -492,7 +492,7 @@ namespace OnlineMongoMigrationProcessor
             mu.CSUpdatesInLastBatch = 0;
             mu.CSNormalizedUpdatesInLastBatch = 0;
 
-            MigrationJobContext.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu,true);
             
 
         }
@@ -783,7 +783,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSUpdatesInLastBatch = 0;
                     mu.CSNormalizedUpdatesInLastBatch = 0;
  
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,true);
                     return counter; // Skip processing if the event has already been processed
                 }
 
@@ -968,7 +968,7 @@ namespace OnlineMongoMigrationProcessor
                                 mu.CSUpdatesInLastBatch = 0;
                                 mu.CSNormalizedUpdatesInLastBatch = 0;
 
-                                MigrationJobContext.SaveMigrationUnit(mu);
+                                MigrationJobContext.SaveMigrationUnit(mu,true);
                                 return counter; // Skip processing if the event has already been processed
                             }
 
@@ -1027,7 +1027,7 @@ namespace OnlineMongoMigrationProcessor
                 mu.CSUpdatesInLastBatch = counter;
                 mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,true);
                 _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
                 
 

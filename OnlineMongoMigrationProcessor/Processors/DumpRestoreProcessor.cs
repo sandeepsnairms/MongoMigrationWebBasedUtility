@@ -1109,7 +1109,7 @@ namespace OnlineMongoMigrationProcessor
                 
                 _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,false);
 
                 // Small delay to simulate processing time (50ms per chunk)
                 try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
@@ -1215,7 +1215,7 @@ namespace OnlineMongoMigrationProcessor
                                 _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] Documents missing, Chunk will be reprocessed", LogType.Error);
                             }
 
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                         }
                         catch (Exception ex)
                         {
@@ -1230,7 +1230,7 @@ namespace OnlineMongoMigrationProcessor
                     if (!skipFinalize)
                     {
                         mu.MigrationChunks[chunkIndex].IsUploaded = true;
-                        MigrationJobContext.SaveMigrationUnit(mu);
+                        MigrationJobContext.SaveMigrationUnit(mu,false);
 
                         try { File.Delete($"{folder}\\{chunkIndex}.bson"); } catch { }
 
@@ -1246,7 +1246,7 @@ namespace OnlineMongoMigrationProcessor
                     if (mu.MigrationChunks[chunkIndex].IsUploaded == true)
                     {
                         // Already uploaded, treat as success
-                        MigrationJobContext.SaveMigrationUnit(mu);
+                        MigrationJobContext.SaveMigrationUnit(mu,false);
                         return Task.FromResult(TaskResult.Success);
                     }
 
@@ -1304,7 +1304,7 @@ namespace OnlineMongoMigrationProcessor
                         if (task.IsCompletedSuccessfully)
                         {
                             mu.ActualDocCount = task.Result;
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                             _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
                         }
                     }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
@@ -1346,7 +1346,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
                                         
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,true);
 
                     // BulkCopyEndedOn will be set after restore completes, not here
 
@@ -1466,7 +1466,7 @@ namespace OnlineMongoMigrationProcessor
                 }
 
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,true);
                 _muCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
@@ -1498,7 +1498,7 @@ namespace OnlineMongoMigrationProcessor
                             }                            
                         }
 
-                        MigrationJobContext.SaveMigrationUnit(mu);
+                        MigrationJobContext.SaveMigrationUnit(mu,true);
                         _muCache.RemoveMigrationUnit(mu.Id);
                         MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob); // Persist state
                     }

@@ -1453,7 +1453,7 @@ else if (@_showLogBackupFile)
                 migrationUnitsToReset[i].ParentJob = MigrationJob;
                 migrationUnitsToReset[i].UpdateParentJob();
 
-                MigrationJobContext.SaveMigrationUnit(migrationUnitsToReset[i]);
+                MigrationJobContext.SaveMigrationUnit(migrationUnitsToReset[i],false);
             }
 
             if (MigrationJobContext.SaveMigrationJob(MigrationJob))
@@ -1491,7 +1491,7 @@ else if (@_showLogBackupFile)
             {
                 if (!MigrationJob.MigrationUnitBasics.Any(x => x.DatabaseName == mu.DatabaseName && x.CollectionName == mu.CollectionName))
                 {
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,false);
                     MigrationJob.MigrationUnitBasics.Add(mu.GetBasic());
                 }
             }

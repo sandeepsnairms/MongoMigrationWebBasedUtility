@@ -29,7 +29,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         public static MigrationJob MigrationJob { get; set; }
         
         
-        public static bool SaveMigrationUnit(MigrationUnit mu)
+        public static bool SaveMigrationUnit(MigrationUnit mu, bool updateParent)
         {
             try
             {
@@ -39,7 +39,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 if (MigrationJob != null)
                     mu.ParentJob = MigrationJob;
 
-                if(mu.ParentJob != null)
+                if(mu.ParentJob != null && updateParent)
                     mu.UpdateParentJob();      
 
                 lock (_writeMULock)
@@ -47,7 +47,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     mu.Persist();
                 }
 
-                if (MigrationJob != null)
+                if (MigrationJob != null && updateParent)
                 {
                     lock (_writeJobLock)
                     {

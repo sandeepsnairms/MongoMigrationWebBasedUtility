@@ -158,11 +158,12 @@ namespace OnlineMongoMigrationProcessor
                             var mub =mu.GetBasic();
                            
                             mj.MigrationUnitBasics.Add(mub);
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                         }
                         
                         MigrationJobIds.Add(mj.Id);
-                    }                   
+                        MigrationJobContext.SaveMigrationJob(mj);
+                    }                    
                    
                 }
                 errorMessage= string.Empty; 

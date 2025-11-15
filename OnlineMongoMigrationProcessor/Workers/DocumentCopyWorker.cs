@@ -65,7 +65,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             migrationChunk.RestoredSuccessDocCount = successCount + skippedCount;
             migrationChunk.RestoredFailedDocCount = failureCount;
 
-            MigrationJobContext.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu,true);
 
         }
 
@@ -225,7 +225,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 					return TaskResult.Retry;
 				}
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,false);
 
             }
             return TaskResult.Success;
@@ -264,7 +264,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
-            MigrationJobContext.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu,false);
 
             try
             {
@@ -399,7 +399,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         _log.WriteLine($"Document copy completed for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] with {_successCount} documents copied.", LogType.Debug);
                     }
                     segment.IsProcessed = !failed;
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,false);
                     return TaskResult.Success;
                 }
                 else
@@ -475,7 +475,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Error while chunk-level comparison for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]: {ex}", LogType.Warning);
             }
 
-            MigrationJobContext.SaveMigrationUnit(mu);
+            MigrationJobContext.SaveMigrationUnit(mu,false);
         }
 
         private async Task CompareChunkDocumentsAsync(

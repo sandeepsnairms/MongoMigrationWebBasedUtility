@@ -453,7 +453,7 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
 
-            MigrationJobContext.SaveMigrationUnit(migrationUnit);
+            MigrationJobContext.SaveMigrationUnit(migrationUnit,false);
         }
 
         // Server-level equivalent of AutoReplayFirstChangeInResumeToken

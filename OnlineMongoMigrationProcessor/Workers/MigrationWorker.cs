@@ -448,7 +448,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     mu.SourceStatus = CollectionStatus.OK;
 
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,true);
 
                     if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
                     {
@@ -462,7 +462,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             long count = MongoHelper.GetActualDocumentCount(coll, mu);
                             mu.ActualDocCount = count;
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                         }, _cts);
 
                     }
@@ -512,7 +512,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             {
                                 return TaskResult.Retry;
                             }
-                            MigrationJobContext.SaveMigrationUnit(mu);
+                            MigrationJobContext.SaveMigrationUnit(mu,false);
                             if (CurrentlyActiveJob.SyncBackEnabled && !CurrentlyActiveJob.IsSimulatedRun && Helper.IsOnline(CurrentlyActiveJob) && !checkedCS)
                             {
                                 _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
@@ -560,7 +560,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         mu.SourceStatus = CollectionStatus.NotFound;
                         _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} does not exist on source", LogType.Error);
-                        MigrationJobContext.SaveMigrationUnit(mu);
+                        MigrationJobContext.SaveMigrationUnit(mu,true);
                         //return TaskResult.Success;
                     }
                     else
@@ -568,7 +568,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 
                 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,false);
             }
             
             return TaskResult.Success;
@@ -811,7 +811,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
                 foreach (var mu in newUnits)
                 {
-                   MigrationJobContext.SaveMigrationUnit(mu);
+                   MigrationJobContext.SaveMigrationUnit(mu,false);
                    Helper.AddMigrationUnit(mu,CurrentlyActiveJob);                        
                 }
 
@@ -974,7 +974,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _migrationProcessor.ProcessRunning = true;
             var dummyUnit = new MigrationUnit(CurrentlyActiveJob,"", "", new List<MigrationChunk>());
 
-            MigrationJobContext.SaveMigrationUnit(dummyUnit);
+            MigrationJobContext.SaveMigrationUnit(dummyUnit,false);
 
             //if run comparison is set by customer.
             if (CurrentlyActiveJob.RunComparison)

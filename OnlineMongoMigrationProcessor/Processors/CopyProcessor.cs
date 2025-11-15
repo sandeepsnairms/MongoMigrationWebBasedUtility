@@ -125,7 +125,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
                 }
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,false);
                 return TaskResult.Success;
             }
             else if(result == TaskResult.Canceled)
@@ -226,7 +226,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.RestoreComplete = true;
 
 
-                    MigrationJobContext.SaveMigrationUnit(mu);
+                    MigrationJobContext.SaveMigrationUnit(mu,true);
 
                     _muCache.RemoveMigrationUnit(mu.Id);
                 }

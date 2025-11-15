@@ -193,7 +193,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 chunk.RestoredSuccessDocCount = targetCount - (chunk.RestoredFailedDocCount + chunk.SkippedAsDuplicateCount);
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,false);
             }
 
             if (percent > 0 && targetCount>0)
@@ -217,7 +217,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         mu.DumpComplete = true;
                 }
 
-                MigrationJobContext.SaveMigrationUnit(mu);
+                MigrationJobContext.SaveMigrationUnit(mu,true);
 
                 // Ensure timer is running for this migration mu to handle percentage updates
                 EnsurePercentageTimerRunning(mu,processType);
@@ -349,7 +349,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 if (mu.RestorePercent >= 99.99)
                                     mu.RestoreComplete = true;
 
-                                MigrationJobContext.SaveMigrationUnit(mu);
+                                MigrationJobContext.SaveMigrationUnit(mu,true);
                             }
                         }
                         else // MongoDump
@@ -374,7 +374,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 if (mu.DumpPercent >= 99.99)
                                     mu.DumpComplete = true;
 
-                                MigrationJobContext.SaveMigrationUnit(mu);
+                                MigrationJobContext.SaveMigrationUnit(mu,true);
                             }
                         }
                         

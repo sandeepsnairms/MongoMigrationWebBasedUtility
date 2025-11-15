@@ -636,6 +636,13 @@ namespace OnlineMongoMigrationProcessor
         public static bool WriteAtomicFile(string filePath, string content, int maxRetries = 5)
         {
             string tempFile = filePath + ".tmp";
+            bool isNewFile = false;
+            if (!System.IO.File.Exists(filePath))
+            {
+                tempFile = filePath;
+                isNewFile = true;
+            }
+                        
 
             //Log($"WriteAtomicFile: Writing to {filePath}");
 
@@ -656,6 +663,11 @@ namespace OnlineMongoMigrationProcessor
             }
 
             //Log($"Flush complete {filePath}");
+
+            if (isNewFile)
+            {
+                return true;
+            }
 
             int attempt = 0;
 
