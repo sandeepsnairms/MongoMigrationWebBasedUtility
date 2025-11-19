@@ -1,6 +1,6 @@
-# Migration Tool for Azure Cosmos DB for MongoDB (vCore-Based)
+# Migration Tool for Azure DocumentDB
 
-Streamline your migration to Azure Cosmos DB for MongoDB (vCore‑based) with a reliable, easy‑to‑use web app. Choose your migration tool and migration mode (offline or online). The app orchestrates bulk copy and, for online jobs, change‑stream catch‑up. You don’t need to learn or use these command-line tools yourself.
+Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use web app. Choose your migration tool and migration mode (offline or online). The app orchestrates bulk copy and, for online jobs, change‑stream catch‑up. You don’t need to learn or use these command-line tools yourself.
 
 ### Migration tool
 
@@ -52,7 +52,7 @@ Streamline your migration to Azure Cosmos DB for MongoDB (vCore‑based) with a 
 ## Key Features
 
 - **Flexible Migration Options**  
-  Supports both online and offline migrations to suit your business requirements. It supports multiple tools to read data from the source and write it to the target. If you are migrating from on-premises MongoDB VM, consider using the [On-Premises Deployment](#on-premises-deployment) to install the app locally and transfer data to Azure Cosmos DB for MongoDB (vCore‑based). This eliminates the need to set up an Azure VPN.
+  Supports both online and offline migrations to suit your business requirements. It supports multiple tools to read data from the source and write it to the target. If you are migrating from on-premises MongoDB VM, consider using the [On-Premises Deployment](#on-premises-deployment) to install the app locally and transfer data to Azure DocumentDB. This eliminates the need to set up an Azure VPN.
 
 - **User-Friendly Interface**  
   No steep learning curve—simply provide your connection strings and specify the collections to migrate.
