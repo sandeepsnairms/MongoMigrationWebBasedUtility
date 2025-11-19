@@ -632,6 +632,7 @@ namespace OnlineMongoMigrationProcessor
         int retryCount = 0;
         bool isSucessful = false;
         bool resetCS = unit.ResetChangeStream;
+        bool useServerLevel=false;
 
         while (!isSucessful && retryCount < 10)
         {
@@ -642,7 +643,7 @@ namespace OnlineMongoMigrationProcessor
                 var collection = database.GetCollection<BsonDocument>(unit.CollectionName);
 
                 // Determine if we should use server-level or collection-level processing
-                bool useServerLevel = job.ChangeStreamLevel == ChangeStreamLevel.Server;
+                useServerLevel = job.ChangeStreamLevel == ChangeStreamLevel.Server;
 
                 // Initialize with safe defaults; will be overridden below
                 var options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
@@ -696,24 +697,55 @@ namespace OnlineMongoMigrationProcessor
                     };
                 }
 
-                //new way to get resume token
-                //On MongoDB 4.0+, the WatchChangeStreamAsync method opens a change stream and waits for changes.
-                //On MongoDB 3.6, TailOplogAsync opens a tailable cursor on the oplog, filtering on namespace and timestamp to detect new operations.
-                if (!string.IsNullOrEmpty(job.SourceServerVersion) && job.SourceServerVersion.StartsWith("3"))
-                {
-                    if (!await TailOplogAsync(client, unit.DatabaseName, unit.CollectionName, unit, cts) && !resetCS)
+                    //new way to get resume token
+                    //On MongoDB 4.0+, the WatchChangeStreamAsync method opens a change stream and waits for changes.
+                    //On MongoDB 3.6, TailOplogAsync opens a tailable cursor on the oplog, filtering on namespace and timestamp to detect new operations.
+                    if (!string.IsNullOrEmpty(job.SourceServerVersion) && job.SourceServerVersion.StartsWith("3"))
                     {
-                        //if failed to tail oplog, fallback to watching change stream infinelty. Should be called async only
-                        await WatchChangeStreamUntilChangeAsync(log, client, jobList, job, unit, collection, options, resetCS, -1, cts, useServerLevel);
+                        if (!await TailOplogAsync(client, unit.DatabaseName, unit.CollectionName, unit, cts) && !resetCS)
+                        {
+                            //if failed to tail oplog, fallback to watching change stream infinelty. Should be called async only
+                            await WatchChangeStreamUntilChangeAsync(log, client, jobList, job, unit, collection, options, resetCS, -1, cts, useServerLevel);//don't await
+                        }
                     }
-                }
-                else
-                    await WatchChangeStreamUntilChangeAsync(log, client, jobList, job, unit, collection, options, resetCS, seconds, cts, useServerLevel);
-                //end of new way to get resume token
+                    else
+                    {
+                        //await WatchChangeStreamUntilChangeAsync(log, client, jobList, job, unit, collection, options, resetCS, seconds, cts, useServerLevel);
+                        //end of new way to get resume token
+
+                        var settings = client.Settings.Clone();
+                        var localClient = new MongoClient(settings);
+
+                        var result = await MongoSafeTaskExecutor.ExecuteAsync(
+                        operation: async (ct) =>
+                        {
+                            // forward the cancellation token to your watch function
+                            return await WatchChangeStreamUntilChangeAsync(
+                                log,
+                                localClient,
+                                jobList,
+                                job,
+                                unit,
+                                collection,
+                                options,
+                                resetCS,
+                                seconds,
+                                ct,
+                                useServerLevel
+                            );
+                        },
+                        timeoutSeconds: seconds +10,   // choose your timeout
+                        operationName: $"WatchChangeStreamUntilChangeAsync({collection.CollectionNamespace.CollectionName})",
+                        logAction: msg => log.WriteLine(msg,LogType.Debug),
+                        externalToken: cts,
+                        clientToKill: localClient    // <-- VERY IMPORTANT: kill this client if watch hangs
+                        );
+
+                    }
 
                 isSucessful = true;
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is OperationCanceledException || ex is TimeoutException)
             {
                 // Distinguish between timeout (no activity) vs manual cancellation
                 if (resetCS && unit.ResetChangeStream)
@@ -764,12 +796,17 @@ namespace OnlineMongoMigrationProcessor
             finally
             {
                 jobList.Save();
+                if (useServerLevel)
+                   log.WriteLine($"Exiting Server-level SetChangeStreamResumeTokenAsync for job {job.Id}", LogType.Info);
+                else
+                    log.WriteLine($"Exiting Collection-level SetChangeStreamResumeToken for {unit.DatabaseName}.{unit.CollectionName}", LogType.Debug);
             }
+
         }
         return;
     }
 
-    private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, JobList jobList, MigrationJob job, MigrationUnit unit, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool resetCS, int seconds, CancellationToken manualCts, bool useServerLevel = false)
+    private static async Task<bool> WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, JobList jobList, MigrationJob job, MigrationUnit unit, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool resetCS, int seconds, CancellationToken manualCts, bool useServerLevel = false)
     {
         var pipeline = new BsonDocument[] { };
         if (job.JobType == JobType.RUOptimizedCopy)
@@ -810,13 +847,13 @@ namespace OnlineMongoMigrationProcessor
         if (useServerLevel)
         {
             // Server-level change stream
-            log.WriteLine($"Setting up server-level change stream resume token for job {job.Id}");
+            log.WriteLine($"Setting up server-level change stream resume token for job {job.Id}", LogType.Debug);
             cursor = await client.WatchAsync<ChangeStreamDocument<BsonDocument>>(pipeline, options, linkedCts.Token);
         }
         else
         {
             // Collection-level change stream
-            log.WriteLine($"Setting up collection-level change stream resume token for {unit.DatabaseName}.{unit.CollectionName}");
+            log.WriteLine($"Setting up collection-level change stream resume token for {unit.DatabaseName}.{unit.CollectionName}", LogType.Debug);
             cursor = await collection.WatchAsync<ChangeStreamDocument<BsonDocument>>(pipeline, options, linkedCts.Token);
         }
 
@@ -839,9 +876,9 @@ namespace OnlineMongoMigrationProcessor
                             unit.OriginalResumeToken = resumeTokenJson;
 
                         }
-                        return;
+                        return true;
                     }
-                    return;
+                    return true;
                 }                   
 
                 // Iterate until cancellation or first change detected
@@ -859,7 +896,7 @@ namespace OnlineMongoMigrationProcessor
                         //if bulk load is complete, no point in continuing to watch
                         // Use the local resetCS variable captured at method start, not unit.ResetChangeStream
                         if ((unit.RestoreComplete || job.IsSimulatedRun) && unit.DumpComplete && !resetCS)
-                            return;
+                            return true;
 
 
                         // Handle server-level vs collection-level resume token storage
@@ -881,7 +918,7 @@ namespace OnlineMongoMigrationProcessor
 
                                 log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
                                 // Exit immediately after first change detected
-                                return;
+                                return true;
                             }
                         }
                         else
@@ -892,16 +929,19 @@ namespace OnlineMongoMigrationProcessor
                             log.WriteLine($"Collection-level resume token set for {unit.DatabaseName}.{unit.CollectionName}");
 
                             // Exit immediately after first change detected
-                            return;
+                            return true;
                         }
                                 
                     }
                 }
-                   
+
+               return false;
             }
             catch (OperationCanceledException)
             {
                 // Cancellation requested - exit quietly
+                log.WriteLine($"Collection-level resume token request for {unit.DatabaseName}.{unit.CollectionName} was canceled.", LogType.Debug);
+                return false;
             }
         }
     }

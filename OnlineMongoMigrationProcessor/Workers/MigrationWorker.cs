@@ -339,7 +339,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             else
             {
-                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                _log.WriteLine($"Asynchronous resume token setup initiated (60s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                 
                 try
                 {
@@ -347,7 +347,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     {
                         try
                         {
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, mu, 300, _cts);
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, mu, 60, _cts);
                         }
                         catch
                         {
@@ -453,7 +453,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 _log.WriteLine($"Setting up server-level change stream resume token for job {_job.Id}.");
                                 _ = Task.Run(async () =>
                                 {
-                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 300, _cts);
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, _jobList, _job, unit, 60, _cts);
                                 });
 
                                 serverLevelResumeTokenSet = true;
