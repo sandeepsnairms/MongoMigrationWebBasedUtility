@@ -210,38 +210,48 @@ namespace OnlineMongoMigrationProcessor.Helpers
             var operations = new List<OrderedOperation>();
             long sequenceNumber = 0;
 
-            // Add all operations with their sequence numbers based on ClusterTime
-            foreach (var evt in insertEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+            if (insertEvents != null)
             {
-                operations.Add(new OrderedOperation
+                // Add all operations with their sequence numbers based on ClusterTime
+                foreach (var evt in insertEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
                 {
-                    SequenceNumber = sequenceNumber++,
-                    OperationType = ChangeStreamOperationType.Insert,
-                    Event = evt,
-                    Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
-                });
+                    operations.Add(new OrderedOperation
+                    {
+                        SequenceNumber = sequenceNumber++,
+                        OperationType = ChangeStreamOperationType.Insert,
+                        Event = evt,
+                        Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
+                    });
+                }
             }
 
-            foreach (var evt in updateEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+            if (updateEvents != null)
             {
-                operations.Add(new OrderedOperation
+                foreach (var evt in updateEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
                 {
-                    SequenceNumber = sequenceNumber++,
-                    OperationType = ChangeStreamOperationType.Update,
-                    Event = evt,
-                    Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
-                });
+                    operations.Add(new OrderedOperation
+                    {
+                        SequenceNumber = sequenceNumber++,
+                        OperationType = ChangeStreamOperationType.Update,
+                        Event = evt,
+                        Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
+                    });
+                }
             }
 
-            foreach (var evt in deleteEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+
+            if (deleteEvents != null)
             {
-                operations.Add(new OrderedOperation
+                foreach (var evt in deleteEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
                 {
-                    SequenceNumber = sequenceNumber++,
-                    OperationType = ChangeStreamOperationType.Delete,
-                    Event = evt,
-                    Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
-                });
+                    operations.Add(new OrderedOperation
+                    {
+                        SequenceNumber = sequenceNumber++,
+                        OperationType = ChangeStreamOperationType.Delete,
+                        Event = evt,
+                        Timestamp = evt.ClusterTime ?? new BsonTimestamp(0, 0)
+                    });
+                }
             }
 
             // Sort by timestamp to maintain chronological order

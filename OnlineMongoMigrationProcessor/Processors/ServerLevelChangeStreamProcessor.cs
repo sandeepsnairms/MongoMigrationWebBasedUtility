@@ -187,7 +187,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var kvp in _migrationUnitsToProcess)
                 {
                     kvp.Value.CSUpdatesInLastBatch = 0;
-                    accumulatedChangesInColl[kvp.Key] = new AccumulatedChangesTracker();
+                    accumulatedChangesInColl[kvp.Key] = new AccumulatedChangesTracker(kvp.Key);
                 }
 
                 if (_job.SourceServerVersion.StartsWith("3"))
@@ -221,18 +221,20 @@ namespace OnlineMongoMigrationProcessor
                             var result = await PreProcessChange(change, accumulatedChangesInColl, counter);
                             if (!result.success)
                                 break;
-                            counter = result.counter;
-
-
-                            if (IsReadyForFlush(accumulatedChangesInColl[collectionKey], out int totalChanges))
-                            {
-                                await BulkProcessAllChangesAsync(accumulatedChangesInColl);
-                            }                               
+                            counter = result.counter;                                                       
                         }
-
+                        
                         if (ExecutionCancelled)
                             break;
+
+                        if (accumulatedChangesInColl != null)
+                            await BulkProcessAllChangesAsync(accumulatedChangesInColl);
                     }
+                    //if (IsReadyForFlush(accumulatedChangesInColl[collectionKey], out int totalChanges))
+                    //{
+                    //if (accumulatedChangesInColl != null)
+                        await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                    //} 
                 }
             }
             catch (OperationCanceledException)
@@ -336,7 +338,7 @@ namespace OnlineMongoMigrationProcessor
                     _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
                     if (!accumulatedChangesInColl.ContainsKey(collectionKey))
                     {
-                        accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker();
+                        accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker(collectionKey);
                     }
                 }
 

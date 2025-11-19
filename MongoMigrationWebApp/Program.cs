@@ -118,8 +118,8 @@ builder.Services.AddScoped(sp =>
     return client;
 });
 
-
-builder.Services.AddRazorPages();
+    builder.Configuration.AddEnvironmentVariables();
+    builder.Services.AddRazorPages();
 builder.Services.AddServerSideBlazor();
 builder.Services.AddSingleton(builder.Configuration);
 builder.Services.AddSingleton<JobManager>();
