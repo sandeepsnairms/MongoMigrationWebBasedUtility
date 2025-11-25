@@ -553,7 +553,7 @@ else if (@_showLogBackupFile)
     // Pagination and filtering properties (kept for UI binding compatibility)
     private string _filterText = string.Empty;
     private int _currentPage = 1;
-    private int _pageSize = 50;
+    private int _pageSize = 10;
 
     // Sorting properties
     private string _sortColumn = "DatabaseName";
@@ -617,7 +617,7 @@ else if (@_showLogBackupFile)
             }
 
             // Change Stream Lag (Time Since Last Change/Sync Back)
-            if (MigrationJob!=null & Helper.IsOnline(MigrationJob) == true)
+            if (MigrationJob != null && Helper.IsOnline(MigrationJob) == true)
             {
                 var lagText = Helper.GetChangeStreamLag(unit, MigrationJob.ProcessingSyncBack);
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
@@ -625,7 +625,7 @@ else if (@_showLogBackupFile)
             }
 
             // Last Batch Changes Count
-            if (Helper.IsOnline(MigrationJob) == true)
+            if (MigrationJob != null && Helper.IsOnline(MigrationJob) == true)
             {
                 var batchCount = unit.CSUpdatesInLastBatch.ToString();
                 if (batchCount.Contains(searchText, StringComparison.OrdinalIgnoreCase))

@@ -20,47 +20,69 @@ namespace MongoMigrationWebApp.Service
 
         public JobManager(IConfiguration configuration)
         {
-            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Resuming migration job after application restart...");
+            LogToFile("Resuming migration job after application restart...");
             var migrationJobs = GetMigrations(out string errorMessage);
 
-            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 0");
+            LogToFile("Step 0");
 
             if (migrationJobs != null && migrationJobs.Count == 1)
             {
 
-                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
+                LogToFile($"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
                 if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
                 {
                     try
                     {
-                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step2 : before reading config"); 
+                        LogToFile("Step2 : before reading config"); 
 
 
                         var sourceConnectionString = configuration.GetConnectionString("SourceConnectionString");
                         var targetConnectionString = configuration.GetConnectionString("TargetConnectionString");
 
                         if(sourceConnectionString != null && targetConnectionString != null)
-                            System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
-
-                        var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
-                        var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
-                        if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
                         {
+                            LogToFile($"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
 
-                            migrationJobs[0].SourceConnectionString = sourceConnectionString;
-                            migrationJobs[0].TargetConnectionString = targetConnectionString;
-                            //ViewMigration(migrationJobs[0].Id);
-                            StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                            var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
+                            var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
+                            if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+                            {
+                                migrationJobs[0].SourceConnectionString = sourceConnectionString;
+                                migrationJobs[0].TargetConnectionString = targetConnectionString;
+                                //ViewMigration(migrationJobs[0].Id);
+                                StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                            }
                         }
                     }
                     catch(Exception ex)
                     {
-                        System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", $"Exception : {ex}"); //DO NOTHING
-
+                        LogToFile($"Exception : {ex}");
                     }
                 }
             }
         }
+
+        #region Logging
+
+        /// <summary>
+        /// Logs a message to the debug log file with timestamp
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        private void LogToFile(string message)
+        {
+            try
+            {
+                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
+                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", logEntry);
+            }
+            catch
+            {
+                // Silently ignore logging errors to prevent application crashes
+            }
+        }
+
+        #endregion
 
         #region _configuration Management
 

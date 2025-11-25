@@ -27,12 +27,10 @@ namespace OnlineMongoMigrationProcessor
 
         private static bool CheckNodeForId(BsonDocument doc)
         {
-            bool idFound = false;
 
             // Direct _id
             if (doc.Contains("_id"))
             {
-                idFound = true;
                 if (!doc["_id"].IsBsonDocument)
                     return false; // _id used as scalar
 

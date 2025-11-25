@@ -12,6 +12,6 @@
 /publish
 /.vs/ProjectEvaluation
 /.vs/CopilotSnapshots/
-/tests/OnlineMongoMigrationProcessor.Tests/bin/Debug/net9.0
-/tests/OnlineMongoMigrationProcessor.Tests/obj/Debug/net9.0
+/tests/OnlineMongoMigrationProcessor.Tests/bin
 /tests/OnlineMongoMigrationProcessor.Tests/obj
+*.dll
