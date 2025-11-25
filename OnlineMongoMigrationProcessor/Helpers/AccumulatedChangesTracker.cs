@@ -123,7 +123,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Always track latest (last change in batch) - for checkpoint on success
             if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)
             {
-                if (changeTimestamp > LatestTimestamp && !string.IsNullOrEmpty(change.ResumeToken.ToJson()))
+                if (changeTimestamp >= LatestTimestamp && !string.IsNullOrEmpty(change.ResumeToken.ToJson()))
                 {
                     LatestResumeToken = change.ResumeToken.ToJson();
                     LatestOperationType = change.OperationType;

@@ -20,7 +20,6 @@ namespace OnlineMongoMigrationProcessor
 
      
 
-
         public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, JobList jobList, MigrationJob job, MigrationSettings config, bool syncBack = false)
             : base(log, sourceClient, targetClient, jobList, job, config, syncBack)
         {
@@ -28,7 +27,7 @@ namespace OnlineMongoMigrationProcessor
 
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
-            _log.ShowInMonitor($"{_syncBackPrefix}ProcessChangeStreamsAsync started. Token cancelled: {token.IsCancellationRequested}, ExecutionCancelled: {ExecutionCancelled}");
+            //_log.ShowInMonitor($"{_syncBackPrefix}ProcessChangeStreamsAsync started. Token cancelled: {token.IsCancellationRequested}, ExecutionCancelled: {ExecutionCancelled}");
             _log.WriteLine($"{_syncBackPrefix}ProcessChangeStreamsAsync initialization - ConcurrentProcessors: {_concurrentProcessors}, ProcessorRunMaxDuration: {_processorRunMaxDurationInSec}s, MigrationUnits: {_migrationUnitsToProcess.Count}", LogType.Verbose);
 
             bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
@@ -46,8 +45,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {sortedKeys.Count} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, sortedKeys.Count)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.");
 
             long loops = 0;
-            //bool oplogSuccess = true;
-
+            
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 var totalKeys = sortedKeys.Count;
@@ -55,11 +53,14 @@ namespace OnlineMongoMigrationProcessor
                 loops++;
                 while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
                 {
+                    _log.WriteLine($"{_syncBackPrefix}Starting batch at index {index} (totalKeys: {totalKeys}, round: {loops})", LogType.Debug);
+                    
                     var tasks = new List<Task>();
                     var collectionProcessed = new List<string>();
 
                     // Determine the batch
                     var batchKeys = sortedKeys.Skip(index).Take(_concurrentProcessors).ToList();
+                    _log.WriteLine($"{_syncBackPrefix}Batch contains {batchKeys.Count} collection(s): {string.Join(", ", batchKeys)}", LogType.Debug);
                     var batchUnits = batchKeys
                         .Select(k => _migrationUnitsToProcess.TryGetValue(k, out var unit) ? unit : null)
                         .Where(u => u != null)
@@ -77,13 +78,10 @@ namespace OnlineMongoMigrationProcessor
                     int seconds = GetBatchDurationInSeconds(timeFactor);
                     _log.WriteLine($"{_syncBackPrefix}Batch duration computed - Seconds: {seconds}, Collections: {batchKeys.Count}", LogType.Debug);
 
-                    await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
-                   
                     foreach (var key in batchKeys)
                     {
                         if (_migrationUnitsToProcess.TryGetValue(key, out var unit))
-                        {                           
-
+                        {
                             // Initialize accumulated changes tracker if not present
                             if (!_accumulatedChangesPerCollection.ContainsKey(key))                              
                             {
@@ -103,6 +101,11 @@ namespace OnlineMongoMigrationProcessor
                                     try
                                     {                                        
                                         await SetChangeStreamOptionandWatch(unit, true, seconds);
+                                    }
+                                    catch (TimeoutException tex)
+                                    {
+                                        _log.WriteLine($"{_syncBackPrefix}Timeout for {collectionName}: {tex.Message}", LogType.Debug);
+                                        // Don't re-throw - let batch continue with other collections
                                     }
                                     catch (Exception ex)
                                     {
@@ -145,7 +148,7 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 else if (task.IsCanceled)
                                 {
-                                    _log.WriteLine($"{_syncBackPrefix}Task {i} CANCELED", LogType.Warning);
+                                    _log.WriteLine($"{_syncBackPrefix}Task {i} CANCELED", LogType.Debug);
                                 }
                             }
                             catch
@@ -157,18 +160,22 @@ namespace OnlineMongoMigrationProcessor
                     }
 
                     index += _concurrentProcessors;
+                    _log.WriteLine($"{_syncBackPrefix}Batch completed, index advanced to {index} (totalKeys: {totalKeys})", LogType.Debug);
 
-                    // Pause between batches to allow memory recovery and reduce CPU spikes
                     // Increased to 5000ms to address OOM issues and server CPU spikes
-                    Thread.Sleep(5000);                    
+                    _log.WriteLine($"{_syncBackPrefix}Sleeping 5 seconds between batches...", LogType.Debug);
+                    Thread.Sleep(5000);
+                    
                 }
 
                 _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Re-sorting by load and starting new round...");
 
                 //static collections resume tokens need adjustment
+                _log.WriteLine($"{_syncBackPrefix}Adjusting cursor times for static collections...", LogType.Debug);
                 AdjustCusrsorTimeForStaticCollections();
 
                 index = 0;
+                _log.WriteLine($"{_syncBackPrefix}Index reset to 0 for next round", LogType.Debug);
                 // Sort the dictionary after all processing is complete
                 sortedKeys = _migrationUnitsToProcess
                     .OrderByDescending(kvp => kvp.Value.CSNormalizedUpdatesInLastBatch)
@@ -190,7 +197,7 @@ namespace OnlineMongoMigrationProcessor
                         if (mu.CursorUtcTimestamp > DateTime.MinValue)
                              gap = DateTime.UtcNow - mu.CursorUtcTimestamp.AddHours(mu.CSAddHours);
                         else
-                             gap = DateTime.UtcNow - mu.ChangeStreamStartedOn.Value.AddHours(mu.CSAddHours);
+                             gap = DateTime.UtcNow - (mu.ChangeStreamStartedOn ?? DateTime.UtcNow).AddHours(mu.CSAddHours);
 
                         if (gap.TotalMinutes > (60 * 24) && mu.CSUpdatesInLastBatch == 0)
                         {
@@ -205,7 +212,7 @@ namespace OnlineMongoMigrationProcessor
                         if (mu.CursorUtcTimestamp > DateTime.MinValue)
                             gap = DateTime.UtcNow - mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours);
                         else
-                            gap = DateTime.UtcNow - mu.SyncBackChangeStreamStartedOn.Value.AddHours(mu.SyncBackAddHours);
+                            gap = DateTime.UtcNow - (mu.SyncBackChangeStreamStartedOn ?? DateTime.UtcNow).AddHours(mu.SyncBackAddHours);
 
                         if (gap.TotalMinutes > (60 * 24) && mu.CSUpdatesInLastBatch == 0)
                         {
@@ -377,6 +384,14 @@ namespace OnlineMongoMigrationProcessor
 
                     await WatchCollection(mu, options, sourceCollection!, targetCollection!, cancellationToken, seconds);
                 }
+                catch (TimeoutException tex)
+                {
+                    // TimeoutException is expected and handled - don't set StopProcessing
+                    // The timeout counter tracking will handle retry logic
+                    _log.WriteLine($"{_syncBackPrefix}TimeoutException caught in SetChangeStreamOptionandWatch for {sourceCollection!.CollectionNamespace}: {tex.Message}", LogType.Debug);
+                    // Let this propagate to Task.Run wrapper for timeout counter tracking
+                    throw;
+                }
                 catch (OperationCanceledException ex)
                 {
                     _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in SetChangeStreamOptionandWatch for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Info);
@@ -393,6 +408,12 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.", LogType.Error);
                     _log.ShowInMonitor($"{_syncBackPrefix}Resume token has expired or cursor is invalid for {sourceCollection.CollectionNamespace}.");
                 }
+            }
+            catch (TimeoutException)
+            {
+                // TimeoutException is expected and already logged - just propagate for timeout counter tracking
+                // Do NOT set StopProcessing = true for timeouts
+                throw;
             }
             catch (Exception ex)
             {
@@ -425,12 +446,6 @@ namespace OnlineMongoMigrationProcessor
 
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
             {
-                if(accumulatedChangesInColl.LatestResumeToken=="")
-                {
-                    _log.WriteLine($"{_syncBackPrefix}LatestResumeToken is empty for {targetCollection.CollectionNamespace}", LogType.Error);
-                    throw new Exception($"{_syncBackPrefix} LatestResumeToken is empty for {targetCollection.CollectionNamespace}");
-                }
-
                 if (!_syncBack)
                 {
                     // We don't allow going backwards in time
@@ -463,6 +478,11 @@ namespace OnlineMongoMigrationProcessor
                 }
                 _resumeTokenCache[$"{targetCollection.CollectionNamespace}"] = accumulatedChangesInColl.LatestResumeToken;
             }
+            //else
+            //{
+            //    _log.WriteLine($"{_syncBackPrefix}LatestResumeToken is empty for {targetCollection.CollectionNamespace}", LogType.Error);
+            //    throw new Exception($"{_syncBackPrefix} LatestResumeToken is empty for {targetCollection.CollectionNamespace}");
+            //}
 
             // Clear collections to free memory
             accumulatedChangesInColl.DocsToBeInserted.Clear();
@@ -552,24 +572,27 @@ namespace OnlineMongoMigrationProcessor
 
 
                 }
-                catch (TimeoutException)
+                catch (TimeoutException tex)
                 {
                     // Clear accumulated data to prevent memory leak
                     int clearedCount = accumulatedChangesInColl.DocsToBeInserted.Count + 
                                             accumulatedChangesInColl.DocsToBeUpdated.Count + 
                                                  accumulatedChangesInColl.DocsToBeDeleted.Count;
-                    _log.WriteLine($"{_syncBackPrefix}Clearing {clearedCount} accumulated documents due to watch timeout for {collectionKey}", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Clearing {clearedCount} accumulated documents due to watch timeout for {collectionKey}", LogType.Verbose);
 
                     ProcessWatchCollectionException(accumulatedChangesInColl, mu);
 
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
-                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out for {collectionKey} - will retry in next batch", LogType.Debug);
-                    return; // Skip this collection, will retry in next batch
+                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out for {collectionKey} after {seconds + 10}s - will retry in next round. Exception: {tex.Message}", LogType.Debug);
+                    
+                    // Re-throw to allow outer handler to track consecutive timeouts
+                    throw;
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Error);
+                    _log.ShowInMonitor($"{_syncBackPrefix}ERROR: Failed to create cursor for {collectionKey}: {ex.Message}");
 
                     ProcessWatchCollectionException(accumulatedChangesInColl, mu);                    
 
@@ -578,6 +601,12 @@ namespace OnlineMongoMigrationProcessor
                 }
 
             } // End of main try block
+            catch (TimeoutException)
+            {
+                // TimeoutException is already handled in inner catch block
+                // Re-throw to allow Task.Run wrapper to track consecutive timeouts
+                throw;
+            }
             catch (OperationCanceledException ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in WatchCollection for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Info);
@@ -654,131 +683,6 @@ namespace OnlineMongoMigrationProcessor
             }, cancellationToken);
         }
 
-
-
-
-        //private async Task<IChangeStreamCursor<ChangeStreamDocument<BsonDocument>>> CreateChangeStreamCursorAsync(
-        //    IMongoCollection<BsonDocument> sourceCollection, 
-        //    BsonDocument[] pipelineArray, 
-        //    ChangeStreamOptions options, 
-        //    CancellationToken cancellationToken,
-        //    int seconds,
-        //    string collectionKey)
-        //{
-        //    // Calculate watch timeout: Add 30-second buffer to batch duration to allow full processing
-        //    // This prevents premature timeout while waiting for MongoDB to return change stream events
-        //    // The buffer accounts for network latency and MongoDB internal processing time
-        //    int watchTimeoutSeconds = seconds + 30;
-        //    _log.WriteLine($"{_syncBackPrefix}Watch task timeout set to {watchTimeoutSeconds}s for {collectionKey}", LogType.Verbose);
-
-        //    // Create linked cancellation token source to enable independent cancellation of watch operation
-        //    // This allows us to cancel the watch task specifically without affecting the parent operation
-        //    // The linked token will be cancelled if either the parent token or our local token is cancelled
-        //    using var watchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        //    var watchToken = watchCts.Token;
-
-        //    // Execute the Watch() operation in a separate task to enable timeout control
-        //    // MongoDB's Watch() can hang indefinitely under certain conditions (network issues, server overload)
-        //    // Running in Task.Run() allows us to apply timeout and cancellation independently
-        //    var watchTask = Task.Run(() =>
-        //    {
-        //        try
-        //        {
-        //            // Create internal heartbeat mechanism to detect if Watch() operation hangs
-        //            // This provides additional monitoring beyond the main timeout mechanism
-        //            using var heartbeatCts = new CancellationTokenSource();
-        //            var heartbeatTask = Task.Run(async () =>
-        //            {
-        //                int elapsedSeconds = 0;
-        //                // Send heartbeat every 5 seconds while watch operation is in progress
-        //                while (!heartbeatCts.Token.IsCancellationRequested)
-        //                {
-        //                    await Task.Delay(5000, heartbeatCts.Token);
-        //                    elapsedSeconds += 5;
-        //                    // Could add heartbeat logging here if needed for debugging
-        //                }
-        //            });
-
-        //            // Create the actual MongoDB change stream cursor
-        //            // This is the core operation that can potentially hang
-        //            var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, watchToken);
-
-        //            // Stop the heartbeat task since Watch() completed successfully
-        //            heartbeatCts.Cancel();
-
-        //            // Wait briefly for heartbeat task to complete cleanly, ignore any exceptions
-        //            // The try-catch prevents heartbeat cleanup from affecting the main operation
-        //            try { heartbeatTask.Wait(1000); } catch { /* Heartbeat cleanup - ignore exceptions */ }
-
-        //            return cursor;
-        //        }
-        //        catch (OperationCanceledException)
-        //        {
-        //            // Preserve cancellation exceptions for proper timeout handling
-        //            // Don't wrap this exception as it's part of normal timeout flow
-        //            throw;
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            // Log other exceptions for debugging while preserving the original exception
-        //            // This helps diagnose MongoDB connection issues or configuration problems
-        //            _log.WriteLine($"{_syncBackPrefix}Exception in Watch Task.Run for {collectionKey}: {ex}", LogType.Error);
-        //            throw; // Re-throw to maintain exception context
-        //        }
-        //    }, watchToken);
-
-        //    // Create competing timeout task to race against the watch operation
-        //    // Uses CancellationToken.None to ensure timeout isn't cancelled by parent operations
-        //    // This timeout is independent and will always fire after the specified duration
-        //    var watchTimeoutTask = Task.Delay(TimeSpan.FromSeconds(watchTimeoutSeconds), CancellationToken.None);
-
-        //    // Race the watch task against the timeout - whichever completes first wins
-        //    // This pattern prevents indefinite blocking on MongoDB operations
-        //    var completedTask = await Task.WhenAny(watchTask, watchTimeoutTask);
-
-        //    // Handle timeout scenario: cleanup and throw timeout exception
-        //    if (completedTask == watchTimeoutTask)
-        //    {
-        //        _log.WriteLine($"{_syncBackPrefix}Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}, cancelling watch task", LogType.Debug);
-
-        //        // Cancel the watch task to free MongoDB resources and prevent resource leaks
-        //        // This signals the watch operation to stop trying to create the cursor
-        //        watchCts.Cancel();
-
-        //        // Allow brief grace period for watch task to respond to cancellation
-        //        // This prevents abrupt termination and allows MongoDB driver to cleanup properly
-        //        try
-        //        {
-        //            // Race the watch task against a 2-second grace period
-        //            await Task.WhenAny(watchTask, Task.Delay(2000));
-        //        }
-        //        catch (Exception ex)
-        //        {
-        //            // Log but don't propagate grace period exceptions as they're not critical
-        //            _log.WriteLine($"{_syncBackPrefix}Exception while cancelling watch task for {collectionKey}: {ex.Message}", LogType.Debug);
-        //        }
-
-        //        // Throw timeout exception to signal that cursor creation failed due to timeout
-        //        // This allows the calling code to handle timeout appropriately (retry, skip, etc.)
-        //        throw new TimeoutException($"Watch task timed out after {watchTimeoutSeconds}s for {collectionKey}");
-        //    }
-
-        //    // Watch task completed first - retrieve the result
-        //    try
-        //    {
-        //        // Await the watch task to get the cursor or propagate any exceptions
-        //        // This will throw if the watch operation failed for any reason
-        //        return await watchTask;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        // Log cursor creation failure for debugging while preserving original exception
-        //        // This helps distinguish between timeout and other MongoDB-related failures
-        //        _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Verbose);
-        //        throw; // Re-throw to maintain exception context for caller
-        //    }
-        //}
-
         private async Task<long> ProcessChangeStreamCursorAsync(
             IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,
             MigrationUnit mu,
@@ -790,9 +694,6 @@ namespace OnlineMongoMigrationProcessor
             BsonDocument userFilterDoc,
             long counter)
         {
-            // BACKPRESSURE: Check accumulated document count before starting to read change stream
-            // This slows down reads when we have too many documents accumulated, preventing memory buildup
-            //await WaitWithBackoffAsync(accumulatedChangesInColl);
 
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
   
@@ -825,7 +726,6 @@ namespace OnlineMongoMigrationProcessor
             string collectionKey,
             long counter)
         {
-            //await CheckPendingChangesQueueAsync();
 
             foreach (var change in cursor.ToEnumerable(cancellationToken))
             {
@@ -867,121 +767,6 @@ namespace OnlineMongoMigrationProcessor
             return counter;
         }
 
-        /*
-        private async Task<long> ProcessMongoDB4xChangeStreamAsync(
-            IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,
-            MigrationUnit mu,
-            IMongoCollection<BsonDocument> sourceCollection,
-            IMongoCollection<BsonDocument> targetCollection,
-            AccumulatedChangesTracker accumulatedChangesInColl,
-            CancellationToken cancellationToken,
-            int seconds,
-            BsonDocument userFilterDoc,
-            string collectionKey,
-            long counter)
-        {
-                            
-            _log.WriteLine($"{_syncBackPrefix}Processing MongoDB 4.0+ change stream with MoveNext pattern for {collectionKey}", LogType.Verbose);
-            
-            // Watchdog: Track when MoveNext was last called to detect hangs
-            DateTime lastMoveNextCall = DateTime.UtcNow;
-            int moveNextTimeoutSeconds = seconds + 10; // Add 10 second buffer beyond batch duration
-            _log.WriteLine($"{_syncBackPrefix}Watchdog enabled with {moveNextTimeoutSeconds}s timeout for MoveNext calls", LogType.Debug);
-
-            while (true)
-            {
-                if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
-                    break; // Exit loop, let finally block handle cleanup
-                }
-
-                // Watchdog: Check if MoveNext is taking too long (stuck)
-                if ((DateTime.UtcNow - lastMoveNextCall).TotalSeconds > moveNextTimeoutSeconds)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Watchdog timeout: MoveNext exceeded {moveNextTimeoutSeconds}s for {sourceCollection!.CollectionNamespace}. Breaking out to prevent hang.", LogType.Warning);
-                    break; // Exit the while loop, batch will complete in finally block
-                }
-
-                bool hasMore;
-                try
-                {
-                    lastMoveNextCall = DateTime.UtcNow;
-                    hasMore = cursor.MoveNext(cancellationToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected when cancellationToken times out
-                    _log.WriteLine($"{_syncBackPrefix}MoveNext cancelled by timeout for {sourceCollection!.CollectionNamespace} - completing batch", LogType.Debug);
-                    break; // Exit loop, process accumulated batch
-                }
-
-                if (!hasMore)
-                {
-                    // No more data available, exit loop
-                    break;
-                }
-
-                int changeCount = 0;
-                foreach (var change in cursor.Current)
-                {
-                    changeCount++;
-                    
-                    if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
-                    {
-                        _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Debug);
-                        break; // Exit inner loop, outer loop will also break
-                    }
-
-                    string lastProcessedToken = string.Empty;
-                    _resumeTokenCache.TryGetValue($"{sourceCollection!.CollectionNamespace}", out string? token2);
-                    lastProcessedToken = token2 ?? string.Empty;
-
-                    if (lastProcessedToken == change.ResumeToken.ToJson() && _job.JobType != JobType.RUOptimizedCopy)
-                    {
-                        mu.CSUpdatesInLastBatch = 0;
-                        mu.CSNormalizedUpdatesInLastBatch = 0;
-                        return counter; // Skip processing if the event has already been processed
-                    }
-
-                    try
-                    {
-                        bool result = ProcessCursor(change, cursor, targetCollection, sourceCollection.CollectionNamespace.ToString(), mu, accumulatedChangesInColl, ref counter, userFilterDoc);
-                        if (!result)
-                            break; // Exit loop on error, let finally block handle cleanup
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Error);
-                        break; // Exit loop on exception, let finally block handle cleanup
-                    }
-
-                    //// MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                    //if (changeCount > _config.ChangeStreamMaxDocsInBatch)
-                    //{
-                    //    Task.Run(async () =>
-                    //    {
-                    //        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                    //    });
-                    //    changeCount = 0;
-
-                    //    await WaitForPendingChnagesAsync(_accumulatedChangesPerCollection);
-                    //}
-
-
-                }
-
-                await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);  
-                if (ExecutionCancelled)
-                {
-                    break; // Exit loop, let finally block handle cleanup
-                }
-            }            
-            return counter;
-            
-        }
-            */
-
         private async Task<long> ProcessMongoDB4xChangeStreamAsync(IChangeStreamCursor<ChangeStreamDocument<BsonDocument>> cursor,
             MigrationUnit mu,
             IMongoCollection<BsonDocument> sourceCollection,
@@ -1007,7 +792,7 @@ namespace OnlineMongoMigrationProcessor
                             break; // Stream closed or no more data
                         }
                         int changeCount = 0;
-                        //await CheckPendingChangesQueueAsync();
+
                         foreach (var change in cursor.Current)
                         {
                             changeCount++;
@@ -1043,10 +828,7 @@ namespace OnlineMongoMigrationProcessor
 
                         }
 
-                        //Task.Run(async () =>
-                        //{
-                            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                        //});                       
+                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);                    
 
                     }
                 }
@@ -1084,10 +866,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Final batch processing - Total: {totalChanges}, Inserts: {accumulatedChangesInColl.DocsToBeInserted.Count}, Updates: {accumulatedChangesInColl.DocsToBeUpdated.Count}, Deletes: {accumulatedChangesInColl.DocsToBeDeleted.Count}", LogType.Debug);
                 }
 
-                //Task.Run(async () =>
-                //{
-                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                //});
+                await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
 
                 mu.CSUpdatesInLastBatch = counter;
                 mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
@@ -1288,28 +1067,12 @@ namespace OnlineMongoMigrationProcessor
                         _log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {change.OperationType}", LogType.Error);
                         break;
                 }
-
-                //if (IsReadyForFlush(accumulatedChangesInColl,out var total))
-                //{
-                //    //int batchSize = accumulatedChangesInColl.DocsToBeInserted.Count + accumulatedChangesInColl.DocsToBeUpdated.Count + accumulatedChangesInColl.DocsToBeDeleted.Count;
-                //    _log.WriteLine($"{_syncBackPrefix}Change stream max batch size exceeded - Flushing {total} changes for {collNameSpace}", LogType.Debug);
-
-                //    // Process the changes in bulk if the batch size exceeds the limit
-                //    // Use Task.Run().Wait() to avoid deadlock - this is a controlled synchronous wait
-                //    Task.Run(async () =>
-                //    {
-                //        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                //    }).GetAwaiter().GetResult();
-                //    _jobList?.Save();                    
-                //}
+                
             }
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error processing operation {change.OperationType} on {collNameSpace} with _id {idValue}. Details: {ex}", LogType.Error);
             }
-        }
-
-
-       
+        }       
     }
 }

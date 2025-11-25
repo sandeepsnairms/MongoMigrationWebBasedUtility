@@ -450,7 +450,7 @@ namespace OnlineMongoMigrationProcessor
                     // Safely combine filters
                     combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
                 }
-                catch (Exception ex)
+                catch
                 {
                     combinedFilter = filter; // fallback to base filter
                 }

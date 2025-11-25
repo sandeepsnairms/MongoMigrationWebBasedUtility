@@ -33,8 +33,6 @@ namespace OnlineMongoMigrationProcessor
 
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
-            long loops = 0;
-            bool oplogSuccess = true;
 
             bool isVCore = (_syncBack ? _job.TargetEndpoint : _job.SourceEndpoint)
                .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
@@ -261,7 +259,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private async Task<(bool success, long counter)> PreProcessChange(ChangeStreamDocument<BsonDocument> change, Dictionary<string, AccumulatedChangesTracker> accumulatedChangesInColl, long counter)
+        private async Task<(bool success, long counter)> PreProcessChange(ChangeStreamDocument<BsonDocument> change, Dictionary<string, AccumulatedChangesTracker>? accumulatedChangesInColl, long counter)
         {
             try
             {
@@ -288,13 +286,17 @@ namespace OnlineMongoMigrationProcessor
                     }
                     else
                     {
-                        _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
+                        if (!_allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit!))
+                        {
+                            // Fallback if TryGetValue fails (should not happen)
+                            migrationUnit = new MigrationUnit(databaseName, collectionName, new List<MigrationChunk>());
+                        }
                     }
                 }
                 else
                 {
                     // Check if this change belongs to one of our collections with SourceStatus.OK
-                    if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit))
+                    if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit!))
                     {
                         return (true, counter); // Skip changes for collections not in our job
                     }
@@ -335,7 +337,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if (_monitorAllCollections)
                 {
-                    _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
+                    _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit!);
                     if (!accumulatedChangesInColl.ContainsKey(collectionKey))
                     {
                         accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker(collectionKey);
@@ -344,7 +346,7 @@ namespace OnlineMongoMigrationProcessor
 
 
                 // Process the change
-                PreProcessChangeEvent(change, targetCollection, collectionKey, accumulatedChangesInColl[collectionKey], _job.IsSimulatedRun, migrationUnit);
+                PreProcessChangeEvent(change, targetCollection, collectionKey, accumulatedChangesInColl[collectionKey], _job.IsSimulatedRun, migrationUnit!);
 
                 migrationUnit.CSUpdatesInLastBatch++;                
 
@@ -360,7 +362,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private async Task BulkProcessAllChangesAsync(Dictionary<string, AccumulatedChangesTracker> accumulatedChangesInColl)
+        private async Task BulkProcessAllChangesAsync(Dictionary<string, AccumulatedChangesTracker>? accumulatedChangesInColl)
         {
             foreach (var kvp in accumulatedChangesInColl)
             {
@@ -375,11 +377,11 @@ namespace OnlineMongoMigrationProcessor
 
                     if (_monitorAllCollections)
                     {
-                        found = _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
+                        found = _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit!);
                     }
                     else
                     {
-                        found = _migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit);
+                        found = _migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit!);
                     }
 
                     if (found && collectionKey != null)
@@ -389,11 +391,11 @@ namespace OnlineMongoMigrationProcessor
                         if (_monitorAllCollections)
                         {
                             //since we want the chnages to  be reported to this dummy collection.
-                            _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
+                            _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit!);
                         }                        
                         
                         await BulkProcessChangesAsync(
-                            migrationUnit,
+                            migrationUnit!,
                             targetCollection,
                             insertEvents: docs.DocsToBeInserted,
                             updateEvents: docs.DocsToBeUpdated,

@@ -10,7 +10,7 @@ namespace MongoMigrationWebApp.Helpers
         private readonly Func<T, string, bool> _filterPredicate;
         private string _filterText = string.Empty;
         private int _currentPage = 1;
-        private int _pageSize = 25;
+        private int _pageSize = 10;
 
         public PaginationHelper(List<T> items, Func<T, string, bool> filterPredicate)
         {
