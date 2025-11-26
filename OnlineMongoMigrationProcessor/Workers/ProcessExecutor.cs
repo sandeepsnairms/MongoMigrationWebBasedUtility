@@ -1,4 +1,5 @@
-﻿using System;
+﻿using OnlineMongoMigrationProcessor.Helpers;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
@@ -18,17 +19,18 @@ namespace OnlineMongoMigrationProcessor.Workers
         private static readonly Dictionary<string, System.Timers.Timer> _percentageTimers = new Dictionary<string, System.Timers.Timer>();
         private static readonly object _timerLock = new object();
         private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-
-		public ProcessExecutor(Log log)
+        private ActiveMigrationUnitsCache _muCache;
+        public ProcessExecutor(Log log, ActiveMigrationUnitsCache muCache)
         {
             _log = log;
+            _muCache = muCache;
 		}
 		
 		/// <summary>
 		/// Executes a process with the given executable path and arguments.
 		/// </summary>
-		/// <param name="jobList">The job list for saving state.</param>
-		/// <param name="mu">Migration unit.</param>
+		/// <param name="jobList">The MigrationJobContext.MigrationJob list for saving state.</param>
+		/// <param name="mu">Migration mu.</param>
 		/// <param name="chunk">Migration chunk.</param>
 		/// <param name="chunkIndex">Index of the chunk.</param>
 		/// <param name="basePercent">Base percentage for progress calculation.</param>
@@ -41,8 +43,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 		/// <param name="onProcessEnded">Callback when process ends with PID.</param>
 		/// <returns>True if the process completed successfully, otherwise false.</returns>
 		public bool Execute(
-			JobList jobList, 
-			MigrationUnit mu, 
+            MigrationUnit mu, 
 			MigrationChunk chunk, 
 			int chunkIndex, 
 			double basePercent, 
@@ -59,7 +60,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             // Start timer immediately when process begins to ensure percentage updates
             // even if console output takes time to arrive or for resumed jobs
-            EnsurePercentageTimerRunning(mu, jobList, processType);
+            EnsurePercentageTimerRunning(mu,processType);
             
             try
             {
@@ -97,7 +98,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     {
                         _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}", LogType.Debug);
                         errorBuffer.AppendLine(args.Data);
-                        ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
+                        ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount);
                     }
                 };
 
@@ -119,6 +120,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                             _process.Kill(entireProcessTree: true);
                             _log.WriteLine($"{processType} process {processId} terminated due to cancellation.");
                             onProcessEnded?.Invoke(processId);
+                            string key = $"{mu.DatabaseName}.{mu.CollectionName}.{processType}";
+                            _percentageTimers[key].Enabled = false;
                             return false;
                         }
                         catch (Exception ex)
@@ -145,7 +148,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
-        private void ProcessConsoleOutput(string data, string processType, MigrationUnit mu, MigrationChunk chunk,int chunkIndex, double basePercent, double contribFactor, long targetCount, JobList jobList)
+        private void ProcessConsoleOutput(string data, string processType, MigrationUnit mu, MigrationChunk chunk,int chunkIndex, double basePercent, double contribFactor, long targetCount)
         {
             string percentValue = ExtractPercentage(data);
             string docsProcessed = ExtractDocCount(data);
@@ -189,7 +192,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (percent == 100 & processType == "MongoRestore")
             {
                 chunk.RestoredSuccessDocCount = targetCount - (chunk.RestoredFailedDocCount + chunk.SkippedAsDuplicateCount);
-                jobList.Save();
+
+                MigrationJobContext.SaveMigrationUnit(mu,false);
             }
 
             if (percent > 0 && targetCount>0)
@@ -201,7 +205,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
                     if (mu.RestorePercent >= 99.99)
+                    {
                         mu.RestoreComplete = true;
+                        _muCache.RemoveMigrationUnit(mu.Id);
+                    }
                 }
                 else
                 {
@@ -209,10 +216,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (mu.DumpPercent >= 99.99)
                         mu.DumpComplete = true;
                 }
-                jobList.Save();
-                
-                // Ensure timer is running for this migration unit to handle percentage updates
-                EnsurePercentageTimerRunning(mu, jobList, processType);
+
+                MigrationJobContext.SaveMigrationUnit(mu,true);
+
+                // Ensure timer is running for this migration mu to handle percentage updates
+                EnsurePercentageTimerRunning(mu,processType);
             }
             else
             {
@@ -295,10 +303,10 @@ namespace OnlineMongoMigrationProcessor.Workers
         }
 
         /// <summary>
-        /// Ensures a timer is running for the given migration unit to periodically recalculate percentages.
+        /// Ensures a timer is running for the given migration mu to periodically recalculate percentages.
         /// Timer runs every 5 seconds and stops when all chunks are complete.
         /// </summary>
-        private static void EnsurePercentageTimerRunning(MigrationUnit mu, JobList jobList, string processType)
+        private static void EnsurePercentageTimerRunning(MigrationUnit mu, string processType)
         {
             string key = $"{mu.DatabaseName}.{mu.CollectionName}.{processType}";
             
@@ -340,7 +348,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
                                 if (mu.RestorePercent >= 99.99)
                                     mu.RestoreComplete = true;
-                                jobList.Save();
+
+                                MigrationJobContext.SaveMigrationUnit(mu,true);
                             }
                         }
                         else // MongoDump
@@ -364,7 +373,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false);
                                 if (mu.DumpPercent >= 99.99)
                                     mu.DumpComplete = true;
-                                jobList.Save();
+
+                                MigrationJobContext.SaveMigrationUnit(mu,true);
                             }
                         }
                         
@@ -463,29 +473,24 @@ namespace OnlineMongoMigrationProcessor.Workers
             return 0;
         }
 
-        /// <summary>
-        /// Terminates the currently running process, if any.
-        /// Note: This method is deprecated. Use CancellationToken instead.
-        /// </summary>
-        [Obsolete("Use CancellationToken for graceful cancellation")]
-        public void Terminate()
-        {
-            lock (_processLock)
-            {
-                if (_process != null && !_process.HasExited)
-                {
-                    try
-                    {
-                        _process.Kill(entireProcessTree: true);
-                        _log.WriteLine("Process terminated via Terminate() method");
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.WriteLine($"Error terminating process: {Helper.RedactPii(ex.Message)}", LogType.Error);
-                    }
-                }
-            }
-        }
+        //public void Terminate()
+        //{
+        //    lock (_processLock)
+        //    {
+        //        if (_process != null && !_process.HasExited)
+        //        {
+        //            try
+        //            {
+        //                _process.Kill(entireProcessTree: true);
+        //                _log.WriteLine("Process terminated via Terminate() method");
+        //            }
+        //            catch (Exception ex)
+        //            {
+        //                _log.WriteLine($"Error terminating process: {Helper.RedactPii(ex.Message)}", LogType.Error);
+        //            }
+        //        }
+        //    }
+        //}
     }
 }
 

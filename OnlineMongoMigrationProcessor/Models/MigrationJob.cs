@@ -10,14 +10,15 @@ namespace OnlineMongoMigrationProcessor
 {
     public class MigrationJob
     {
-        public string? Id { get; set; }
+
+        public string Id { get; set; }
         public string? Name { get; set; }
         public string? SourceEndpoint { get; set; }
         public string? TargetEndpoint { get; set; }
-        [JsonIgnore]
-        public string? SourceConnectionString { get; set; }
-        [JsonIgnore]
-        public string? TargetConnectionString { get; set; }
+        //[JsonIgnore]
+        //public string? SourceConnectionString { get; set; }
+        //[JsonIgnore]
+        //public string? TargetConnectionString { get; set; }
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
         
@@ -146,6 +147,55 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
+        public List<MigrationUnitBasic>? MigrationUnitBasics { get; set; }
+
+
+        [JsonProperty("MigrationUnits")]
+        private List<MigrationUnit>? _migrationUnitsBackingField
+        {
+            get => null; // Never serialize this property - returns null so JSON.NET won't include it
+            set => MigrationUnits = value; // Allow deserialization - set the public property
+        }
+
+        [JsonIgnore]
         public List<MigrationUnit>? MigrationUnits { get; set; }
+
+
+        //public List<MigrationUnit>? MigrationUnits { get; set; }
+
+        // Legacy property for backward compatibility - will be removed in future versions
+        // This will only be deserialized if present in JSON, but never serialized
+        //[JsonProperty("MigrationUnits", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        //private List<MigrationUnit>? _migrationUnits
+        //{
+        //    get => null; // Never serialize this
+        //    set
+        //    {
+        //        // Handle deserialization of legacy MigrationUnits property
+        //        if (value != null)
+        //        {
+        //            foreach (var mu in value)
+        //            {
+        //                MigrationUnitIds ??= new List<string>();
+        //                if (!MigrationUnitIds.Contains(mu.Id))
+        //                {
+        //                    MigrationUnitIds.Add(mu.Id);
+        //                }
+        //            }
+        //        }
+        //    }
+        //}
+
+        public bool Persist()
+        {
+
+            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
+            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}\\jobdefinition.json";
+
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+
+            return Helper.WriteAtomicFile(filePath, json);
+            
+        }
     }
 }

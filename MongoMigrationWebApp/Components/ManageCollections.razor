@@ -223,10 +223,10 @@
         // Initialize pagination helper with filter predicate
         _paginationHelper = new PaginationHelper<MigrationUnit>(
             LoadUpdatedMigrationUnits(),
-            (unit, filterText) =>
-                $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+            (mu, filterText) =>
+                $"{mu.DatabaseName}.{mu.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
         );
     }
 
@@ -244,10 +244,10 @@
     {
         _paginationHelper = new PaginationHelper<MigrationUnit>(
             LoadUpdatedMigrationUnits(),
-            (unit, filterText) =>
-                $"{unit.DatabaseName}.{unit.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
-                unit.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
+            (mu, filterText) =>
+                $"{mu.DatabaseName}.{mu.CollectionName}".Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.DatabaseName.Contains(filterText, StringComparison.OrdinalIgnoreCase) ||
+                mu.CollectionName.Contains(filterText, StringComparison.OrdinalIgnoreCase)
         );
     }
 
@@ -297,7 +297,7 @@
                 StateHasChanged(); // Update UI to show spinner
 
                 // Use the async method with SourceConnectionString parameter
-                var newunits = await Helper.PopulateJobCollectionsAsync(newCollection, SourceConnectionString ?? string.Empty, allCollectionsUseObjectId);
+                var newunits = await Helper.PopulateJobCollectionsAsync(MigrationJob, newCollection, SourceConnectionString ?? string.Empty, allCollectionsUseObjectId);
                 
                 foreach (var mu in newunits)
                 {
@@ -307,6 +307,7 @@
                         updatedMigrationUnits.Add(mu);
                     }
                 }
+
 
                 newCollection = string.Empty;
                 

@@ -206,10 +206,12 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        private static ChunkBoundaries? GetChunkBoundariesGeneral(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, DataType dataType, BsonDocument? userFilter, bool skipDataTypeFilter, long sampleCount, long chunkCount, int segmentCount)
+        private static ChunkBoundaries? GetChunkBoundariesGeneral(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, DataType dataType, BsonDocument userFilter, bool skipDataTypeFilter, long sampleCount, long chunkCount, int segmentCount)
         {
             ChunkBoundaries chunkBoundaries = new ChunkBoundaries();
 
+
+            Boundary? segmentBoundary = null;
             Boundary? chunkBoundary = null;
 
             if (chunkCount == 1 || dataType == DataType.Other)
@@ -289,9 +291,10 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
 
-
+            //long docCountByType;
             if (partitionValues == null || partitionValues.Count == 0)
             {
+                //docCountByType = 0;
                 if (skipDataTypeFilter)
                 {
                     log.WriteLine($"No data found (DataType filtering bypassed)");
@@ -318,7 +321,7 @@ namespace OnlineMongoMigrationProcessor
             return chunkBoundaries;
         }
 
-        private static ChunkBoundaries? GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount, int segmentCount, BsonDocument? userFilter, MigrationSettings config)
+        private static ChunkBoundaries? GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount, int segmentCount, BsonDocument userFilter, MigrationSettings config)
         {
 
             log.WriteLine($"Using objectId sampler {config.ObjectIdPartitioner} for sampling {collection.CollectionNamespace} with {sampleCount} samples, Segment Count: {segmentCount}");

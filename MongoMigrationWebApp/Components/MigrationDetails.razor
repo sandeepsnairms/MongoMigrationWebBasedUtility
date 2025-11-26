@@ -5,6 +5,7 @@
 @using OnlineMongoMigrationProcessor
 @using OnlineMongoMigrationProcessor.Models
 @using Microsoft.JSInterop
+@using OnlineMongoMigrationProcessor.Helpers
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
     <div class="modal-dialog bg-dark">
@@ -178,7 +179,7 @@
     public MigrationJob? Job { get; set; }
 
     [Parameter]
-    public EventCallback<MigrationJob> OnSubmit { get; set; }
+    public Func<MigrationJob, string, string, Task<bool>>? OnSubmit { get; set; }
 
     [Parameter]
     public Func<string, Task<bool>>? CheckNameExists { get; set; }
@@ -206,50 +207,50 @@
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
-    
+
     // File upload state
     private bool isFileUploaded = false;
     private bool isTextAreaUsed = false;
     private string uploadedFileName = string.Empty;
 
     private void OnTextAreaInput(ChangeEventArgs e)
-{
+    {
         var value = e?.Value?.ToString() ?? string.Empty;
         isTextAreaUsed = !string.IsNullOrWhiteSpace(value);
     }
 
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
     {
-     try
+        try
         {
-   var file = e.File;
-    
-          if (file == null)
- {
-           return;
-     }
+            var file = e.File;
+
+            if (file == null)
+            {
+                return;
+            }
 
             // Limit file size to 10MB
             const long maxFileSize = 10 * 1024 * 1024;
             if (file.Size > maxFileSize)
-          {
-              errorMessage = "File size exceeds 10MB limit.";
+            {
+                errorMessage = "File size exceeds 10MB limit.";
                 return;
-     }
+            }
 
             using var stream = file.OpenReadStream(maxFileSize);
-using var reader = new StreamReader(stream);
+            using var reader = new StreamReader(stream);
             namespaces = await reader.ReadToEndAsync();
 
             isFileUploaded = true;
- uploadedFileName = file.Name;
-      isTextAreaUsed = false; // Reset text area flag when file is uploaded
-          errorMessage = string.Empty;
-          StateHasChanged();
+            uploadedFileName = file.Name;
+            isTextAreaUsed = false; // Reset text area flag when file is uploaded
+            errorMessage = string.Empty;
+            StateHasChanged();
         }
-catch (Exception ex)
+        catch (Exception ex)
         {
-  errorMessage = $"Error reading file: {ex.Message}";
+            errorMessage = $"Error reading file: {ex.Message}";
         }
     }
 
@@ -257,8 +258,8 @@ catch (Exception ex)
     {
         isFileUploaded = false;
         uploadedFileName = string.Empty;
-    namespaces = string.Empty;
-    StateHasChanged();
+        namespaces = string.Empty;
+        StateHasChanged();
     }
 
     private void OnModeSelectionChanged(ChangeEventArgs e)
@@ -284,7 +285,7 @@ catch (Exception ex)
     {
         var val = e?.Value?.ToString() ?? "Delayed";
         SelectedChangeStreamMode = val;
-        
+
         // Map dropdown selection to boolean flags
         switch (val)
         {
@@ -355,10 +356,10 @@ catch (Exception ex)
             uploadedFileName = string.Empty;
         }
         else
-     {
-       name = Job?.Name ?? string.Empty;
-            sourceConnectionString = Job?.SourceConnectionString ?? string.Empty;
-            targetConnectionString = Job?.TargetConnectionString ?? string.Empty;
+        {
+            name = Job?.Name ?? string.Empty;
+            sourceConnectionString = MigrationJobContext.SourceConnectionString[Job?.Id] ?? string.Empty;
+            targetConnectionString = MigrationJobContext.TargetConnectionString[Job?.Id] ?? string.Empty;
             namespaces = Job?.NameSpaces ?? string.Empty;
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
@@ -498,13 +499,12 @@ catch (Exception ex)
             }
         }
 
+
         var job = new MigrationJob
         {
             Name = name,
             Id = Guid.NewGuid().ToString(),
             CDCMode = cdcMode,
-            SourceConnectionString = sourceConnectionString,
-            TargetConnectionString = targetConnectionString,
             SourceEndpoint = tmpSrcEndpoint,
             TargetEndpoint = tmpTgtEndpoint,
             NameSpaces = namespaces,
@@ -516,13 +516,20 @@ catch (Exception ex)
             CSStartsAfterAllUploads = startCSAfterUploads,
             AggresiveChangeStream = aggressiveCS,
             ChangeStreamLevel = changeStreamLevel,
-            AllCollectionsUseObjectId = allCollectionsUseObjectId  // Transient flag, not persisted
+            AllCollectionsUseObjectId = allCollectionsUseObjectId, // Transient flag, not persisted
+            MigrationUnitBasics = new List<MigrationUnitBasic>()
         };
-        await OnSubmit.InvokeAsync(job);
+        if (OnSubmit != null)
+        {
+            await OnSubmit(job, sourceConnectionString, targetConnectionString);
+        }
     }
 
-    private Task Cancel()
+    private async Task Cancel()
     {
-        return OnSubmit.InvokeAsync(null);
+        if (OnSubmit != null)
+        {
+            await OnSubmit(null, string.Empty, string.Empty);
+        }
     }
 }

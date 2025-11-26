@@ -1,11 +1,9 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using System;
+using System.Collections.Generic;
 using OnlineMongoMigrationProcessor;
-using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
-using System;
-using System.Collections.Generic;
-
+using OnlineMongoMigrationProcessor.Helpers;
 
 namespace MongoMigrationWebApp.Service
 {
@@ -17,19 +15,19 @@ namespace MongoMigrationWebApp.Service
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
         private string _lastJobID = string.Empty;
-        private readonly IConfiguration _configuration;
+private readonly IConfiguration _configuration;
         private System.Threading.Timer? _resumeTimer;
         private bool _resumeExecuted = false;
 
         public JobManager(IConfiguration configuration)
         {
             _configuration = configuration;
-            LogToFile("Starting Timer");
-            // Start a timer that fires once after 1 minute
+            
+            // Start a timer that fires once after 2 minutes
             _resumeTimer = new System.Threading.Timer(
                 ResumeTimerCallback,
                 null,
-                TimeSpan.FromSeconds(60),
+                TimeSpan.FromMinutes(2),
                 System.Threading.Timeout.InfiniteTimeSpan
             );
         }
@@ -65,18 +63,16 @@ namespace MongoMigrationWebApp.Service
 
                             if (sourceConnectionString != null && targetConnectionString != null)
                             {
-                                LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("mongocluster"));
+                                LogToFile($"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
 
                                 var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
                                 var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
                                 if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
                                 {
-                                    LogToFile($"Step 4 :Startig Job");
                                     migrationJobs[0].SourceConnectionString = sourceConnectionString;
                                     migrationJobs[0].TargetConnectionString = targetConnectionString;
                                     //ViewMigration(migrationJobs[0].Id);
                                     StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
-                                    LogToFile($"Step 5 :Started Job");
                                 }
                             }
                         }
@@ -94,7 +90,6 @@ namespace MongoMigrationWebApp.Service
                 _resumeTimer = null;
             }
         }
-
 
         #region Logging
 
@@ -116,8 +111,7 @@ namespace MongoMigrationWebApp.Service
             }
         }
 
-        #endregion
-
+        #endregion 
         #region _configuration Management
 
         public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updated_config, out string errorMessage)
@@ -141,83 +135,128 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Job Management
 
-        private JobList EnsureJobList()
+        public JobList GetJobList()
         {
             return _jobList ??= new JobList();
         }
 
 
-        public DateTime GetJobBackupDate()
-        {
-            return EnsureJobList().GetBackupDate();
+        //public DateTime GetJobBackupDate()
+        //{
+        //    return GetJobList().GetBackupDate();
+        //}
+
+       
+        public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
+        {            
+            return Helper.GetMigrationUnitsToMigrate(mj);
         }
 
+        //public bool RestoreJobsFromBackup(out string errorMessage)
+        //{
+        //    _jobList = null;
+        //    _jobList = new JobList();
 
-        public bool RestoreJobsFromBackup(out string errorMessage)
+        //    var success = _jobList.LoadJobs(out errorMessage, true);
+        //    if (!success)
+        //    {
+        //        return false;
+        //    }
+
+        //    if (MigrationWorker != null)
+        //    {
+        //        MigrationWorker.StopMigration();
+        //        MigrationWorker = null;
+        //    }
+
+        //    MigrationWorker = new MigrationWorker(_jobList);
+
+        //    errorMessage = string.Empty;
+        //    return success;
+        //}
+
+        //public bool SaveJobs(out string errorMessage)
+        //{
+        //    return GetJobList().Save(out errorMessage);
+        //}
+
+        public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
-            _jobList = null;
-            _jobList = new JobList();
-
-            var success = _jobList.LoadJobs(out errorMessage, true);
-            if (!success)
+            if(active)
             {
-                return false;
+                if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+                {
+                    Console.WriteLine($"GetMigrationJobById from MigrationWorker.CurrentlyActiveJob");
+                    var mj = MigrationWorker.CurrentlyActiveJob;
+                    if(mj != null)
+                        return mj;
+                }
             }
-
-            if (MigrationWorker != null)
-            {
-                MigrationWorker.StopMigration();
-                MigrationWorker = null;
-            }
-
-            MigrationWorker = new MigrationWorker(_jobList);
-
-            errorMessage = string.Empty;
-            return success;
+            var job = MigrationJobContext.GetMigrationJob(id);
+            return job;
         }
 
-        public bool SaveJobs(out string errorMessage)
+        public List<MigrationJob> GetMigrationJobs(List<string> ids)
         {
-            return EnsureJobList().Save(out errorMessage);
+            List<MigrationJob> jobs = new List<MigrationJob>();
+            foreach (var id in ids)
+            {
+                var job = MigrationJobContext.GetMigrationJob(id);
+                if (job != null)
+                {
+                    jobs.Add(job);
+                }
+            }
+            return jobs;
         }
 
 
 
-        public List<MigrationJob> GetMigrations(out string errorMessage, bool force = false)
+        public List<string> GetMigrationIds(out string errorMessage)
         {
             errorMessage = string.Empty;
             bool isSucess = true;
             if (_jobList == null)
             {
                 _jobList = new JobList();
-                isSucess = _jobList.LoadJobs(out errorMessage, false);
+                isSucess = _jobList.LoadJobList(out errorMessage);          
             }
             else
             {
                 errorMessage = string.Empty;
-                return _jobList.MigrationJobs ?? new List<MigrationJob>();
+                return _jobList.MigrationJobIds ?? new List<string>();
             }
-            // Ensure we always return a non-null list
-            if (_jobList.MigrationJobs == null)
+
+            // create a empty list if no file found
+            if (_jobList.MigrationJobIds == null)
             {
-                _jobList.MigrationJobs = new List<MigrationJob>();
-                if (isSucess || force)
-                {
-                    SaveJobs(out errorMessage);
-                }
+                _jobList.MigrationJobIds = new List<string>();
+                if(isSucess)
+                    MigrationJobContext.SaveJobList(_jobList);
             }
-            return _jobList.MigrationJobs;
+
+            return _jobList.MigrationJobIds;
         }
 
         public void ClearJobFiles(string jobId)
         {
+            _jobList.MigrationJobIds?.Remove(jobId);
+            MigrationJobContext.SaveJobList(_jobList);
+;
             try
             {
-                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+                Task.Run(() =>
+                {
+                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}", true);
+                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+                    
+                });
             }
             catch
             {
             }
+
+            
         }
 
         #endregion 
@@ -319,39 +358,83 @@ namespace MongoMigrationWebApp.Service
 
         public Task CancelMigration(string id)
         {
-            var list = EnsureJobList().MigrationJobs;
-            if (list != null)
+            //var list = GetJobList().MigrationJobs;
+            //if (list != null)
+            //{
+            var migration = MigrationJobContext.GetMigrationJob(id);
+            if (migration != null)
             {
-                var migration = list.Find(m => m.Id == id);
-                if (migration != null)
-                {
-                    migration.IsCancelled = true;
-                    migration.IsStarted = false;
-                }
+                migration.IsCancelled = true;
+                migration.IsStarted = false;
             }
+            //}
             return Task.CompletedTask;
         }
 
         public Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
+            
+
+            MigrationWorker = new MigrationWorker(GetJobList());
+            MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
+            MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
+
+            MigrationJobContext.MigrationJob = job;
+
             // Fire-and-forget: UI should not block on long-running migration
-            _ = MigrationWorker?.StartMigrationAsync(job, sourceConnectionString, targetConnectionString, namespacesToMigrate, jobType, trackChangeStreams);
+            _ = MigrationWorker?.StartMigrationAsync(namespacesToMigrate, jobType, trackChangeStreams);
+            
+            Console.WriteLine($"Started migration for Job ID: {job.Id}");
+
             return Task.CompletedTask;
         }
 
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
-            MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
+            MigrationWorker = new MigrationWorker(GetJobList());
+
+            MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
+            MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
+            MigrationJobContext.MigrationJob = job;
+
+            MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString);
         }
-
-
         public string GetRunningJobId()
         {
             return MigrationWorker?.GetRunningJobId() ?? string.Empty;
         }
+
+        //public JobList.ConnectionAccessor SourceConnectionString
+        //{
+        //    get => MigrationJobContext.SourceConnectionString;
+        //    set
+        //    {
+        //        // Optional: if you want to copy data from another accessor
+        //        if (value != null)
+        //        {
+        //            foreach (var key in value.Keys)
+        //            {
+        //                MigrationJobContext.SourceConnectionString[key] = value[key];
+        //            }
+        //        }
+        //    }
+        //}
+
+        //public JobList.ConnectionAccessor TargetConnectionString
+        //{
+        //    get => MigrationJobContext.TargetConnectionString;
+        //    set
+        //    {
+        //        if (value != null)
+        //        {
+        //            foreach (var key in value.Keys)
+        //            {
+        //                MigrationJobContext.TargetConnectionString[key] = value[key];
+        //            }
+        //        }
+        //    }
+        //}
 
         public bool IsProcessRunning(string id)
         {
