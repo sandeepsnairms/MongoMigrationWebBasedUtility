@@ -1,21 +1,23 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
-using System.Security.Cryptography;
 using System.Xml.Linq;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -129,7 +131,34 @@ namespace OnlineMongoMigrationProcessor
             return connectionString;
         }
 
+        public static async Task<bool> ValidateMongoToolsAvailableAsync(Log log)
+        {
+            try
+            {
+                var mongodumpCheck = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "mongodump",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                mongodumpCheck?.WaitForExit();
 
+                if (mongodumpCheck?.ExitCode != 0)
+                {
+                    throw new Exception("mongodump not found in PATH");
+                }
+
+                log.WriteLine("MongoDB tools validated successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"MongoDB tools not available: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
         public static async Task<string> EnsureMongoToolsAvailableAsync(Log log,string toolsDestinationFolder, MigrationSettings config)
         {
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
@@ -727,13 +756,6 @@ namespace OnlineMongoMigrationProcessor
             File.Move(src, dest); // keep exceptions — this is the "atomic" part
         }
 
-        private static void Log(string message)
-        {
-            System.IO.File.AppendAllLines(
-                Helper.GetWorkingFolder() + "log_debug_log.txt",
-                new[] { $"{DateTime.Now}: {message}" });
-        }
-
 
         public static string GenerateMigrationUnitId(string databaseName, string collectionName)
         {
@@ -834,6 +856,15 @@ namespace OnlineMongoMigrationProcessor
             {
                 return string.Empty;
             }
+        }
+
+        /// <summary>
+        /// Checks if the current operating system is Windows.
+        /// </summary>
+        /// <returns>True if running on Windows, false otherwise</returns>
+        public static bool IsWindows()
+        {
+            return OperatingSystem.IsWindows();
         }
     }
 }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using OnlineMongoMigrationProcessor;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
 
 namespace MongoMigrationWebApp.Service
 {
@@ -15,19 +15,21 @@ namespace MongoMigrationWebApp.Service
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
         private string _lastJobID = string.Empty;
-private readonly IConfiguration _configuration;
+        private readonly IConfiguration _configuration;
         private System.Threading.Timer? _resumeTimer;
         private bool _resumeExecuted = false;
 
         public JobManager(IConfiguration configuration)
         {
             _configuration = configuration;
-            
-            // Start a timer that fires once after 2 minutes
+
+            LogToFile("Invoking Timer");
+
+            // Start a timer that fires once after 1 minute
             _resumeTimer = new System.Threading.Timer(
                 ResumeTimerCallback,
                 null,
-                TimeSpan.FromMinutes(2),
+                TimeSpan.FromMinutes(1),
                 System.Threading.Timeout.InfiniteTimeSpan
             );
         }
@@ -43,36 +45,39 @@ private readonly IConfiguration _configuration;
             try
             {
                 LogToFile("Resuming migration job after application restart...");
-                var migrationJobs = GetMigrations(out string errorMessage);
+                var migrationJobIds = GetMigrationIds(out string errorMessage);
 
                 LogToFile("Step 0");
 
-                if (migrationJobs != null && migrationJobs.Count == 1)
+                if (migrationJobIds != null && migrationJobIds.Count == 1)
                 {
-
-                    LogToFile($"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
-                    if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
+                    var mj= GetMigrationJobById(migrationJobIds[0]);
+                    LogToFile($"Step1 : {mj.IsStarted}-{mj.IsCompleted} -{string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id])} - {string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])} ");
+                    if (mj.IsStarted && !mj.IsCompleted && string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id]) && string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id]))
                     {
                         try
                         {
                             LogToFile("Step2 : before reading config");
-
 
                             var sourceConnectionString = _configuration.GetConnectionString("SourceConnectionString");
                             var targetConnectionString = _configuration.GetConnectionString("TargetConnectionString");
 
                             if (sourceConnectionString != null && targetConnectionString != null)
                             {
-                                LogToFile($"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
+                                LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("cluster"));
 
                                 var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
                                 var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
-                                if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+                                if (mj.SourceEndpoint == tmpSrcEndpoint && mj.TargetEndpoint == tmpTgtEndpoint)
                                 {
-                                    migrationJobs[0].SourceConnectionString = sourceConnectionString;
-                                    migrationJobs[0].TargetConnectionString = targetConnectionString;
-                                    //ViewMigration(migrationJobs[0].Id);
-                                    StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                                    MigrationJobContext.SourceConnectionString[mj.Id] = sourceConnectionString;
+                                    MigrationJobContext.TargetConnectionString[mj.Id] = targetConnectionString;
+
+                                    LogToFile("Job Starting");
+
+                                    StartMigrationAsync(mj, sourceConnectionString, targetConnectionString, mj.NameSpaces ?? string.Empty, mj.JobType, Helper.IsOnline(mj));
+
+                                    LogToFile("Job Started");
                                 }
                             }
                         }
@@ -103,7 +108,7 @@ private readonly IConfiguration _configuration;
             {
                 string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
                 string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
-                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", logEntry);
+                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}AutoStartLog.txt", logEntry);
             }
             catch
             {
@@ -231,11 +236,14 @@ private readonly IConfiguration _configuration;
             if (_jobList.MigrationJobIds == null)
             {
                 _jobList.MigrationJobIds = new List<string>();
-                if(isSucess)
+                if (isSucess)
                     MigrationJobContext.SaveJobList(_jobList);
             }
+            else
+                MigrationJobContext.SaveJobList(_jobList);
+        
 
-            return _jobList.MigrationJobIds;
+                return _jobList.MigrationJobIds;
         }
 
         public void ClearJobFiles(string jobId)
@@ -247,9 +255,12 @@ private readonly IConfiguration _configuration;
             {
                 Task.Run(() =>
                 {
-                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}", true);
-                    System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
-                    
+                    MigrationJobContext.Store.DeleteDocument(jobId);
+
+                    //clearing  dumped files
+                    if (Helper.IsWindows())
+                        System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+
                 });
             }
             catch

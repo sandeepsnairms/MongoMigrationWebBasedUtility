@@ -1,5 +1,5 @@
 using Newtonsoft.Json;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.IO;
 
@@ -24,7 +24,7 @@ namespace OnlineMongoMigrationProcessor
 
         public MigrationSettings()
         {
-            _filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\config.json";
+            _filePath = $"migrationjobs\\config.json";
         }
 
         public object Clone()
@@ -37,9 +37,10 @@ namespace OnlineMongoMigrationProcessor
         public void Load()
         {
             bool initialized = false;
-            if (File.Exists(_filePath))
+            if (MigrationJobContext.Store.DocumentExists(_filePath))
             {
-                string json = File.ReadAllText(_filePath);
+                //string json = File.ReadAllText(_filePath);
+                string json= MigrationJobContext.Store.ReadDocument(_filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationSettings>(json);
                 if (loadedObject != null)
                 {
@@ -83,7 +84,9 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 string json = JsonConvert.SerializeObject(this);
-                File.WriteAllText(_filePath, json);
+                MigrationJobContext.Store.UpsertDocument(_filePath, json);
+
+                //File.WriteAllText(_filePath, json);
                 errorMessage=string.Empty;
                 return true;
             }

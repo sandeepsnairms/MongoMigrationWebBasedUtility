@@ -1,12 +1,13 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace OnlineMongoMigrationProcessor.Helpers
+namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     public class AccumulatedChangesTracker
     {

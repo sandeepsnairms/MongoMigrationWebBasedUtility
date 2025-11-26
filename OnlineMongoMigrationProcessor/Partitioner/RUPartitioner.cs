@@ -2,6 +2,7 @@
 using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;

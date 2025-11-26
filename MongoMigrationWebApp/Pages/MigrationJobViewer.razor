@@ -1,9 +1,11 @@
 ﻿@page "/migrationjobviewer/{jobId}"
-@using OnlineMongoMigrationProcessor
+@using MigrationJobType = OnlineMongoMigrationProcessor.MigrationJob
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
+@using OnlineMongoMigrationProcessor
+@using OnlineMongoMigrationProcessor.Context
 @using OnlineMongoMigrationProcessor.Helpers
-@using MigrationJobType = OnlineMongoMigrationProcessor.MigrationJob
+
 @inject Service.JobManager JobManager
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JS
@@ -1231,6 +1233,7 @@ else if (@_showLogBackupFile)
         var mj = MigrationJob;
         if (job == null || mj == null)
         {
+            await InvokeAsync(StateHasChanged);
             return false;
         }
 

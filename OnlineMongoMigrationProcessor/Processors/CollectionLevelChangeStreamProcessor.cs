@@ -1,13 +1,15 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
@@ -90,7 +92,7 @@ namespace OnlineMongoMigrationProcessor
                             // Initialize accumulated changes tracker if not present
                             if (!_accumulatedChangesPerCollection.ContainsKey(key))
                             {
-                                _accumulatedChangesPerCollection[key] = new AccumulatedChangesTracker();
+                                _accumulatedChangesPerCollection[key] = new AccumulatedChangesTracker(key);
                             }
 
                             mu.CSLastBatchDurationSeconds = seconds; // Store the factor for each mu
@@ -371,7 +373,7 @@ namespace OnlineMongoMigrationProcessor
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                         _log.WriteLine($"{_syncBackPrefix}Resume strategy: No resume (MongoDB 3.x) for {collectionKey}", LogType.Verbose);
                     }
-                    else if (startedOn > DateTime.MinValue && !version.StartsWith("3"))  //newer version
+                    else if (startedOn > DateTime.MinValue && !version.StartsWith("3") && !(CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !CurrentlyActiveJob.ProcessingSyncBack))  //newer version
                     {
                         var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
@@ -527,7 +529,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (!_accumulatedChangesPerCollection.ContainsKey(collectionKey))
             {
-                _accumulatedChangesPerCollection[collectionKey] = new AccumulatedChangesTracker();
+                _accumulatedChangesPerCollection[collectionKey] = new AccumulatedChangesTracker(collectionKey);
             }
 
             var accumulatedChangesInColl = _accumulatedChangesPerCollection[collectionKey];

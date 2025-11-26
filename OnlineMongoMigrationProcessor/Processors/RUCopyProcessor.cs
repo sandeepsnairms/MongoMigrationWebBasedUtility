@@ -1,7 +1,10 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json.Linq;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Partitioner;
 using System;
@@ -12,7 +15,7 @@ using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 // Nullability and fire-and-forget warnings addressed in code; no pragmas required.

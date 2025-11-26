@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using System.Web;
 using static System.Net.Mime.MediaTypeNames;
 
-namespace OnlineMongoMigrationProcessor.Helpers
+namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
     public static class MongoClientFactory
     {

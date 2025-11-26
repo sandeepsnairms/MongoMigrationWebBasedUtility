@@ -1,5 +1,6 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Concurrent;
@@ -7,7 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
 
 namespace OnlineMongoMigrationProcessor.Helpers
 {

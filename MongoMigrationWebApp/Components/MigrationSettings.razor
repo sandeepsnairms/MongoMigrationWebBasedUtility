@@ -9,10 +9,13 @@
                 <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
             </div>
             <div class="modal-body">
-                <div class="mb-3">
-                    <label for="mongo-url" class="form-label">Mongo tools download URL</label>
-                    <input type="text" id="mongo-url" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoToolsDownloadUrl" />
-                </div>
+                @if (Helper.IsWindows())
+                {
+                    <div class="mb-3">
+                        <label for="mongo-url" class="form-label">Mongo tools download URL</label>
+                        <input type="text" id="mongo-url" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoToolsDownloadUrl" />
+                    </div>
+                }
                 <div class="mb-3">
                     <label for="has-uuid" class="form-label">
                         <input type="checkbox" id="has-uuid" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ReadBinary" />

@@ -1,6 +1,8 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System.Collections.Generic;
 using System.Threading.Tasks;

@@ -1,6 +1,7 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Concurrent;
@@ -8,7 +9,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
+using OnlineMongoMigrationProcessor.Context;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
@@ -388,8 +391,11 @@ namespace OnlineMongoMigrationProcessor
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
-            if((insertEvents.Count + updateEvents.Count + deleteEvents.Count) > 0)
-                _log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEv            CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
+
+            if ((insertEvents.Count + updateEvents.Count + deleteEvents.Count) > 0)
+                _log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
+
+            CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {
                 switch (counterType)
                 {

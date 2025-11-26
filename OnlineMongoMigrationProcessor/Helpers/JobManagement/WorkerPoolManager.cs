@@ -4,7 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace OnlineMongoMigrationProcessor.Helpers
+namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     /// <summary>
     /// Manages a pool of workers with dynamic scaling capabilities.

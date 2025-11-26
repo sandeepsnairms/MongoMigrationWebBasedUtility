@@ -1,7 +1,10 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Partitioner;
 using OnlineMongoMigrationProcessor.Processors;
@@ -820,21 +823,35 @@ namespace OnlineMongoMigrationProcessor.Workers
                 MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
             }
 
-            
 
-            if (CurrentlyActiveJob.JobType==JobType.DumpAndRestore)
-			{
-                _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
-                _toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(_log, _toolsDestinationFolder, _config!);
-				if (string.IsNullOrEmpty(_toolsLaunchFolder))
-				{
-                    _log.WriteLine("MongoDB tools not available - stopping migration", LogType.Error);
-					StopMigration();
-					return;
-				}
-                _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
-			}
-
+            if (CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
+            {
+                if (!Helper.IsWindows())
+                {
+                    //ACA
+                    _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
+                    if (!await Helper.ValidateMongoToolsAvailableAsync(_log))
+                    {
+                        StopMigration();
+                        return;
+                    }
+                    _toolsLaunchFolder=string.Empty;
+                }
+                else
+                {
+                    //WebApp
+                    _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
+                    _toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(_log, _toolsDestinationFolder, _config!);
+                    if (string.IsNullOrEmpty(_toolsLaunchFolder))
+                    {
+                        _log.WriteLine("MongoDB tools not available - stopping migration", LogType.Error);
+                        StopMigration();
+                        return;
+                    }
+                    _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
+                    _toolsLaunchFolder = $"{_toolsLaunchFolder}\\";
+                }
+            }
 
             _log.WriteLine("Starting PrepareForMigration with retry logic", LogType.Debug);
 			TaskResult result = await new RetryHelper().ExecuteTask(

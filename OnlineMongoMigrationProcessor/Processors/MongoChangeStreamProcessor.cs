@@ -1,6 +1,6 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections;
@@ -15,7 +15,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
 using System.Xml.Linq;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
+using OnlineMongoMigrationProcessor.Context;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 

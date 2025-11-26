@@ -3,6 +3,7 @@ using OnlineMongoMigrationProcessor.Models;
 using MongoDB.Driver;
 using System;
 using System.Collections.Generic;
+using OnlineMongoMigrationProcessor.Context;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -160,42 +161,16 @@ namespace OnlineMongoMigrationProcessor
         [JsonIgnore]
         public List<MigrationUnit>? MigrationUnits { get; set; }
 
-
-        //public List<MigrationUnit>? MigrationUnits { get; set; }
-
-        // Legacy property for backward compatibility - will be removed in future versions
-        // This will only be deserialized if present in JSON, but never serialized
-        //[JsonProperty("MigrationUnits", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        //private List<MigrationUnit>? _migrationUnits
-        //{
-        //    get => null; // Never serialize this
-        //    set
-        //    {
-        //        // Handle deserialization of legacy MigrationUnits property
-        //        if (value != null)
-        //        {
-        //            foreach (var mu in value)
-        //            {
-        //                MigrationUnitIds ??= new List<string>();
-        //                if (!MigrationUnitIds.Contains(mu.Id))
-        //                {
-        //                    MigrationUnitIds.Add(mu.Id);
-        //                }
-        //            }
-        //        }
-        //    }
-        //}
-
         public bool Persist()
         {
 
-            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}\\jobdefinition.json";
+            //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
+            var filePath = $"migrationjobs\\{this.Id}\\jobdefinition.json";
 
             string json = JsonConvert.SerializeObject(this, Formatting.Indented);
 
-            return Helper.WriteAtomicFile(filePath, json);
-            
+            return MigrationJobContext.Store.UpsertDocument(filePath, json);
+ 
         }
     }
 }

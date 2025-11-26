@@ -4,7 +4,7 @@ using MongoDB.Driver;
 using MongoDB.Driver.Core.Clusters;
 using MongoDB.Driver.GeoJsonObjectModel.Serializers;
 using Newtonsoft.Json.Linq;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Generic;
@@ -17,7 +17,7 @@ using System.Threading.Tasks;
 
 // Nullability handled explicitly; removed pragmas.
 
-namespace OnlineMongoMigrationProcessor
+namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
     internal static class MongoHelper
     {
@@ -50,7 +50,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (ex.InnerException is System.Net.Sockets.SocketException)
                     return true;
-                if (ex.InnerException is System.IO.IOException)
+                if (ex.InnerException is IOException)
                     return true;
             }
 
@@ -165,7 +165,7 @@ namespace OnlineMongoMigrationProcessor
 
             return BsonMaxKey.Value;
         }
-        private class BsonValueComparerSimple : System.Collections.Generic.IComparer<BsonValue>
+        private class BsonValueComparerSimple : IComparer<BsonValue>
         {
             public int Compare(BsonValue? x, BsonValue? y)
             {
@@ -177,7 +177,7 @@ namespace OnlineMongoMigrationProcessor
         }
         public static long GetActualDocumentCount(IMongoCollection<BsonDocument> collection, MigrationUnit mu )
         {
-            FilterDefinition<BsonDocument>? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
+            FilterDefinition<BsonDocument>? userFilter = GetFilterDoc(mu.UserFilter);
             var filter = userFilter ?? Builders<BsonDocument>.Filter.Empty;
             return collection.CountDocuments(filter);
         }
@@ -660,7 +660,7 @@ namespace OnlineMongoMigrationProcessor
                         //try to go 15 min back in time, temporary fix for backward compatibility
                         var start = (mu.ChangeStreamStartedOn ?? DateTime.UtcNow).AddMinutes(-15).ToUniversalTime();
                         log.WriteLine($"Resetting change stream start time token for {mu.DatabaseName}.{mu.CollectionName} to {start} (UTC)");
-                        var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(start);
+                        var bsonTimestamp = ConvertToBsonTimestamp(start);
                         options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                     }
                 }
@@ -1433,7 +1433,7 @@ namespace OnlineMongoMigrationProcessor
             // Start with user filter or an empty JSON object
             return string.IsNullOrWhiteSpace(userFilter)
                 ? new BsonDocument()
-                : MongoDB.Bson.Serialization.BsonSerializer.Deserialize<BsonDocument>(userFilter);
+                : BsonSerializer.Deserialize<BsonDocument>(userFilter);
              
         }
 
@@ -1496,7 +1496,7 @@ namespace OnlineMongoMigrationProcessor
         {
             string resumeTokenJson = change.ResumeToken.ToJson();
             string documentKeyJson = change.DocumentKey.ToJson();
-            var operationType = (ChangeStreamOperationType)change.OperationType;
+            var operationType = change.OperationType;
 
             // Determine timestamp
             DateTime timestamp;
@@ -1711,7 +1711,7 @@ namespace OnlineMongoMigrationProcessor
                             .Where(err => err.Code == 11000)
                             .ToList();
 
-                        incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, (int)duplicateKeyErrors.Count);
+                        incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, duplicateKeyErrors.Count);
 
                         // Log non-duplicate key errors for inserts
                         var otherErrors = ex.WriteErrors
@@ -1776,7 +1776,7 @@ namespace OnlineMongoMigrationProcessor
                 var groupedUpdates = batch
                     .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
                     .GroupBy(e => e.DocumentKey.ToJson()) //use document key instead of _id
-                    .Select(g => g.OrderByDescending(e => e.ClusterTime ?? new MongoDB.Bson.BsonTimestamp(0, 0)).First()) // Take the latest update for each document
+                    .Select(g => g.OrderByDescending(e => e.ClusterTime ?? new BsonTimestamp(0, 0)).First()) // Take the latest update for each document
                     .ToList();
 
                 // Remove from temp collection if aggressive mode is enabled
@@ -1802,7 +1802,7 @@ namespace OnlineMongoMigrationProcessor
                         if (id.IsObjectId)
                             id = id.AsObjectId;
 
-                        var filter = MongoHelper.BuildFilterFromDocumentKey(e.DocumentKey);
+                        var filter = BuildFilterFromDocumentKey(e.DocumentKey);
                         //var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
 
                         // Use ReplaceOneModel instead of UpdateOneModel to avoid conflicts with unique indexes
@@ -1886,8 +1886,8 @@ namespace OnlineMongoMigrationProcessor
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
-                        updateCount = (ex.Result?.ModifiedCount ?? 0);
-                        upsertCount = (ex.Result?.Upserts?.Count ?? 0);
+                        updateCount = ex.Result?.ModifiedCount ?? 0;
+                        upsertCount = ex.Result?.Upserts?.Count ?? 0;
 
                         var duplicateKeyErrors = ex.WriteErrors
                             .Where(err => err.Code == 11000)
@@ -2062,7 +2062,7 @@ namespace OnlineMongoMigrationProcessor
                                 if (id.IsObjectId)
                                     id = id.AsObjectId;
 
-                                var filter = MongoHelper.BuildFilterFromDocumentKey(e.DocumentKey);
+                                var filter = BuildFilterFromDocumentKey(e.DocumentKey);
                                 return new DeleteOneModel<BsonDocument>(filter);
                             }
                             catch (Exception dex)

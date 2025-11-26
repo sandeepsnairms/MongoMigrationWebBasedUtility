@@ -13,6 +13,9 @@ using System.Threading.Tasks;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Processors;
 using OnlineMongoMigrationProcessor.Workers;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Context;
 
 // CS4014: Use explicit discards for intentional fire-and-forget tasks.
 
@@ -1034,7 +1037,7 @@ namespace OnlineMongoMigrationProcessor
                     initialPercent, 
                     contributionFactor, 
                     docCount, 
-                    $"{MongoToolsFolder}\\mongodump.exe", 
+                    $"{MongoToolsFolder}mongodump", 
                     args,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterDumpProcess(pid),
@@ -1171,7 +1174,7 @@ namespace OnlineMongoMigrationProcessor
                     initialPercent, 
                     contributionFactor, 
                     docCount, 
-                    $"{MongoToolsFolder}\\mongorestore.exe", 
+                    $"{MongoToolsFolder}mongorestore", 
                     args,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterRestoreProcess(pid),

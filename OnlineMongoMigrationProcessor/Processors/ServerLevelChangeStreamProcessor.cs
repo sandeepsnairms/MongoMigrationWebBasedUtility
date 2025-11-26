@@ -1,6 +1,9 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Concurrent;
@@ -9,7 +12,7 @@ using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static OnlineMongoMigrationProcessor.MongoHelper;
+using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
 using static System.Net.Mime.MediaTypeNames;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
@@ -189,7 +192,7 @@ namespace OnlineMongoMigrationProcessor
                 foreach (var id in _migrationUnitsToProcess.Keys)
                 {
                     _migrationUnitsToProcess[id] = 0;
-                    accumulatedChangesInColl[id] = new AccumulatedChangesTracker();
+                    accumulatedChangesInColl[id] = new AccumulatedChangesTracker(id);
                 }
 
                 if (CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
@@ -358,7 +361,7 @@ namespace OnlineMongoMigrationProcessor
                     migrationUnit.ParentJob = CurrentlyActiveJob;
                     if (!accumulatedChangesInColl.ContainsKey(collectionKey))
                     {
-                        accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker();
+                        accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker(collectionKey);
                     }
                 }
 

@@ -4,7 +4,7 @@ using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -54,8 +54,10 @@ namespace OnlineMongoMigrationProcessor
 
                 ParentJob.MigrationUnitBasics.RemoveAt(index);
 
-                var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
-                System.IO.File.Delete(filePath);
+                var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
+                MigrationJobContext.Store.DeleteDocument(filePath);
+
+                //System.IO.File.Delete(filePath);
 
                 return MigrationJobContext.SaveMigrationJob(ParentJob);
 
@@ -71,13 +73,12 @@ namespace OnlineMongoMigrationProcessor
         public bool Persist()
         {
 
-            Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
-            var filePath = $"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}\\{this.Id}.json";
+            //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
+            var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
 
             string json = JsonConvert.SerializeObject(this, Formatting.Indented);
 
-            return Helper.WriteAtomicFile(filePath, json);
-
+            return MigrationJobContext.Store.UpsertDocument(filePath, json);
         }
 
        
@@ -96,35 +97,6 @@ namespace OnlineMongoMigrationProcessor
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         public string? ResumeDocumentId { get; set; }
-
-        //[JsonProperty("ResumeDocumentId")]
-        //public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
-
-        //[JsonIgnore]
-        //public BsonDocument? ResumeDocumentId
-        //{
-        //    get
-        //    {
-        //        if (ResumeDocumentIdRaw == null) return null;
-        //        var doc = new BsonDocument();
-        //        foreach (var nv in ResumeDocumentIdRaw)
-        //        {
-        //            doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
-        //                ? BsonNull.Value
-        //                : BsonValue.Create(nv.Value);
-        //        }
-        //        return doc;
-        //    }
-        //    set
-        //    {
-        //        if (value == null) { ResumeDocumentIdRaw = null; return; }
-        //        ResumeDocumentIdRaw = value.Elements
-        //            .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
-        //            .ToList();
-        //    }
-        //}
-        
-
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
         public bool TargetCreated { get; set; }
@@ -139,11 +111,11 @@ namespace OnlineMongoMigrationProcessor
         public int CSLastBatchDurationSeconds { get; set; }
 
 		public int CSAddHours { get; set; }
-        public int SyncBackAddHours { get; set; }        public string? UserFilter { get; set; }
+        public int SyncBackAddHours { get; set; }
+        public string? UserFilter { get; set; }
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
-               
-        
+
         public long EstimatedDocCount { get; set; }
        
         public long ActualDocCount { get; set; }
