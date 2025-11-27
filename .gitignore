@@ -16,3 +16,4 @@
 /tests/OnlineMongoMigrationProcessor.Tests/obj
 *.dll
 /MongoMigrationWebApp/appsettings.Development.json
+/MongoMigrationWebApp/Properties/PublishProfiles/mongomigrationwebapp-app-2025112.pubxml.user
