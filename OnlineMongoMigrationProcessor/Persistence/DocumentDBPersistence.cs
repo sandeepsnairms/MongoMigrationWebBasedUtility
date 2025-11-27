@@ -18,12 +18,14 @@ namespace OnlineMongoMigrationProcessor.Persistence
     {
         private static IMongoClient? _client;
         private static IMongoDatabase? _database;
-        private static IMongoCollection<BsonDocument>? _collection;
+        private static IMongoCollection<BsonDocument>? _dataCollection;
+        private static IMongoCollection<BsonDocument>? _logCollection;
         private static bool _isInitialized = false;
         private static readonly object _initLock = new object();
         private static string _appId = string.Empty;
         private const string DATABASE_NAME = "mongomigrationwebappstorage";
-        private const string COLLECTION_NAME = "datafiles";
+        private const string DATA_Collection = "datafiles";
+        private const string LOG_Collection = "logfiles";
 
         /// <summary>
         /// Initializes the MongoDB persistence layer with the provided connection string.
@@ -49,13 +51,20 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 {
                     _client = new MongoClient(connectionStringOrPath);
                     _database = _client.GetDatabase(DATABASE_NAME);
-                    _collection = _database.GetCollection<BsonDocument>(COLLECTION_NAME);
+                    _dataCollection = _database.GetCollection<BsonDocument>(DATA_Collection);
+                    _logCollection = _database.GetCollection<BsonDocument>(LOG_Collection);
                     var collectionNames = _database.ListCollectionNames().ToListAsync().GetAwaiter().GetResult();
 
-                    if (!collectionNames.Contains(COLLECTION_NAME))
+                    if (!collectionNames.Contains(DATA_Collection))
                     {
-                        _database.CreateCollectionAsync(COLLECTION_NAME).GetAwaiter().GetResult();
+                        _database.CreateCollectionAsync(DATA_Collection).GetAwaiter().GetResult();
                     }
+
+                    if (!collectionNames.Contains(LOG_Collection))
+                    {
+                        _database.CreateCollectionAsync(LOG_Collection).GetAwaiter().GetResult();
+                    }
+
                     _appId = appId;
                     _isInitialized = true;
                 }
@@ -71,7 +80,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         private static void EnsureInitialized()
         {
-            if (!_isInitialized || _collection == null)
+            if (!_isInitialized || _dataCollection == null)
                 throw new InvalidOperationException("DocumentDBPersistence is not initialized. Call Initialize() first with a valid connection string.");
         }
 
@@ -93,6 +102,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>True if successful, false otherwise</returns>
         public override bool UpsertDocument(string id, string jsonContent)
         {
+            return Upsert(id, jsonContent, false);
+        }
+
+        private bool Upsert(string id, string jsonContent, bool IsLog)
+        {
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(id))
@@ -108,7 +122,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 document["_id"] = normalizedId;
 
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                 _collection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
+
+                if (IsLog)
+                    _logCollection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
+                else
+                    _dataCollection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
 
                 return true;
             }
@@ -135,15 +153,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var document = _collection!.Find(filter).FirstOrDefault();
+                var document = _dataCollection!.Find(filter).FirstOrDefault();
                 
                 if (document == null)
                     return null;
 
-                // Convert _id back to Id property for consistency with your models
-                //var idValue = document["_id"];
-                //document.Remove("_id");
-                //document["Id"] = idValue;
                 
                 return document.ToJson();
             }
@@ -170,7 +184,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var count = _collection!.CountDocuments(filter);
+                var count = _dataCollection!.CountDocuments(filter);
                 return count > 0;
             }
             catch
@@ -186,6 +200,10 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>True if deleted, false otherwise</returns>
         public override bool DeleteDocument(string id)
         {
+            return Delete(id);
+        }
+        private bool Delete(string id, bool isLog = false)
+        {
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(id))
@@ -195,7 +213,10 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var result = _collection!.DeleteOne(filter);
+
+                IMongoCollection<BsonDocument> collectionToUse = isLog ? _logCollection! : _dataCollection!;
+                
+                var result = collectionToUse.DeleteOne(filter);
                 return result.DeletedCount > 0;
             }
             catch (Exception ex)
@@ -216,7 +237,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             try
             {
                 var projection = Builders<BsonDocument>.Projection.Include("_id");
-                var documents = _collection!.Find(Builders<BsonDocument>.Filter.Empty)
+                var documents = _dataCollection!.Find(Builders<BsonDocument>.Filter.Empty)
                     .Project(projection)
                     .ToList();
 
@@ -229,48 +250,111 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
         }
 
-        /// <summary>
-        /// Pushes a LogObject to the LogEntries array in the document.
-        /// If the document doesn't exist, it creates a new one with the LogEntries array.
-        /// If it exists, appends the LogObject to the existing array.
-        /// </summary>
-        /// <param name="id">Unique identifier (_id) of the document</param>
-        /// <param name="logObject">LogObject to push to the array</param>
-        /// <returns>True if successful, false otherwise</returns>
-        public override bool PushLogEntry(string id, LogObject logObject)
+        public override byte[] DownloadLogsAsJsonBytes(string Id, int topEntries = 20, int bottomEntries = 230)
         {
             EnsureInitialized();
+            if (string.IsNullOrWhiteSpace(Id))
+                throw new ArgumentException("Path cannot be null or empty", nameof(Id));
+            try
+            {
+                var normalizedId = NormalizeIdForMongo(Id);
+                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
+                var document = _logCollection!.Find(filter).FirstOrDefault();
+                if (document != null)
+                {
+                    var logsArray = document.GetValue("logs").AsBsonArray;
+                    var selectedLogs = new BsonArray();
+                    int totalLogs = logsArray.Count;
 
+                    //if toptopEntries=0 and bottomEntries=0 return all logs
+                    if (topEntries == 0 && bottomEntries == 0)
+                    {
+                        selectedLogs = logsArray;
+                    }
+                    else
+                    {
+                        for (int i = 0; i < Math.Min(topEntries, totalLogs); i++)
+                        {
+                            selectedLogs.Add(logsArray[i]);
+                        }
+                        for (int i = Math.Max(totalLogs - bottomEntries, topEntries); i < totalLogs; i++)
+                        {
+                            selectedLogs.Add(logsArray[i]);
+                        }
+                    }
+                    var resultDocument = new BsonDocument
+                    {
+                        { "_id", normalizedId },
+                        { "logs", selectedLogs }
+                    };
+                    var jsonString = resultDocument.ToJson(new MongoDB.Bson.IO.JsonWriterSettings
+                    {
+                        Indent = true,       // enable pretty formatting
+                        IndentChars = "  "   // optional: two spaces
+                    });
+                    return System.Text.Encoding.UTF8.GetBytes(jsonString);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DocumentDBPersistence] Error downloading logs for {Id}: {ex.Message}");
+            }
+            return Array.Empty<byte>();
+        }
+
+
+        public override LogBucket ReadLogs(string id, out string fileName)
+        {
+            fileName = id;// $"{id}_logs.json";
             if (string.IsNullOrWhiteSpace(id))
                 throw new ArgumentException("ID cannot be null or empty", nameof(id));
-
-            if (logObject == null)
-                throw new ArgumentNullException(nameof(logObject));
 
             try
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                
-                // Convert LogObject to BsonDocument
-                var json = JsonConvert.SerializeObject(logObject);
-                var logBsonDocument = BsonDocument.Parse(json);
-                
-                // Use $push to add to LogEntries array, create document if it doesn't exist
-                var update = Builders<BsonDocument>.Update
-                    .Push("LogEntries", logBsonDocument)
-                    .SetOnInsert("_id", normalizedId);
-                
-                var options = new UpdateOptions { IsUpsert = true };
-                _collection!.UpdateOne(filter, update, options);
+                var document = _logCollection!.Find(filter).FirstOrDefault();
 
-                return true;
+                if (document != null)
+                {                   
+                    var logsArray = document.GetValue("logs").AsBsonArray;
+                    var logObjects = logsArray.Select(logBson => JsonConvert.DeserializeObject<LogObject>(logBson.ToJson())).Where(lo => lo != null).ToList()!;
+                    var logBucket = new LogBucket
+                    {
+                        Logs = logObjects
+                    };
+                    
+                    return logBucket;
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error pushing log entry to document {id}: {ex.Message}");
-                return false;
+                Console.WriteLine($"[DocumentDBPersistence] Error reading logs for job {id}: {ex.Message}");
             }
+
+            return new LogBucket(); 
+        }
+
+        public override void PushLogEntry(string jobId, LogObject logObject)
+        {
+            //store one document per jobId, each logObject is an entry in an array field "logs"
+            //if document exist  use push to add logObject to logs array, addnew entries at the end
+            EnsureInitialized();
+            if (string.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentException("Job ID cannot be null or empty", nameof(jobId));
+            try
+                {
+                var normalizedId = NormalizeIdForMongo(jobId);
+                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
+                var logEntryBson = BsonDocument.Parse(JsonConvert.SerializeObject(logObject));
+                var update = Builders<BsonDocument>.Update.Push("logs", logEntryBson);
+                _logCollection!.UpdateOne(filter, update, new UpdateOptions { IsUpsert = true });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DocumentDBPersistence] Error pushing log entry for job {jobId}: {ex.Message}");
+            }
+
         }
 
         /// <summary>

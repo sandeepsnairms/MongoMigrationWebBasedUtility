@@ -11,40 +11,23 @@ public class FileController : ControllerBase
 {
    
 
-    [HttpGet("download/log/{fileName}")]
-    public IActionResult DownloadFile(string fileName)
+    [HttpGet("download/log/{Id}")]
+    public IActionResult DownloadFile(string Id)
     {
         string fileSharePath = $"{Helper.GetWorkingFolder()}migrationlogs"; // UNC path to your file share
-        bool isBackup = false;
         string filePath;
-        if (fileName.EndsWith(".txt"))
-        {
-            filePath = Path.Combine(fileSharePath, fileName);
-            isBackup = true;
-        }
-        else
-        {
-            filePath = Path.Combine(fileSharePath, fileName + ".bin");
-        }
+        
+        filePath = Path.Combine(fileSharePath, Id + ".bin");
+       
+        //if (!System.IO.File.Exists(filePath))
+        //{
+        //  return NotFound("File not found.");      
+        //}
 
-        if (!System.IO.File.Exists(filePath))
-        {
-          return NotFound("File not found.");      
-        }
+        var fileBytes = new Log().DownloadLogsAsJsonBytes(Id, 0, 0);
+        var contentType = "application/octet-stream";
+        return File(fileBytes, contentType, $"{Id}.txt");
 
-        if (isBackup)
-        {
-            var fileBytes = System.IO.File.ReadAllBytes(filePath);
-            var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, $"{fileName}.txt");
-        }
-        else
-        {
-
-            var fileBytes = new Log().DownloadLogsAsJsonBytes(filePath, 0, 0);
-            var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, $"{fileName}.txt");
-        }
     }
 
     [HttpGet("download/Jobs")]

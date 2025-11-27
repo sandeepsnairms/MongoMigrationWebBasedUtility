@@ -3,7 +3,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices.Marshalling;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace OnlineMongoMigrationProcessor.Persistence
 {
@@ -313,63 +318,6 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
         }
 
-        /// <summary>
-        /// Pushes a LogObject to the LogEntries array in the document.
-        /// If the document doesn't exist, it creates a new one with the LogEntries array.
-        /// If it exists, appends the LogObject to the existing array.
-        /// </summary>
-        /// <param name="id">Unique identifier of the document (must include .json extension, e.g., "job1\mu1.json")</param>
-        /// <param name="logObject">LogObject to push to the array</param>
-        /// <returns>True if successful, false otherwise</returns>
-        public override  bool PushLogEntry(string id, LogObject logObject)
-        {
-            EnsureInitialized();
-
-            if (string.IsNullOrWhiteSpace(id))
-                throw new ArgumentException("ID cannot be null or empty", nameof(id));
-
-            if (logObject == null)
-                throw new ArgumentNullException(nameof(logObject));
-
-            if (!id.EndsWith(FILE_EXTENSION))
-                throw new ArgumentException($"ID must end with {FILE_EXTENSION} extension", nameof(id));
-
-            try
-            {
-                var filePath = GetFilePath(id);
-                LogDocument? document;
-
-                // Read existing document or create new one
-                if (File.Exists(filePath))
-                {
-                    var jsonContent = File.ReadAllText(filePath);
-                    document = JsonConvert.DeserializeObject<LogDocument>(jsonContent);
-                    
-                    if (document == null)
-                    {
-                        document = new LogDocument { LogEntries = new List<LogObject>() };
-                    }
-                }
-                else
-                {
-                    document = new LogDocument { LogEntries = new List<LogObject>() };
-                }
-
-                // Add the new log entry
-                document.LogEntries.Add(logObject);
-
-                // Save back to file
-                var updatedJson = JsonConvert.SerializeObject(document, Formatting.Indented);
-                File.WriteAllText(filePath, updatedJson);
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DiskPersistence] Error pushing log entry to document {id}: {ex.Message}");
-                return false;
-            }
-        }
 
         /// <summary>
         /// Tests the connection to the storage
@@ -395,12 +343,295 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         public override bool IsInitialized => _isInitialized;
 
-        /// <summary>
-        /// Helper class for storing log documents with LogEntries array
-        /// </summary>
-        private class LogDocument
+        private static readonly object _readLock = new object();
+        
+
+        public override void PushLogEntry(string jobId, LogObject logObject)
         {
-            public List<LogObject> LogEntries { get; set; } = new List<LogObject>();
+            EnsureInitialized();
+
+            if (string.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentException("ID cannot be null or empty", nameof(jobId));
+
+            if (logObject == null)
+                throw new ArgumentNullException(nameof(logObject));
+
+            try
+            {
+                var folder = Path.Combine(_storagePath, "migrationlogs");
+                var binPath = Path.Combine(folder, $"{jobId}.bin");
+
+                Directory.CreateDirectory(folder);
+
+                using var fs = new FileStream(binPath, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
+                using var bw = new BinaryWriter(fs);
+
+                var messageBytes = Encoding.UTF8.GetBytes(logObject.Message);
+                bw.Write(messageBytes.Length);
+                bw.Write(messageBytes);
+                bw.Write((byte)logObject.Type);
+                bw.Write(logObject.Datetime.ToBinary());
+            }
+            catch { }
         }
+
+        public override byte[] DownloadLogsAsJsonBytes(string id, int topEntries = 20, int bottomEntries = 230)
+        {
+            var folder = Path.Combine(_storagePath, "migrationlogs");
+            var binPath = Path.Combine(folder, $"{id}.bin");
+            var logs = ParseLogBinFile(binPath, topEntries, bottomEntries);
+            // Serialize selected logs to JSON
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Converters = { new JsonStringEnumConverter() }
+            };
+
+            return JsonSerializer.SerializeToUtf8Bytes(logs, options);
+        }
+        public override LogBucket ReadLogs(string id, out string fileName)
+        {
+            fileName = id;
+
+            try
+            {
+                lock (_readLock)
+                {
+                    Console.WriteLine($"Reading log file for ID: {id}");
+                    var folder = Path.Combine(_storagePath, "migrationlogs");
+                    var binPath = Path.Combine(folder, $"{id}.bin");
+
+                    if (File.Exists(binPath))
+                    {
+                        var logBucket = ParseLogBinFile(binPath);
+                        if (logBucket.Logs == null || logBucket.Logs.Count == 0)
+                        {
+                            return HandleError(id, binPath, binPath, out fileName);
+                        }
+                        return logBucket;
+                    }
+
+                    return new LogBucket();
+                }
+            }
+            catch
+            {
+                throw new Exception("Log Init failed");
+            }
+        }
+
+        private LogBucket HandleError(string jobId, string binPath, string currentLogFilePath, out string backupFileName)
+        {
+            backupFileName = CreateFileCopyWithTimestamp(currentLogFilePath);
+
+            File.Delete(currentLogFilePath);
+
+            var logBucket = new LogBucket();
+            logBucket.Logs ??= new List<LogObject>();
+            logBucket.Logs.Add(new LogObject(LogType.Error, $"Unable to load the log file; original file backed up as {backupFileName}"));
+            WriteBinaryLog(jobId, logBucket.Logs);
+            return ParseLogBinFile(binPath);
+        }
+
+
+        private void WriteBinaryLog(string id, List<LogObject> logs)
+        {
+            if (logs == null || logs.Count == 0)
+                return;
+
+            var folder = Path.Combine(_storagePath, "migrationlogs");
+            var binPath = Path.Combine(folder, $"{id}.bin");
+
+            try
+            {
+                Directory.CreateDirectory(folder);
+
+                using var fs = new FileStream(binPath, FileMode.Append, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
+                using var bw = new BinaryWriter(fs);
+
+                foreach (var log in logs)
+                {
+                    try
+                    {
+                        var message = log.Message ?? string.Empty;
+                        var messageBytes = Encoding.UTF8.GetBytes(message);
+
+                        bw.Write(messageBytes.Length);
+                        bw.Write(messageBytes);
+                        bw.Write((byte)log.Type);
+                        bw.Write(log.Datetime.ToBinary());
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to write log entry: {ex.Message}");
+                        // Continue writing other logs
+                    }
+                }
+
+                bw.Flush();
+                fs.Flush(true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error writing binary log: {ex.Message}");
+                throw;
+            }
+        }
+
+
+        private LogBucket ParseLogBinFile(string binPath, int topCount = 20, int bottomCount = 280)
+        {
+            var logBucket = new LogBucket { Logs = new List<LogObject>() };
+            var offsets = new List<long>();
+
+            if (!File.Exists(binPath))
+                return logBucket;
+
+            try
+            {
+                using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+
+                // First pass: collect offsets of valid log entries
+                while (fs.Position < fs.Length)
+                {
+                    long offset = fs.Position;
+
+                    try
+                    {
+                        if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                            break;
+
+                        int msgLen = br.ReadInt32();
+
+                        if (msgLen <= 0 || msgLen > 1_000_000)
+                            break;
+
+                        long bytesToSkip = msgLen + 1 + 8;
+                        if (br.BaseStream.Position + bytesToSkip > br.BaseStream.Length)
+                            break;
+
+                        br.BaseStream.Seek(bytesToSkip, SeekOrigin.Current);
+                        offsets.Add(offset);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+
+                // Select top N and bottom M
+                List<long> selectedOffsets;
+                if (offsets.Count > topCount + bottomCount)
+                {
+                    if (topCount > 0 && bottomCount > 0)
+                    {
+                        selectedOffsets = offsets
+                            .Take(topCount)
+                            .Concat(offsets.Skip(Math.Max(0, offsets.Count - bottomCount)))
+                            .Distinct()
+                            .OrderBy(i => i)
+                            .ToList();
+                    }
+                    else
+                    {
+                        // Return full list without filtering
+                        selectedOffsets = offsets
+                            .Distinct()
+                            .OrderBy(i => i)
+                            .ToList();
+                    }
+                }
+                else
+                {
+                    selectedOffsets = offsets;
+                }
+
+                // Second pass: read selected entries
+                foreach (var offset in selectedOffsets)
+                {
+                    fs.Position = offset;
+                    var log = TryReadLogEntry(br);
+                    if (log != null)
+                        logBucket.Logs!.Add(log);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error parsing binary log file: {ex.Message}");
+            }
+
+            return logBucket;
+        }
+
+        private LogObject? TryReadLogEntry(BinaryReader br)
+        {
+            const int MaxReasonableLength = 1_000_000;
+
+            try
+            {
+                if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                    return null;
+
+                int len = br.ReadInt32();
+
+                if (len <= 0 || len > MaxReasonableLength)
+                {
+                    Console.WriteLine($"Invalid message length: {len}");
+                    return null;
+                }
+
+                long requiredBytes = len + 1 + 8;
+                if (br.BaseStream.Position + requiredBytes > br.BaseStream.Length)
+                {
+                    Console.WriteLine($"Incomplete log entry. Message length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}");
+                    return null;
+                }
+
+                byte[] bytes = br.ReadBytes(len);
+                if (bytes.Length != len)
+                {
+                    Console.WriteLine($"ReadBytes returned {bytes.Length}, expected {len}");
+                    return null;
+                }
+
+                string msg = Encoding.UTF8.GetString(bytes);
+                byte typeByte = br.ReadByte();
+                var type = (LogType)typeByte;
+                long dateBinary = br.ReadInt64();
+                DateTime datetime = DateTime.FromBinary(dateBinary);
+
+                return new LogObject(type, msg) { Datetime = datetime };
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception while reading log entry: {ex.Message}");
+                return null;
+            }
+        }
+
+        private string CreateFileCopyWithTimestamp(string sourceFilePath)
+        {
+            if (string.IsNullOrEmpty(sourceFilePath))
+                throw new ArgumentException("Source file path cannot be null or empty.", nameof(sourceFilePath));
+
+            if (!File.Exists(sourceFilePath))
+                throw new FileNotFoundException("Source file not found.", sourceFilePath);
+
+            string directory = Path.GetDirectoryName(sourceFilePath) ?? string.Empty;
+            string fileNameWithoutExtension = Path.GetFileNameWithoutExtension(sourceFilePath);
+            string extension = Path.GetExtension(sourceFilePath);
+            string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string newFileName = $"{fileNameWithoutExtension}_{timestamp}{extension}";
+            string newFilePath = Path.Combine(directory, newFileName);
+
+            if (!File.Exists(newFilePath))
+            {
+                File.Copy(sourceFilePath, newFilePath);
+            }
+
+            return newFileName;
+        }
+
     }
 }

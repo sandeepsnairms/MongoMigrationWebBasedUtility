@@ -757,13 +757,30 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
-            _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
-            _log.SetJob(CurrentlyActiveJob); // Set job reference for log level filtering
+            if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id))
+            {
+                StopMigration(); //stop any existing
+                return;
+            }
+
+           
+
             StopMigration(); //stop any existing
             ProcessRunning = true;
             _activeJobId = CurrentlyActiveJob.Id;
             Console.WriteLine($"_activeJobId: {_activeJobId}");
             _muCache = new ActiveMigrationUnitsCache();
+
+            string logfile = _log.Init(CurrentlyActiveJob.Id);
+            if (logfile != CurrentlyActiveJob.Id)
+            {
+                _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
+            }
+            _log.WriteLine($"Job {CurrentlyActiveJob.Id} started on {CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
+
+            _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
+            _log.SetJob(CurrentlyActiveJob); // Set job reference for log level filtering
+
 
             //encoding speacial characters
             var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.SourceConnectionString[CurrentlyActiveJob.Id]);
@@ -784,13 +801,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             _cts = new CancellationTokenSource();
 
-            if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id)) CurrentlyActiveJob.Id = Guid.NewGuid().ToString("N");
-            string logfile = _log.Init(CurrentlyActiveJob.Id);
-            if (logfile != CurrentlyActiveJob.Id)
-            {
-                _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
-            }
-            _log.WriteLine($"Job {CurrentlyActiveJob.Id} started on {CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
+            
             
             MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
 
@@ -967,16 +978,20 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString)
         {
-            _log.SetJob(CurrentlyActiveJob); // Set job reference for log level filtering
+            if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id)) 
+            {
+                StopMigration(); //stop any existing
+                return;
+            }
 
             ProcessRunning = true;
             LoadConfig();
 
             if(_log==null)
                 _log = new Log();
-            if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id)) CurrentlyActiveJob.Id = Guid.NewGuid().ToString("N");
+            
             string logfile = _log.Init(CurrentlyActiveJob.Id);
-
+            _log.SetJob(CurrentlyActiveJob); // Set job reference for log level filtering
             _log.WriteLine($"SyncBack: {CurrentlyActiveJob.Id} started on {CurrentlyActiveJob.StartedOn} (UTC)");
             
             CurrentlyActiveJob.ProcessingSyncBack = true;

@@ -48,15 +48,6 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>List of document IDs</returns>
         public abstract List<string> ListDocumentIds();
 
-        /// <summary>
-        /// Pushes a LogObject to the LogEntries array in the document.
-        /// If the document doesn't exist, it creates a new one with the LogEntries array.
-        /// If it exists, appends the LogObject to the existing array.
-        /// </summary>
-        /// <param name="id">Unique identifier of the document</param>
-        /// <param name="logObject">LogObject to push to the array</param>
-        /// <returns>True if successful, false otherwise</returns>
-        public abstract bool PushLogEntry(string id, LogObject logObject);
 
         /// <summary>
         /// Tests the connection to the storage
@@ -68,5 +59,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// Checks if the storage is initialized
         /// </summary>
         public abstract bool IsInitialized { get; }
+
+        public abstract LogBucket ReadLogs(string id, out string fileName);
+
+        public abstract byte[] DownloadLogsAsJsonBytes(string id, int topEntries = 20, int bottomEntries = 230);
+
+        public abstract void PushLogEntry(string JobId,LogObject logObj);
     }
 }
