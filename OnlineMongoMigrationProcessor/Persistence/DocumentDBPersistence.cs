@@ -194,10 +194,10 @@ namespace OnlineMongoMigrationProcessor.Persistence
         }
 
         /// <summary>
-        /// Deletes a document by its _id
+        /// Deletes a document by its _id and all hierarchical child documents
         /// </summary>
         /// <param name="id">Unique identifier (_id) of the document to delete</param>
-        /// <returns>True if deleted, false otherwise</returns>
+        /// <returns>True if at least one document was deleted, false otherwise</returns>
         public override bool DeleteDocument(string id)
         {
             return Delete(id);
@@ -212,11 +212,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
             try
             {
                 var normalizedId = NormalizeIdForMongo(id);
-                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
+                var filter = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(normalizedId)}"));
 
                 IMongoCollection<BsonDocument> collectionToUse = isLog ? _logCollection! : _dataCollection!;
                 
-                var result = collectionToUse.DeleteOne(filter);
+                var result = collectionToUse.DeleteMany(filter);
                 return result.DeletedCount > 0;
             }
             catch (Exception ex)
@@ -258,39 +258,74 @@ namespace OnlineMongoMigrationProcessor.Persistence
             try
             {
                 var normalizedId = NormalizeIdForMongo(Id);
-                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var document = _logCollection!.Find(filter).FirstOrDefault();
-                if (document != null)
+                var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedId);
+                var sort = Builders<BsonDocument>.Sort.Ascending("_id");
+                
+                // First, get the total count efficiently
+                var totalLogs = (int)_logCollection!.CountDocuments(filter);
+                
+                if (totalLogs > 0)
                 {
-                    var logsArray = document.GetValue("logs").AsBsonArray;
                     var selectedLogs = new BsonArray();
-                    int totalLogs = logsArray.Count;
 
-                    //if toptopEntries=0 and bottomEntries=0 return all logs
+                    // If topEntries=0 and bottomEntries=0, limit to max 50,000 logs to prevent OOM
                     if (topEntries == 0 && bottomEntries == 0)
                     {
-                        selectedLogs = logsArray;
+                        const int MAX_ALL_LOGS = 5000;
+                        int limit = Math.Min(totalLogs, MAX_ALL_LOGS);
+                        
+                        using (var cursor = _logCollection!.Find(filter).Sort(sort).Limit(limit).ToCursor())
+                        {
+                            while (cursor.MoveNext())
+                            {
+                                selectedLogs.AddRange(cursor.Current);
+                            }
+                        }
                     }
                     else
                     {
-                        for (int i = 0; i < Math.Min(topEntries, totalLogs); i++)
+                        // Get top entries using cursor
+                        if (topEntries > 0)
                         {
-                            selectedLogs.Add(logsArray[i]);
+                            using (var cursor = _logCollection!.Find(filter).Sort(sort).Limit(topEntries).ToCursor())
+                            {
+                                while (cursor.MoveNext())
+                                {
+                                    selectedLogs.AddRange(cursor.Current);
+                                }
+                            }
                         }
-                        for (int i = Math.Max(totalLogs - bottomEntries, topEntries); i < totalLogs; i++)
+                        
+                        // Get bottom entries if needed (skip overlapping with top)
+                        if (bottomEntries > 0 && totalLogs > topEntries)
                         {
-                            selectedLogs.Add(logsArray[i]);
+                            int skipCount = Math.Max(totalLogs - bottomEntries, topEntries);
+                            int takeCount = totalLogs - skipCount;
+                            
+                            if (takeCount > 0)
+                            {
+                                using (var cursor = _logCollection!.Find(filter).Sort(sort).Skip(skipCount).Limit(takeCount).ToCursor())
+                                {
+                                    while (cursor.MoveNext())
+                                    {
+                                        selectedLogs.AddRange(cursor.Current);
+                                    }
+                                }
+                            }
                         }
                     }
+                    
                     var resultDocument = new BsonDocument
                     {
-                        { "_id", normalizedId },
+                        { "JobId", normalizedId },
+                        { "TotalLogs", totalLogs },
+                        { "ReturnedLogs", selectedLogs.Count },
                         { "logs", selectedLogs }
                     };
                     var jsonString = resultDocument.ToJson(new MongoDB.Bson.IO.JsonWriterSettings
                     {
-                        Indent = true,       // enable pretty formatting
-                        IndentChars = "  "   // optional: two spaces
+                        Indent = true,
+                        IndentChars = "  "
                     });
                     return System.Text.Encoding.UTF8.GetBytes(jsonString);
                 }
@@ -305,20 +340,42 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
         public override LogBucket ReadLogs(string id, out string fileName)
         {
-            fileName = id;// $"{id}_logs.json";
+            fileName = id;
             if (string.IsNullOrWhiteSpace(id))
                 throw new ArgumentException("ID cannot be null or empty", nameof(id));
+
+            const int MAX_LOGS_TO_READ = 5000; // Prevent OOM by limiting max logs
 
             try
             {
                 var normalizedId = NormalizeIdForMongo(id);
-                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var document = _logCollection!.Find(filter).FirstOrDefault();
+                var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedId);
+                
+                // Sort by _id (ObjectId contains timestamp, so this gives chronological order)
+                var sort = Builders<BsonDocument>.Sort.Ascending("_id");
+                
+                // Use cursor to avoid loading all documents at once
+                var logObjects = new List<LogObject>();
+                using (var cursor = _logCollection!.Find(filter).Sort(sort).Limit(MAX_LOGS_TO_READ).ToCursor())
+                {
+                    while (cursor.MoveNext())
+                    {
+                        foreach (var doc in cursor.Current)
+                        {
+                            var logObject = new LogObject(
+                                Enum.Parse<LogType>(doc.GetValue("Type").AsString),
+                                doc.GetValue("Message").AsString
+                            )
+                            {
+                                Datetime = doc.GetValue("Datetime").ToUniversalTime()
+                            };
+                            logObjects.Add(logObject);
+                        }
+                    }
+                }
 
-                if (document != null)
-                {                   
-                    var logsArray = document.GetValue("logs").AsBsonArray;
-                    var logObjects = logsArray.Select(logBson => JsonConvert.DeserializeObject<LogObject>(logBson.ToJson())).Where(lo => lo != null).ToList()!;
+                if (logObjects.Count > 0)
+                {
                     var logBucket = new LogBucket
                     {
                         Logs = logObjects
@@ -332,29 +389,64 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 Console.WriteLine($"[DocumentDBPersistence] Error reading logs for job {id}: {ex.Message}");
             }
 
-            return new LogBucket(); 
+            return new LogBucket();
         }
 
         public override void PushLogEntry(string jobId, LogObject logObject)
         {
-            //store one document per jobId, each logObject is an entry in an array field "logs"
-            //if document exist  use push to add logObject to logs array, addnew entries at the end
+            // Store one document per log entry with ObjectId as _id
+            // Each document contains JobId field for querying all logs for a specific job
+
             EnsureInitialized();
             if (string.IsNullOrWhiteSpace(jobId))
                 throw new ArgumentException("Job ID cannot be null or empty", nameof(jobId));
             try
+            {
+                var normalizedJobId = NormalizeIdForMongo(jobId);
+                
+                // Create a new document with ObjectId as _id
+                var logDocument = new BsonDocument
                 {
-                var normalizedId = NormalizeIdForMongo(jobId);
-                var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var logEntryBson = BsonDocument.Parse(JsonConvert.SerializeObject(logObject));
-                var update = Builders<BsonDocument>.Update.Push("logs", logEntryBson);
-                _logCollection!.UpdateOne(filter, update, new UpdateOptions { IsUpsert = true });
+                    { "_id", ObjectId.GenerateNewId() },
+                    { "JobId", normalizedJobId },
+                    { "Message", logObject.Message },
+                    { "Type", logObject.Type.ToString() },
+                    { "Datetime", logObject.Datetime }
+                };
+                
+                _logCollection!.InsertOne(logDocument);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[DocumentDBPersistence] Error pushing log entry for job {jobId}: {ex.Message}");
             }
+        }
 
+        /// <summary>
+        /// Deletes all log entries for a given JobId
+        /// </summary>
+        /// <param name="jobId">Job ID to delete logs for</param>
+        /// <returns>Number of log entries deleted, or -1 if error occurred</returns>
+        public override long DeleteLogs(string jobId)
+        {
+            EnsureInitialized();
+
+            if (string.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentException("Job ID cannot be null or empty", nameof(jobId));
+
+            try
+            {
+                var normalizedJobId = NormalizeIdForMongo(jobId);
+                var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedJobId);
+                var result = _logCollection!.DeleteMany(filter);
+                Console.WriteLine($"[DocumentDBPersistence] Deleted {result.DeletedCount} log entries for job {jobId}");
+                return result.DeletedCount;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DocumentDBPersistence] Error deleting logs for job {jobId}: {ex.Message}");
+                return -1;
+            }
         }
 
         /// <summary>

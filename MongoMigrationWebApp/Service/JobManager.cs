@@ -261,8 +261,8 @@ namespace MongoMigrationWebApp.Service
             {
                 Task.Run(() =>
                 {
-                    MigrationJobContext.Store.DeleteDocument(jobId);
-
+                    MigrationJobContext.Store.DeleteDocument($"migrationjobs\\{jobId}");
+                    MigrationJobContext.Store.DeleteLogs(jobId);
                     //clearing  dumped files
                     if (Helper.IsWindows())
                         System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);

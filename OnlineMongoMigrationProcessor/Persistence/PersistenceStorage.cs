@@ -65,5 +65,12 @@ namespace OnlineMongoMigrationProcessor.Persistence
         public abstract byte[] DownloadLogsAsJsonBytes(string id, int topEntries = 20, int bottomEntries = 230);
 
         public abstract void PushLogEntry(string JobId,LogObject logObj);
+
+        /// <summary>
+        /// Deletes all log entries for a given JobId
+        /// </summary>
+        /// <param name="jobId">Job ID to delete logs for</param>
+        /// <returns>Number of log entries deleted, or -1 if error occurred</returns>
+        public abstract long DeleteLogs(string jobId);
     }
 }

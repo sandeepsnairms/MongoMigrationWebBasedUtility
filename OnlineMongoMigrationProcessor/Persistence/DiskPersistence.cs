@@ -633,5 +633,41 @@ namespace OnlineMongoMigrationProcessor.Persistence
             return newFileName;
         }
 
+        /// <summary>
+        /// Deletes all log entries for a given JobId by deleting the binary log file
+        /// </summary>
+        /// <param name="jobId">Job ID to delete logs for</param>
+        /// <returns>1 if file was deleted, 0 if file didn't exist, -1 if error occurred</returns>
+        public override long DeleteLogs(string jobId)
+        {
+            EnsureInitialized();
+
+            if (string.IsNullOrWhiteSpace(jobId))
+                throw new ArgumentException("Job ID cannot be null or empty", nameof(jobId));
+
+            try
+            {
+                var folder = Path.Combine(_storagePath!, "migrationlogs");
+                var binPath = Path.Combine(folder, $"{jobId}.bin");
+
+                if (File.Exists(binPath))
+                {
+                    File.Delete(binPath);
+                    Console.WriteLine($"[DiskPersistence] Deleted log file for job {jobId}");
+                    return 1;
+                }
+                else
+                {
+                    Console.WriteLine($"[DiskPersistence] Log file for job {jobId} does not exist");
+                    return 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DiskPersistence] Error deleting logs for job {jobId}: {ex.Message}");
+                return -1;
+            }
+        }
+
     }
 }
