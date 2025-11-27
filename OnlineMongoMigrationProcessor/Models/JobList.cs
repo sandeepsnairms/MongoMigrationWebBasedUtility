@@ -80,47 +80,41 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     int max = 5;
-                    if (!MigrationJobContext.Store.DocumentExists(newFormatPath))
+                   
+                    for (int i = 0; i < max; i++) 
                     {
-                        errorMessage = "No suitable file found.";
-                        return false;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < max; i++) 
+                        try
                         {
-                            try
+                            //load new format
+                            if (!MigrationJobContext.Store.DocumentExists(newFormatPath))
                             {
-                                //load new format
-                                if (!MigrationJobContext.Store.DocumentExists(newFormatPath))
-                                {
-                                    errorMessage = "No suitable file in new format found.";
-                                    return false;
-                                }
-                               
-                                string json = MigrationJobContext.Store.ReadDocument(newFormatPath);
-                                var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                                if (loadedObject != null)
-                                {
-                                    MigrationJobs = loadedObject.MigrationJobs;
-                                    MigrationJobIds = loadedObject.MigrationJobIds;
-                                }
-
-                                if (MigrationJobs != null)
-                                {
-                                    errorMessage = string.Empty;
-                                    return true;
-                                }
+                                errorMessage = "No suitable file in new format found.";
+                                return false;
                             }
-                            catch (JsonException)
+                               
+                            string json = MigrationJobContext.Store.ReadDocument(newFormatPath);
+                            var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                            if (loadedObject != null)
                             {
-                                // If deserialization fails, wait and retry
-                                Thread.Sleep(100); // Wait for 100 milliseconds before retrying
+                                MigrationJobs = loadedObject.MigrationJobs;
+                                MigrationJobIds = loadedObject.MigrationJobIds;
+                            }
+
+                            if (MigrationJobIds != null)
+                            {
+                                errorMessage = string.Empty;
+                                return true;
                             }
                         }
-                        errorMessage = $"Error loading migration jobs.";
-                        return false;                        
+                        catch (JsonException)
+                        {
+                            // If deserialization fails, wait and retry
+                            Thread.Sleep(100); // Wait for 100 milliseconds before retrying
+                        }
                     }
+                    errorMessage = $"Error loading migration jobs.";
+                    return false;                        
+                    
                 }                   
                 catch (Exception ex)
                 {

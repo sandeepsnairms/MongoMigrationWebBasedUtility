@@ -15,16 +15,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// This method should be thread-safe and idempotent.
         /// </summary>
         /// <param name="connectionStringOrPath">Connection string or file path for the storage</param>
-        public abstract void Initialize(string connectionStringOrPath);
-
-        /// <summary>
-        /// Upserts a document with the specified id.
-        /// Creates a new document if it doesn't exist, updates if it does.
-        /// </summary>
-        /// <param name="id">Unique identifier for the document</param>
-        /// <param name="jsonContent">JSON content to store</param>
-        /// <returns>True if successful, false otherwise</returns>
-        public abstract Task<bool> UpsertDocumentAsync(string id, string jsonContent);
+        public abstract void Initialize(string connectionStringOrPath, string AppId);
 
         /// <summary>
         /// Synchronous version of UpsertDocumentAsync
@@ -32,71 +23,30 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier for the document</param>
         /// <param name="jsonContent">JSON content to store</param>
         /// <returns>True if successful, false otherwise</returns>
-        public virtual bool UpsertDocument(string id, string jsonContent)
-        {
-            return UpsertDocumentAsync(id, jsonContent).GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Reads a document by its id
-        /// </summary>
-        /// <param name="id">Unique identifier of the document</param>
-        /// <returns>JSON content if found, null otherwise</returns>
-        public abstract Task<string?> ReadDocumentAsync(string id);
+        public abstract bool UpsertDocument(string id, string jsonContent);
 
         /// <summary>
         /// Synchronous version of ReadDocumentAsync
         /// </summary>
         /// <param name="id">Unique identifier of the document</param>
         /// <returns>JSON content if found, null otherwise</returns>
-        public virtual string? ReadDocument(string id)
-        {
-            return ReadDocumentAsync(id).GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Checks if a document exists by its id
-        /// </summary>
-        /// <param name="id">Unique identifier of the document</param>
-        /// <returns>True if document exists, false otherwise</returns>
-        public abstract Task<bool> DocumentExistsAsync(string id);
+        public abstract string? ReadDocument(string id);
 
         /// <summary>
         /// Synchronous version of DocumentExistsAsync
         /// </summary>
-        public virtual bool DocumentExists(string id)
-        {
-            return DocumentExistsAsync(id).GetAwaiter().GetResult();
-        }
-
-        /// <summary>
-        /// Deletes a document by its id
-        /// </summary>
-        /// <param name="id">Unique identifier of the document to delete</param>
-        /// <returns>True if deleted, false otherwise</returns>
-        public abstract Task<bool> DeleteDocumentAsync(string id);
+        public abstract bool DocumentExists(string id);
 
         /// <summary>
         /// Synchronous version of DeleteDocumentAsync
         /// </summary>
-        public virtual bool DeleteDocument(string id)
-        {
-            return DeleteDocumentAsync(id).GetAwaiter().GetResult();
-        }
+        public abstract bool DeleteDocument(string id);
 
         /// <summary>
         /// Lists all document IDs in the storage
         /// </summary>
         /// <returns>List of document IDs</returns>
-        public abstract Task<List<string>> ListDocumentIdsAsync();
-
-        /// <summary>
-        /// Synchronous version of ListDocumentIdsAsync
-        /// </summary>
-        public virtual List<string> ListDocumentIds()
-        {
-            return ListDocumentIdsAsync().GetAwaiter().GetResult();
-        }
+        public abstract List<string> ListDocumentIds();
 
         /// <summary>
         /// Pushes a LogObject to the LogEntries array in the document.
@@ -106,24 +56,13 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier of the document</param>
         /// <param name="logObject">LogObject to push to the array</param>
         /// <returns>True if successful, false otherwise</returns>
-        public abstract Task<bool> PushLogEntryAsync(string id, LogObject logObject);
-
-        /// <summary>
-        /// Synchronous version of PushLogEntryAsync
-        /// </summary>
-        /// <param name="id">Unique identifier of the document</param>
-        /// <param name="logObject">LogObject to push to the array</param>
-        /// <returns>True if successful, false otherwise</returns>
-        public virtual bool PushLogEntry(string id, LogObject logObject)
-        {
-            return PushLogEntryAsync(id, logObject).GetAwaiter().GetResult();
-        }
+        public abstract bool PushLogEntry(string id, LogObject logObject);
 
         /// <summary>
         /// Tests the connection to the storage
         /// </summary>
         /// <returns>True if connection is successful, false otherwise</returns>
-        public abstract Task<bool> TestConnectionAsync();
+        public abstract bool TestConnection();
 
         /// <summary>
         /// Checks if the storage is initialized

@@ -1,4 +1,5 @@
-﻿using Newtonsoft.Json;
+﻿using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
 using OnlineMongoMigrationProcessor.Persistence;
 using System;
 using System.Collections.Generic;
@@ -31,17 +32,64 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static PersistenceStorage? Store  {get; private set; }
 
-        static MigrationJobContext()
+        public static void Initialize(IConfiguration configuration)
         {
+            //For local and WebApp deployments, use local disk. For others use DocumentDB
             if (Helper.IsWindows())
             {
-                Store = new DiskPersistence();
-                Store.Initialize(Helper.GetWorkingFolder());
+                bool isLocal = true;
+                var stateStoreCSorPath=string.Empty;
+                var appId=string.Empty;
+                try
+                { 
+                    bool.TryParse(configuration["StateStore:UseLocalDisk"], out isLocal);
+                    stateStoreCSorPath = configuration["StateStore:ConnectionStringOrPath"];
+                    appId = configuration["StateStore:AppID"];
+                }
+                catch
+                {
+                    //do nothing and fallback to defaults
+                }
+
+                if (isLocal)
+                {
+                    Store = new DiskPersistence();
+                    var localPath = string.IsNullOrEmpty(stateStoreCSorPath) ? Helper.GetWorkingFolder() : stateStoreCSorPath;
+                    Store.Initialize(localPath, string.Empty);
+                    return;
+                }
+                else
+                {
+                  
+                    if (string.IsNullOrEmpty(stateStoreCSorPath))
+                    {
+                        throw new InvalidOperationException("StateStore_ConnectionString is required for non local deployments. Please configure it in appsettings.json.");
+                    }
+                    if (string.IsNullOrEmpty(appId))
+                    {
+                        throw new InvalidOperationException("StateStore_AppID is required for non local deployments. Please configure it in appsettings.json.");
+                    }
+
+                    Store = new DocumentDBPersistence();
+                    Store.Initialize(stateStoreCSorPath, appId);
+                } 
             }
             else
             {
+
+                var connString = Environment.GetEnvironmentVariable("StateStore_ConnectionString");
+                var appId = Environment.GetEnvironmentVariable("StateStore_AppID");
+                if (string.IsNullOrEmpty(connString))
+                {
+                    throw new InvalidOperationException("StateStore_ConnectionString is required for non Windows deployments. Please configure it in environment variables.");
+                }
+                if (string.IsNullOrEmpty(appId))
+                {
+                    throw new InvalidOperationException("StateStore_AppID is required for non Windows deployments. Please configure it in environment variables.");
+                }
+
                 Store = new DocumentDBPersistence();
-                Store.Initialize("");
+                Store.Initialize(connString, appId);
             }
         }
 

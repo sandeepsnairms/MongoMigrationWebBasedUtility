@@ -26,6 +26,23 @@ RUN dotnet publish "./MongoMigrationWebApp.csproj" -c $BUILD_CONFIGURATION -o /a
 
 # This stage is used in production or when running from VS in regular mode (Default when not using the Debug configuration)
 FROM base AS final
+
+# Switch to root to install MongoDB tools
+USER root
+
+# Install MongoDB Database Tools
+RUN apt-get update && \
+    apt-get install -y wget gnupg && \
+    wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | apt-key add - && \
+    echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list && \
+    apt-get update && \
+    apt-get install -y mongodb-database-tools && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Switch back to non-root user for security
+USER $APP_UID
+
 WORKDIR /app
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "MongoMigrationWebApp.dll"]

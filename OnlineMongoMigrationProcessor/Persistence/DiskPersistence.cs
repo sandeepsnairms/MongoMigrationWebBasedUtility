@@ -14,6 +14,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
     public class DiskPersistence : PersistenceStorage
     {
         private static string? _storagePath;
+        private static string? _appId;
         private static bool _isInitialized = false;
         private static readonly object _initLock = new object();
 
@@ -26,7 +27,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="connectionStringOrPath">Directory path where files will be stored</param>
         /// <exception cref="ArgumentException">Thrown when path is null or empty</exception>
         /// <exception cref="InvalidOperationException">Thrown when initialization fails</exception>
-        public override void Initialize(string connectionStringOrPath)
+        public override void Initialize(string connectionStringOrPath,string appId)
         {
             if (_isInitialized)
                 return;
@@ -42,7 +43,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 try
                 {
                     _storagePath = connectionStringOrPath;
-                    
+                    _appId= appId;
                     // Create directory if it doesn't exist
                     if (!Directory.Exists(_storagePath))
                     {
@@ -145,7 +146,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier for the document (must include .json extension, e.g., "job1\mu1.json")</param>
         /// <param name="jsonContent">JSON content to store</param>
         /// <returns>True if successful, false otherwise</returns>
-        public override async Task<bool> UpsertDocumentAsync(string id, string jsonContent)
+        public override bool UpsertDocument(string id, string jsonContent)
         {
             EnsureInitialized();
 
@@ -175,7 +176,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier of the document (must include .json extension, e.g., "job1\mu1.json")</param>
         /// <returns>JSON content if found, null otherwise</returns>
-        public override async Task<string?> ReadDocumentAsync(string id)
+        public override string ReadDocument(string id)
         {
             EnsureInitialized();
 
@@ -209,12 +210,12 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier of the document (must include .json extension, e.g., "job1\mu1.json")</param>
         /// <returns>True if document exists, false otherwise</returns>
-        public override Task<bool> DocumentExistsAsync(string id)
+        public override bool DocumentExists(string id)
         {
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(id))
-                return Task.FromResult(false);
+                return false;
 
             if (!id.EndsWith(FILE_EXTENSION))
                 throw new ArgumentException($"ID must end with {FILE_EXTENSION} extension", nameof(id));
@@ -222,11 +223,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
             try
             {
                 var filePath = GetFilePath(id);
-                return Task.FromResult(File.Exists(filePath));
+                return File.Exists(filePath);
             }
             catch
             {
-                return Task.FromResult(false);
+                return false;
             }
         }
 
@@ -237,7 +238,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier of the document/folder (e.g., "job1\mu1.json" for file, "job1" for folder)</param>
         /// <returns>True if deleted, false otherwise</returns>
-        public override Task<bool> DeleteDocumentAsync(string id)
+        public override bool DeleteDocument(string id)
         {
             EnsureInitialized();
 
@@ -252,10 +253,10 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     var filePath = GetFilePath(id);
                     
                     if (!File.Exists(filePath))
-                        return Task.FromResult(false);
+                        return false;
 
                     File.Delete(filePath);
-                    return Task.FromResult(true);
+                    return true;
                 }
                 else
                 {
@@ -263,16 +264,16 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     var directoryPath = GetDirectoryPath(id);
                     
                     if (!Directory.Exists(directoryPath))
-                        return Task.FromResult(false);
+                        return false;
 
                     Directory.Delete(directoryPath, recursive: true);
-                    return Task.FromResult(true);
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[DiskPersistence] Error deleting document/folder {id}: {ex.Message}");
-                return Task.FromResult(false);
+                return false;
             }
         }
 
@@ -281,7 +282,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// Returns IDs with .json extension included.
         /// </summary>
         /// <returns>List of document IDs (e.g., "job1\mu1.json", "settings.json")</returns>
-        public override Task<List<string>> ListDocumentIdsAsync()
+        public override List<string> ListDocumentIds()
         {
             EnsureInitialized();
 
@@ -303,12 +304,12 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     ids.Add(id);
                 }
                 
-                return Task.FromResult(ids);
+                return ids;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[DiskPersistence] Error listing document IDs: {ex.Message}");
-                return Task.FromResult(new List<string>());
+                return new List<string>();
             }
         }
 
@@ -320,7 +321,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier of the document (must include .json extension, e.g., "job1\mu1.json")</param>
         /// <param name="logObject">LogObject to push to the array</param>
         /// <returns>True if successful, false otherwise</returns>
-        public override async Task<bool> PushLogEntryAsync(string id, LogObject logObject)
+        public override  bool PushLogEntry(string id, LogObject logObject)
         {
             EnsureInitialized();
 
@@ -341,7 +342,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 // Read existing document or create new one
                 if (File.Exists(filePath))
                 {
-                    var jsonContent = await File.ReadAllTextAsync(filePath);
+                    var jsonContent = File.ReadAllText(filePath);
                     document = JsonConvert.DeserializeObject<LogDocument>(jsonContent);
                     
                     if (document == null)
@@ -359,7 +360,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
                 // Save back to file
                 var updatedJson = JsonConvert.SerializeObject(document, Formatting.Indented);
-                await File.WriteAllTextAsync(filePath, updatedJson);
+                File.WriteAllText(filePath, updatedJson);
 
                 return true;
             }
@@ -374,18 +375,18 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// Tests the connection to the storage
         /// </summary>
         /// <returns>True if connection is successful, false otherwise</returns>
-        public override Task<bool> TestConnectionAsync()
+        public override bool TestConnection()
         {
             if (!_isInitialized || string.IsNullOrEmpty(_storagePath))
-                return Task.FromResult(false);
+                return false;
 
             try
             {
-                return Task.FromResult(Directory.Exists(_storagePath));
+                return Directory.Exists(_storagePath);
             }
             catch
             {
-                return Task.FromResult(false);
+                return false;
             }
         }
 

@@ -25,13 +25,15 @@ namespace MongoMigrationWebApp.Service
 
             LogToFile("Invoking Timer");
 
+            MigrationJobContext.Initialize(_configuration);
+            /*
             // Start a timer that fires once after 1 minute
             _resumeTimer = new System.Threading.Timer(
                 ResumeTimerCallback,
                 null,
                 TimeSpan.FromMinutes(1),
                 System.Threading.Timeout.InfiniteTimeSpan
-            );
+            );*/
         }
 
         private void ResumeTimerCallback(object? state)
@@ -87,6 +89,10 @@ namespace MongoMigrationWebApp.Service
                         }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Exception : {ex}");
             }
             finally
             {

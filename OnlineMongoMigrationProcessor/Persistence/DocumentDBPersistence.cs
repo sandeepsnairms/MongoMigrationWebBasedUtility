@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using ZstdSharp.Unsafe;
 
 namespace OnlineMongoMigrationProcessor.Persistence
 {
@@ -20,7 +21,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         private static IMongoCollection<BsonDocument>? _collection;
         private static bool _isInitialized = false;
         private static readonly object _initLock = new object();
-        
+        private static string _appId = string.Empty;
         private const string DATABASE_NAME = "mongomigrationwebappstorage";
         private const string COLLECTION_NAME = "datafiles";
 
@@ -31,7 +32,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="connectionStringOrPath">MongoDB connection string</param>
         /// <exception cref="ArgumentException">Thrown when connection string is null or empty</exception>
         /// <exception cref="InvalidOperationException">Thrown when initialization fails</exception>
-        public override void Initialize(string connectionStringOrPath)
+        public override void Initialize(string connectionStringOrPath,string appId)
         {
             if (_isInitialized)
                 return;
@@ -49,7 +50,13 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     _client = new MongoClient(connectionStringOrPath);
                     _database = _client.GetDatabase(DATABASE_NAME);
                     _collection = _database.GetCollection<BsonDocument>(COLLECTION_NAME);
-                    
+                    var collectionNames = _database.ListCollectionNames().ToListAsync().GetAwaiter().GetResult();
+
+                    if (!collectionNames.Contains(COLLECTION_NAME))
+                    {
+                        _database.CreateCollectionAsync(COLLECTION_NAME).GetAwaiter().GetResult();
+                    }
+                    _appId = appId;
                     _isInitialized = true;
                 }
                 catch (Exception ex)
@@ -74,7 +81,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         private static string NormalizeIdForMongo(string id)
         {
-            return id.Replace('\\', '_').Replace('/', '_');
+            return $"{_appId}.{id.Replace('\\', '_').Replace('/', '_')}";
         }
 
         /// <summary>
@@ -84,7 +91,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier (_id) for the document</param>
         /// <param name="jsonContent">JSON content to store</param>
         /// <returns>True if successful, false otherwise</returns>
-        public override async Task<bool> UpsertDocumentAsync(string id, string jsonContent)
+        public override bool UpsertDocument(string id, string jsonContent)
         {
             EnsureInitialized();
 
@@ -101,7 +108,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 document["_id"] = normalizedId;
 
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                await _collection!.ReplaceOneAsync(filter, document, new ReplaceOptions { IsUpsert = true });
+                 _collection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
 
                 return true;
             }
@@ -117,7 +124,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier (_id) of the document</param>
         /// <returns>JSON content with Id property if found, null otherwise</returns>
-        public override async Task<string?> ReadDocumentAsync(string id)
+        public override string? ReadDocument(string id)
         {
             EnsureInitialized();
 
@@ -128,15 +135,15 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var document = await _collection!.Find(filter).FirstOrDefaultAsync();
+                var document = _collection!.Find(filter).FirstOrDefault();
                 
                 if (document == null)
                     return null;
 
                 // Convert _id back to Id property for consistency with your models
-                var idValue = document["_id"];
-                document.Remove("_id");
-                document["Id"] = idValue;
+                //var idValue = document["_id"];
+                //document.Remove("_id");
+                //document["Id"] = idValue;
                 
                 return document.ToJson();
             }
@@ -152,7 +159,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier (_id) of the document</param>
         /// <returns>True if document exists, false otherwise</returns>
-        public override async Task<bool> DocumentExistsAsync(string id)
+        public override bool DocumentExists(string id)
         {
             EnsureInitialized();
 
@@ -163,7 +170,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var count = await _collection!.CountDocumentsAsync(filter);
+                var count = _collection!.CountDocuments(filter);
                 return count > 0;
             }
             catch
@@ -177,7 +184,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         /// <param name="id">Unique identifier (_id) of the document to delete</param>
         /// <returns>True if deleted, false otherwise</returns>
-        public override async Task<bool> DeleteDocumentAsync(string id)
+        public override bool DeleteDocument(string id)
         {
             EnsureInitialized();
 
@@ -188,7 +195,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             {
                 var normalizedId = NormalizeIdForMongo(id);
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
-                var result = await _collection!.DeleteOneAsync(filter);
+                var result = _collection!.DeleteOne(filter);
                 return result.DeletedCount > 0;
             }
             catch (Exception ex)
@@ -202,17 +209,17 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// Lists all document IDs in the collection
         /// </summary>
         /// <returns>List of document IDs</returns>
-        public override async Task<List<string>> ListDocumentIdsAsync()
+        public override List<string> ListDocumentIds()
         {
             EnsureInitialized();
 
             try
             {
                 var projection = Builders<BsonDocument>.Projection.Include("_id");
-                var documents = await _collection!.Find(Builders<BsonDocument>.Filter.Empty)
+                var documents = _collection!.Find(Builders<BsonDocument>.Filter.Empty)
                     .Project(projection)
-                    .ToListAsync();
-                
+                    .ToList();
+
                 return documents.Select(doc => doc["_id"].AsString).ToList();
             }
             catch (Exception ex)
@@ -230,7 +237,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <param name="id">Unique identifier (_id) of the document</param>
         /// <param name="logObject">LogObject to push to the array</param>
         /// <returns>True if successful, false otherwise</returns>
-        public override async Task<bool> PushLogEntryAsync(string id, LogObject logObject)
+        public override bool PushLogEntry(string id, LogObject logObject)
         {
             EnsureInitialized();
 
@@ -255,7 +262,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     .SetOnInsert("_id", normalizedId);
                 
                 var options = new UpdateOptions { IsUpsert = true };
-                await _collection!.UpdateOneAsync(filter, update, options);
+                _collection!.UpdateOne(filter, update, options);
 
                 return true;
             }
@@ -270,14 +277,14 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// Tests the connection to MongoDB storage
         /// </summary>
         /// <returns>True if connection is successful, false otherwise</returns>
-        public override async Task<bool> TestConnectionAsync()
+        public override bool TestConnection()
         {
             if (!_isInitialized)
                 return false;
 
             try
             {
-                await _database!.ListCollectionNamesAsync();
+                _database!.ListCollectionNames();
                 return true;
             }
             catch
