@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using static OnlineMongoMigrationProcessor.JobList;
 
@@ -34,23 +35,23 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static void Initialize(IConfiguration configuration)
         {
+            bool isLocal = true;
+            var stateStoreCSorPath = string.Empty;
+            var appId = string.Empty;
+            try
+            {
+                bool.TryParse(configuration["StateStore:UseLocalDisk"], out isLocal);
+                stateStoreCSorPath = configuration["StateStore:ConnectionStringOrPath"];             
+                appId = configuration["StateStore:AppID"];
+            }
+            catch
+            {
+                //do nothing and fallback to defaults
+            }
+
             //For local and WebApp deployments, use local disk. For others use DocumentDB
             if (Helper.IsWindows())
             {
-                bool isLocal = true;
-                var stateStoreCSorPath=string.Empty;
-                var appId=string.Empty;
-                try
-                { 
-                    bool.TryParse(configuration["StateStore:UseLocalDisk"], out isLocal);
-                    stateStoreCSorPath = configuration["StateStore:ConnectionStringOrPath"];
-                    appId = configuration["StateStore:AppID"];
-                }
-                catch
-                {
-                    //do nothing and fallback to defaults
-                }
-
                 if (isLocal)
                 {
                     Store = new DiskPersistence();
@@ -59,15 +60,14 @@ namespace OnlineMongoMigrationProcessor.Context
                     return;
                 }
                 else
-                {
-                  
+                {                  
                     if (string.IsNullOrEmpty(stateStoreCSorPath))
                     {
-                        throw new InvalidOperationException("StateStore_ConnectionString is required for non local deployments. Please configure it in appsettings.json.");
+                        throw new InvalidOperationException("Please configure 'StateStore:ConnectionString' in appsettings.json or 'StateStoreConnectionStringOrPath'  environment variable.");
                     }
                     if (string.IsNullOrEmpty(appId))
                     {
-                        throw new InvalidOperationException("StateStore_AppID is required for non local deployments. Please configure it in appsettings.json.");
+                        throw new InvalidOperationException("Please configure 'StateStore:AppID' in appsettings.json or 'StateStoreAppID' environment variable.");
                     }
 
                     Store = new DocumentDBPersistence();
@@ -77,19 +77,17 @@ namespace OnlineMongoMigrationProcessor.Context
             else
             {
 
-                var connString = Environment.GetEnvironmentVariable("StateStore_ConnectionString");
-                var appId = Environment.GetEnvironmentVariable("StateStore_AppID");
-                if (string.IsNullOrEmpty(connString))
+                if (string.IsNullOrEmpty(stateStoreCSorPath))
                 {
-                    throw new InvalidOperationException("StateStore_ConnectionString is required for non Windows deployments. Please configure it in environment variables.");
+                    throw new InvalidOperationException("Please configure 'StateStoreConnectionStringOrPath'  environment variable.");
                 }
                 if (string.IsNullOrEmpty(appId))
                 {
-                    throw new InvalidOperationException("StateStore_AppID is required for non Windows deployments. Please configure it in environment variables.");
+                    throw new InvalidOperationException("Please configure 'StateStoreAppID'  environment variable.");
                 }
 
                 Store = new DocumentDBPersistence();
-                Store.Initialize(connString, appId);
+                Store.Initialize(stateStoreCSorPath, appId);
             }
         }
 
@@ -168,7 +166,7 @@ namespace OnlineMongoMigrationProcessor.Context
         {
             try
             {
-                var filePath = $"migrationjobs\\{jobId}\\jobdefinition.json";               
+                var filePath = $"{Path.Combine("migrationjobs",jobId,"jobdefinition.json")}";
 
                 var json=Store.ReadDocument(filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
@@ -185,7 +183,7 @@ namespace OnlineMongoMigrationProcessor.Context
             try
             {
                 //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
-                var filePath = $"migrationjobs\\{jobId}\\{unitId}.json";                
+                var filePath = $"{Path.Combine("migrationjobs", jobId, $"{unitId}.json")}";
                 string json =Store.ReadDocument(filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);
                 return loadedObject;

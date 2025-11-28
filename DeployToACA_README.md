@@ -1,6 +1,6 @@
 # Deploy to Azure Container Apps (ACA)
 
-This guide explains how to deploy the MongoDB Migration Web-Based Utility to Azure Container Apps using the `aca_main.bicep` template.
+This guide explains how to deploy the MongoDB Migration Web-Based Utility to Azure Container Apps using the `aca_main.bicep` template. ACA provides enterprise-grade auto-scaling, dedicated compute resources, and persistent storage for high-performance migrations.
 
 ## Prerequisites
 
@@ -9,23 +9,91 @@ This guide explains how to deploy the MongoDB Migration Web-Based Utility to Azu
 - An Azure subscription with appropriate permissions
 - Resource group created (`az group create -n <rg-name> -l <location>`)
 - **Azure DocumentDB account** created for state storage (you'll need the connection string)
+- **Supported Azure region** - Container Apps with dedicated workload profiles are not available in all regions
 
-## Deployment Steps
+### Supported Regions for Container Apps with Dedicated Plans
 
-### Step 0: Clone the Repository
+Container Apps with dedicated workload profiles (D4) are currently available in these regions:
+- East US (`eastus`)
+- East US 2 (`eastus2`) 
+- West US 2 (`westus2`)
+- West US 3 (`westus3`)
+- North Europe (`northeurope`)
+- West Europe (`westeurope`)
+- Australia East (`australiaeast`)
+- Southeast Asia (`southeastasia`)
+- Canada Central (`canadacentral`)
 
-Clone the MongoDB Migration Web-Based Utility repository to your local machine (assuming you are in `c:\Work\GitHub\repos\`):
+**Note**: If you encounter deployment errors, try switching to one of these regions.
+
+## Quick Start (Automated Deployment)
+
+For a streamlined deployment experience, use the provided PowerShell script:
 
 ```powershell
-# Navigate to your repos directory
-cd c:\Work\GitHub\repos\
-
-# Clone the repository
-git clone https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility.git
-
 # Navigate to the repository directory
-cd MongoMigrationWebBasedUtility
+cd c:\Work\GitHub\repos\MongoMigrationWebBasedUtility
+
+# Run the deployment script with default 8 vCores and 32GB RAM
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "MongoMigrationRGTest" `
+  -ContainerAppName "mongomigration" `
+  -AcrName "mongomigrationacr" `
+  -StateStoreAppID "aca_server1" `
+  -Location "eastus" `
+  -ImageTag "latest"
 ```
+  -ImageTag "latest"
+```
+
+### Production Deployment with Application Gateway
+
+```powershell
+# Deploy with HTTPS, WAF protection, and enterprise security
+# Note: Use a globally unique ACR name and supported region
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "MongoMigrationRGProd" `
+  -ContainerAppName "mongomigration-prod" `
+  -AcrName "mongomigprod$(Get-Random -Minimum 1000 -Maximum 9999)" `
+  -StateStoreAppID "prod-migration-01" `
+  -EnableApplicationGateway $true `
+  -DnsNameLabel "mongomig-prod" `
+  -Location "eastus" `
+  -VCores 16 `
+  -MemoryGB 64 `
+  -ImageTag "v1.0"
+```
+
+The script will:
+1. Deploy infrastructure using Bicep (ACR, Container Apps Environment, VNet, Storage Account)
+2. Build and push Docker image to ACR
+3. Securely prompt for DocumentDB connection string
+4. Deploy Container App with final configuration and environment variables
+5. Display the application URL (HTTP or HTTPS based on Application Gateway setting)
+
+### Configurable Resource Sizing
+
+The script supports flexible resource allocation to match your workload requirements:
+
+```powershell
+# Small workload (development/testing)
+-VCores 4 -MemoryGB 16
+
+# Default production workload  
+# (uses defaults: 8 vCores, 32GB - no parameters needed)
+
+# Large workload (high-performance migration)
+-VCores 16 -MemoryGB 64
+
+# Maximum workload (enterprise-scale migration)
+-VCores 32 -MemoryGB 64
+```
+
+---
+
+## Manual Deployment Steps
+
+If you prefer to run each step manually, follow the detailed steps below.
 
 ### Step 1: Deploy Infrastructure with Bicep
 
@@ -35,241 +103,183 @@ Deploy the Bicep template to create all required resources:
 az deployment group create `
   --resource-group <resource-group-name> `
   --template-file aca_main.bicep `
-  --parameters appName=<app-name> `
+  --parameters containerAppName=<container-app-name> `
                acrName=<acr-name> `
-               stateStoreAppId=<unique-app-id> `
-               stateStoreConnectionString=<cosmos-db-connection-string>
+               enableApplicationGateway=false
 ```
-
-**Required Parameters:**
-- `stateStoreAppId`: A unique identifier for this migration server instance (e.g., `migration-server-01`). Use a different ID for each instance if deploying multiple servers.
-- `stateStoreConnectionString`: A Cosmos DB for MongoDB (DocumentDB) connection string used to store the migration state information.
 
 This will create:
 - Managed Identity
 - Azure Container Registry (ACR)
-- Container App Environment
-- Container App (will initially fail to start without an image)
-
-Refer to[Parameter Reference](#parameters-reference) learn about the various parameters.
+- Container Apps Environment with Configurable Dedicated Plan (1-32 vCores, 2-64GB)
+- Storage Account with 100GB Azure File Share
+- VNet and Application Gateway (if enabled)
 
 ### Step 2: Build and Push Docker Image to ACR
 
-After deploying the infrastructure, build and push your Docker image to the Azure Container Registry.
-
-You have two options for building and pushing your Docker image:
-
-#### Option A: Build in Azure (Recommended)
-
-Build your Docker image directly in Azure Container Registry (no local Docker required):
+Build your Docker image directly in Azure Container Registry:
 
 ```powershell
 # Navigate to the repository root
 cd c:\Work\GitHub\repos\MongoMigrationWebBasedUtility
 
 # Build and push the image to ACR
-az acr build --registry <acrName> `
-  --image <appName>:latest `
+az acr build `
+  --registry <acrName> `
+  --resource-group <resource-group-name> `
+  --image <containerAppName>:latest `
   --file MongoMigrationWebApp/Dockerfile `
   .
 ```
 
-**Benefits:**
-- No local Docker installation required
-- Faster builds using Azure's infrastructure
-- Automatically pushes to ACR after build
-- Works from any machine with Azure CLI
+### Step 3: Deploy Container App with Environment Variables
 
-#### Option B: Build Locally and Push
-
-Build the Docker image locally and push it to Azure Container Registry:
+Deploy the final Container App configuration with environment variables:
 
 ```powershell
-# Navigate to the repository root
-cd c:\Work\GitHub\repos\MongoMigrationWebBasedUtility
+# Securely get connection string
+$secureConnString = Read-Host -Prompt "Enter Cosmos DB Connection String" -AsSecureString
+$connString = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureConnString))
 
-# Build the Docker image locally
-docker build -f MongoMigrationWebApp/Dockerfile -t <appName>:latest .
-
-# Login to Azure Container Registry
-az acr login --name <acrName>
-
-# Tag the image for ACR
-docker tag <appName>:latest <acrName>.azurecr.io/<appName>:latest
-
-# Push the image to ACR
-docker push <acrName>.azurecr.io/<appName>:latest
-```
-
-**Prerequisites for local build:**
-- Docker Desktop installed and running
-- Sufficient disk space for build (recommended: 5GB+)
-- Azure CLI logged in (`az login`)
-
-**Note**: The ACR name must be globally unique and contain only alphanumeric characters (3-50 characters).
-
-#### Understanding the Build Process
-
-The Dockerfile performs these steps:
-1. **Base Stage**: Uses .NET 9.0 runtime as base
-2. **Build Stage**: Restores and builds the application
-   - Restores `MongoMigrationWebApp.csproj`
-   - Restores `OnlineMongoMigrationProcessor.csproj`
-   - Builds in Release configuration
-3. **Publish Stage**: Publishes the application
-4. **Final Stage**: 
-   - Installs MongoDB Database Tools (mongodump, mongorestore, etc.)
-   - Copies published application
-   - Configures entrypoint
-   - Exposes ports 8080 and 8081
-
-**Build Time**: Expect 5-10 minutes for first build (downloads dependencies), 2-5 minutes for subsequent builds.
-
-### Step 3: Update Container App with Image
-
-After the image is built and pushed, update the Container App to use the new image:
-
-```powershell
-az containerapp update `
-  --name <appName> `
+# Deploy final configuration
+az deployment group create `
   --resource-group <resource-group-name> `
-  --image <acrName>.azurecr.io/<appName>:latest
-```
+  --template-file aca_main.bicep `
+  --parameters containerAppName=<container-app-name> `
+               acrName=<acr-name> `
+               stateStoreAppID=<your-app-id> `
+               stateStoreConnectionString=$connString `
+               aspNetCoreEnvironment=Development `
+               imageTag=latest
 
-The Container App will now start successfully with your application.
+# Clear the variable from memory
+Remove-Variable connString, secureConnString
+```
 
 ## Parameters Reference
 
 ### Required Parameters
 
 | Parameter | Description | Example |
-|-----------|-------------|---------||
-| `appName` | Name of the Container App | `mongo-migration-app` |
-| `acrName` | Name of the Azure Container Registry (must be globally unique, alphanumeric only) | `mongomigrationacr001` |
-| `stateStoreAppId` | Unique identifier for this migration server instance | `migration-server-01` |
-| `stateStoreConnectionString` | Cosmos DB for MongoDB connection string for state storage | `mongodb://...` |
+|-----------|-------------|---------|
+| `ResourceGroupName` | Name of the Azure resource group | `MongoMigrationRG` |
+| `ContainerAppName` | Name of the Container App | `mongomigration` |
+| `AcrName` | Name of the Azure Container Registry (must be globally unique, alphanumeric only) | `mongomigrationacr001` |
+| `StateStoreAppID` | Application identifier for state storage | `aca_server1` |
+| `Location` | Azure region (must support Container Apps) | `eastus` |
 
 ### Optional Parameters
 
-| Parameter | Type | Default | Description | Valid Values |
-|-----------|------|---------|-------------|--------------|
-| `location` | string | Resource group location | Azure region for all resources | Any Azure region (e.g., `eastus`, `westus2`, `northeurope`) |
-| `environmentPlan` | string | `Consumption` | Container App Environment plan type | `Consumption` or `Dedicated` |
-| `cpuCores` | string | `0.5` | CPU cores allocated to the container | `0.25`, `0.5`, `1.0`, `1.5`, `2.0`, `2.5`, `3.0`, `3.5`, `4.0` |
-| `memorySize` | string | `1.0` | Memory in GB allocated to the container | `0.5`, `1.0`, `1.5`, `2.0`, `3.0`, `4.0`, `6.0`, `8.0` |
-| `imageTag` | string | `latest` | Docker image tag to deploy | Any valid tag (e.g., `latest`, `v1.0`, `prod`) |
+| Parameter | Type | Default | Range | Description |
+|-----------|------|---------|-------|-------------|
+| `VCores` | int | `8` | 1-32 | Number of vCores for the container |
+| `MemoryGB` | int | `32` | 2-64 | Memory in GB for the container |
+| `ImageTag` | string | `latest` | - | Docker image tag to deploy |
+| `EnableApplicationGateway` | bool | `false` | - | Enable HTTPS and WAF protection |
+| `DnsNameLabel` | string | Auto-generated | - | DNS name label for Application Gateway |
 
-## Environment Plan Options
+## Resource Configurations
 
-### Consumption Plan (Default)
+Azure Container Apps with Dedicated Plan provides configurable high-performance compute:
 
-Best for development, testing, and low-traffic workloads.
+### Configurable Resources
+- **CPU**: 1-32 vCores (default: 8 vCores, dedicated)
+- **Memory**: 2-64GB RAM (default: 32GB)
+- **Storage**: 100GB persistent Azure File Share
+- **Auto-scaling**: 1-3 replicas based on CPU utilization (70% threshold)
+- **Networking**: Private VNet integration with optional public ingress
 
-**Characteristics:**
-- Pay only for what you use
-- Automatic scaling to zero
-- Lower cost for intermittent workloads
-- Shared infrastructure
+### Resource Configuration Examples
 
-**CPU and Memory Combinations:**
-
-| CPU Cores | Memory Options (GB) | Use Case |
-|-----------|---------------------|----------|
-| 1.0 | 2.0 | Minimal workloads, testing |
-| 2.0 | 4.0 | Light  workloads, Maximum available in consumption tier, use Dedicated for faster migrations |
-
-**Example Deployment:**
+**Development/Testing (4 vCores, 16GB):**
 ```powershell
-az deployment group create `
-  --resource-group myResourceGroup `
-  --template-file aca_main.bicep `
-  --parameters appName=mongo-migration `
-               acrName=mongomigacr001 `
-               stateStoreAppId=migration-server-01 `
-               stateStoreConnectionString='<your-cosmos-db-connection-string>' `
-               environmentPlan=Consumption `
-               cpuCores=0.5 `
-               memorySize=1.0
+-VCores 4 -MemoryGB 16
 ```
 
-### Dedicated Plan
-
-Best for production workloads requiring consistent performance and dedicated resources.
-
-**Characteristics:**
-- Dedicated compute resources
-- Predictable performance
-- Higher cost but more control
-- Suitable for high-traffic applications
-
-**CPU and Memory Combinations:**
-
-| CPU Cores | Memory Options (GB) | Use Case |
-|-----------|---------------------|----------|
-| 2.0 - 4.0 | 4.0 - 8.0 | Small dedicated workloads |
-| 4.0 - 8.0 | 16.0 - 32.0 | Large dedicated workloads |
-
-**Example Deployment:**
+**Default Production (8 vCores, 32GB):**
 ```powershell
-az deployment group create `
-  --resource-group myResourceGroup `
-  --template-file aca_main.bicep `
-  --parameters appName=mongo-migration `
-               acrName=mongomigacr001 `
-               stateStoreAppId=migration-server-01 `
-               stateStoreConnectionString='<your-cosmos-db-connection-string>' `
-               environmentPlan=Dedicated `
-               cpuCores=2.0 `
-               memorySize=4.0
+# Uses defaults, no additional parameters needed
 ```
+
+**High-Performance (16 vCores, 64GB):**
+```powershell
+-VCores 16 -MemoryGB 64
+```
+
+**Maximum Performance (32 vCores, 64GB):**
+```powershell
+-VCores 32 -MemoryGB 64
+```
+
+**Key Advantages over Container Instances:**
+- ✅ Configurable high CPU and memory (up to 32 vCores, 64GB vs fixed 4 cores, 16GB)
+- ✅ Auto-scaling based on load
+- ✅ Persistent storage that survives deployments
+- ✅ Enterprise networking with VNet integration
+- ✅ Built-in ingress controller with HTTPS
+- ✅ Application Gateway integration for WAF protection
 
 ## Complete Deployment Examples
 
-### Example 1: Development Environment
-```powershell
-# Build and push image
-az acr build --registry mongomigdevacr `
-  --image mongo-migration:dev `
-  --file MongoMigrationWebApp/Dockerfile `
-  .
+### Development Setup (Small Workload)
 
-# Deploy with minimal resources
-az deployment group create `
-  --resource-group rg-mongomig-dev `
-  --template-file aca_main.bicep `
-  --parameters appName=mongo-migration-dev `
-               acrName=mongomigdevacr `
-               stateStoreAppId=dev-migration-01 `
-               stateStoreConnectionString='<your-cosmos-db-connection-string>' `
-               environmentPlan=Consumption `
-               cpuCores=1.0 `
-               memorySize=2.0 `
-               imageTag=dev `
-               location=eastus
+```powershell
+# Deploy with reduced resources for development and testing
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "rg-mongomig-dev" `
+  -ContainerAppName "mongomigration-dev" `
+  -AcrName "mongomigdevacr" `
+  -StateStoreAppID "dev-migration-01" `
+  -Location "eastus" `
+  -VCores 4 `
+  -MemoryGB 16 `
+  -ImageTag "dev"
 ```
 
+### High-Performance Migration Setup (Large Workload)
 
-### Example 3: Environment with Dedicated Plan
 ```powershell
-# Build and push image
-az acr build --registry mongomigentacr `
-  --image mongo-migration:v1.0 `
-  --file MongoMigrationWebApp/Dockerfile `
-  .
+# Deploy with maximum resources for large migrations
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "rg-mongomig-perf" `
+  -ContainerAppName "mongomigration-perf" `
+  -AcrName "mongomigperfacr" `
+  -StateStoreAppID "perf-migration-01" `
+  -Location "eastus" `
+  -VCores 32 `
+  -MemoryGB 64 `
+  -ImageTag "latest"
+```
 
-# Deploy with dedicated resources
-az deployment group create `
-  --resource-group rg-mongomig-enterprise `
-  --template-file aca_main.bicep `
-  --parameters appName=mongo-migration-ent `
-               acrName=mongomigentacr `
-               stateStoreAppId=prod-migration-01 `
-               stateStoreConnectionString='<your-cosmos-db-connection-string>' `
-               environmentPlan=Dedicated `
-               cpuCores=4.0 `
-               memorySize=8.0 `
-               imageTag=v1.0 `
-               location=westus2
+### Production Setup with Application Gateway
+
+```powershell
+# Deploy with HTTPS, WAF, and enterprise security
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "rg-mongomig-prod" `
+  -ContainerAppName "mongomigration-prod" `
+  -AcrName "mongomigprodacr" `
+  -StateStoreAppID "prod-migration-01" `
+  -EnableApplicationGateway $true `
+  -DnsNameLabel "mongomig-production" `
+  -Location "eastus" `
+  -ImageTag "v1.0"
+```
+
+## Persistent Storage
+
+### Migration Data Storage
+- **Path**: `/app/migration-data` (accessible via `ResourceDrive` environment variable)
+- **Capacity**: 100GB Azure File Share
+- **Persistence**: Data survives container restarts, deployments, and scaling events
+- **Performance**: Standard_LRS storage for consistent I/O performance
+
+### Using Persistent Storage in Application
+Your application can access the persistent storage using the environment variable:
+
+```csharp
+var resourceDrive = Environment.GetEnvironmentVariable("ResourceDrive"); // Returns: "/app/migration-data"
+// Store migration files in this directory - they persist across deployments
 ```
 
 ## Deployment Outputs
@@ -278,11 +288,16 @@ After successful deployment, the template provides these outputs:
 
 | Output | Description |
 |--------|-------------|
+| `containerAppEnvironmentId` | Container Apps Environment resource ID |
+| `containerAppFQDN` | Direct Container App FQDN |
+| `containerAppUrl` | Application URL (HTTP or HTTPS based on setup) |
 | `managedIdentityId` | Resource ID of the managed identity |
 | `managedIdentityClientId` | Client ID for the managed identity |
-| `acrLoginServer` | Login server URL for the Container Registry |
-| `containerAppFQDN` | Fully qualified domain name of the container app |
-| `containerAppUrl` | Full HTTPS URL to access the application |
+| `storageAccountName` | Storage account name for migration data |
+| `fileShareName` | File share name (migration-data) |
+| `resourceDrivePath` | Mount path for persistent storage |
+| `applicationGatewayPublicIp` | Application Gateway public IP (when enabled) |
+| `applicationGatewayFQDN` | Application Gateway FQDN (when enabled) |
 
 View outputs:
 ```powershell
@@ -296,41 +311,86 @@ az deployment group show `
 
 ### Update with New Image
 
-1. Build and push new image:
-```powershell
-az acr build --registry <acrName> `
-  --image <appName>:v2.0 `
-  --file MongoMigrationWebApp/Dockerfile `
-  .
-```
-
-2. Update the container app:
-```powershell
-az containerapp update `
-  --name <appName> `
-  --resource-group <resource-group-name> `
-  --image <acrName>.azurecr.io/<appName>:v2.0
-```
-
-### Update Resource Allocation
-
-Redeploy with different parameters:
+Deploy updated configuration:
 ```powershell
 az deployment group create `
   --resource-group <resource-group-name> `
   --template-file aca_main.bicep `
-  --parameters appName=<app-name> `
+  --parameters containerAppName=<container-app-name> `
                acrName=<acr-name> `
-               cpuCores=2.0 `
-               memorySize=4.0
+               imageTag=v2.0 `
+               # ... other parameters
+```
+
+### Manual Image Update
+
+1. Build and push new image:
+```powershell
+az acr build --registry <acrName> `
+  --resource-group <resource-group-name> `
+  --image <containerAppName>:v2.0 `
+  --file MongoMigrationWebApp/Dockerfile `
+  .
+```
+
+2. Update Container App:
+```powershell
+az containerapp update `
+  --name <containerAppName> `
+  --resource-group <resource-group-name> `
+  --image <acrName>.azurecr.io/<containerAppName>:v2.0
 ```
 
 ## Monitoring and Troubleshooting
 
+### Common Deployment Issues
+
+### Troubleshooting Script
+
+Before deploying, you can run the troubleshooting script to check for common issues:
+
+```powershell
+./troubleshoot-aca.ps1 -ResourceGroupName "my-rg" -Location "eastus"
+```
+
+This script will:
+- Verify Azure login and CLI extensions
+- Check region support for Container Apps
+- Validate workload profile availability  
+- Check ACR name availability
+- Validate Bicep template syntax
+- Display subscription quotas
+
+#### 1. Template Deployment Validation Error
+**Error**: `The template deployment 'aca_main' is not valid according to the validation procedure`
+
+**Possible Causes & Solutions**:
+- **Region not supported**: Use a supported region like `eastus`, `westus2`, or `northeurope`
+- **ACR name conflict**: ACR names must be globally unique - try adding random numbers
+- **Resource limits**: Check if your subscription has quotas for Container Apps
+
+```powershell
+# Check Container Apps availability in region
+az provider show --namespace Microsoft.App --query "resourceTypes[?resourceType=='managedEnvironments'].locations" -o table
+
+# Generate unique ACR name
+$uniqueAcrName = "mongomigacr$(Get-Random -Minimum 1000 -Maximum 9999)"
+```
+
+#### 2. Workload Profile Not Available
+**Error**: Related to D4 workload profile
+
+**Solution**: The Bicep template now includes both Consumption and Dedicated profiles. If D4 is not available, it will fall back to Consumption profile with lower resource limits.
+
+#### 3. Network Configuration Issues
+**Error**: VNet or subnet configuration problems
+
+**Solution**: Ensure the region supports Container Apps networking features, or set `-EnableApplicationGateway $false` for simpler deployment.
+
 ### View Container App Logs
 ```powershell
 az containerapp logs show `
-  --name <appName> `
+  --name <containerAppName> `
   --resource-group <resource-group-name> `
   --follow
 ```
@@ -338,40 +398,105 @@ az containerapp logs show `
 ### Check Container App Status
 ```powershell
 az containerapp show `
-  --name <appName> `
+  --name <containerAppName> `
   --resource-group <resource-group-name> `
-  --query properties.runningStatus
+  --query "properties.provisioningState"
 ```
 
 ### Access Container App
 ```powershell
 # Get the URL
 az containerapp show `
-  --name <appName> `
+  --name <containerAppName> `
   --resource-group <resource-group-name> `
-  --query properties.configuration.ingress.fqdn `
+  --query "properties.configuration.ingress.fqdn" `
   --output tsv
+```
+
+### Check Auto-scaling Status
+```powershell
+az containerapp replica list `
+  --name <containerAppName> `
+  --resource-group <resource-group-name>
+```
+
+### Access Persistent Storage
+```powershell
+# List files in Azure File Share
+az storage file list `
+  --account-name <storageAccountName> `
+  --share-name migration-data `
+  --output table
 ```
 
 ## Cost Optimization Tips
 
-1. **Use Consumption Plan** for development and variable workloads
-2. **Scale to zero** when not in use (Consumption plan only)
-3. **Right-size resources** - start small and scale up as needed
-4. **Use Basic ACR SKU** for development (already configured in template)
-5. **Monitor usage** and adjust CPU/memory based on actual needs
+1. **Use auto-scaling** - Container Apps automatically scales down to minimum replicas (1)
+2. **Monitor resource usage** - Adjust CPU scaling threshold based on workload patterns
+3. **Right-size storage** - 100GB File Share, expand only if needed
+4. **Choose appropriate regions** - Some regions have lower Container Apps pricing
+5. **Use dedicated plan efficiently** - D4 plan provides consistent performance for predictable costs
+6. **Clean up resources** - Remove Container Apps and storage when migrations are complete
 
 ## Security Features
 
-- ✅ **Managed Identity** - No passwords or keys needed
+### Container Apps Security
+- ✅ **Managed Identity** - No passwords or keys needed for ACR and storage access
+- ✅ **Secure Environment Variables** - Connection strings stored as secrets
+- ✅ **VNet Integration** - Private networking with optional public ingress
 - ✅ **ACR Integration** - Secure image pull using managed identity
-- ✅ **HTTPS Only** - All traffic encrypted in transit
-- ✅ **No Admin User** - ACR admin account disabled
-- ✅ **Single Replica** - Predictable and controlled deployment
+- ✅ **HTTPS by Default** - Built-in TLS termination
+
+### Application Gateway Security (when enabled)
+- ✅ **Web Application Firewall (WAF)** - OWASP 3.2 rule set protection
+- ✅ **TLS Termination** - HTTPS encryption for client connections
+- ✅ **Azure AD Integration Ready** - Support for authentication and authorization
+- ✅ **DDoS Protection** - Built-in protection against volumetric attacks
+- ✅ **IP Filtering** - Control access by source IP ranges
+
+## Comparison: ACA vs ACI
+
+| Feature | Azure Container Apps (ACA) | Azure Container Instances (ACI) |
+|---------|----------------------------|----------------------------------|
+| **Max CPU (Dedicated)** | 32 vCores (configurable 1-32) | 4 cores |
+| **Max Memory (Dedicated)** | 64 GB (configurable 2-64GB) | 16 GB |
+| **Default Resources** | 8 vCores, 32GB | 4 cores, 16GB |
+| **Resource Flexibility** | ✅ Configurable at deployment | ❌ Fixed sizing options |
+| **Persistent Storage** | ✅ 100GB Azure File Share | ❌ Ephemeral only |
+| **Auto-scaling** | ✅ CPU-based (1-3 replicas) | ❌ Manual scaling |
+| **HTTPS Built-in** | ✅ Native ingress controller | ❌ Requires load balancer |
+| **VNet Integration** | ✅ Native support | ⚠️ Limited support |
+| **Application Gateway** | ✅ Integrated WAF | ⚠️ External configuration |
+| **Best For** | Production workloads, enterprise | Simple batch jobs, testing |
+| **Pricing Model** | Dedicated plan (predictable) | Per-second billing |
+| **Complexity** | Enterprise features | Simple deployment |
+
+**Recommendation for MongoDB Migration**: Use ACA with dedicated plan for production workloads requiring high performance, persistent storage, and enterprise security features.
+
+## Application Gateway Features (Production Setup)
+
+When `enableApplicationGateway` is set to `true`:
+
+### Security Features
+- **WAF Protection**: OWASP 3.2 rule set blocks common attacks
+- **TLS Termination**: HTTPS encryption for all client connections
+- **DDoS Protection**: Built-in volumetric attack protection
+
+### Performance Features
+- **Load Balancing**: Distributes traffic across Container App replicas
+- **Health Probes**: Automatic health checking and failover
+- **Connection Draining**: Graceful handling of deployments
+
+### Enterprise Features
+- **Custom Domain Ready**: Support for custom SSL certificates
+- **Azure AD Integration**: Ready for enterprise authentication
+- **Network Security Groups**: Fine-grained traffic control
 
 ## Additional Resources
 
 - [Azure Container Apps Documentation](https://learn.microsoft.com/azure/container-apps/)
 - [Container Apps Pricing](https://azure.microsoft.com/pricing/details/container-apps/)
 - [Azure Container Registry Documentation](https://learn.microsoft.com/azure/container-registry/)
+- [Azure Application Gateway Documentation](https://learn.microsoft.com/azure/application-gateway/)
+- [Azure File Share Documentation](https://learn.microsoft.com/azure/storage/files/)
 - [Managed Identity Documentation](https://learn.microsoft.com/azure/active-directory/managed-identities-azure-resources/)

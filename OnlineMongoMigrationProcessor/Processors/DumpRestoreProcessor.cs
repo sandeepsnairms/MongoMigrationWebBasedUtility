@@ -25,7 +25,7 @@ namespace OnlineMongoMigrationProcessor
     {
 
         //private string _toolsLaunchFolder = string.Empty;
-        private string _mongoDumpOutputFolder = $"{Helper.GetWorkingFolder()}mongodump";
+        private string _mongoDumpOutputFolder = Path.Combine(Helper.GetWorkingFolder(), "mongodump");
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
 
         //private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
@@ -963,7 +963,7 @@ namespace OnlineMongoMigrationProcessor
             _cts.Token.ThrowIfCancellationRequested();
 
             // Build base args per attempt
-            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\"  --out {folder}\\{chunkIndex}.bson";
+            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\"  --out {Path.Combine(folder,$"{chunkIndex}.bson")}";
 
             // Disk space/backpressure check (retain existing behavior)
             bool continueDownloads;
@@ -1019,7 +1019,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Ensure previous dump file (if any) is removed before fresh dump
-            var dumpFilePath = $"{folder}\\{chunkIndex}.bson";
+            var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
             if (File.Exists(dumpFilePath))
             {
                 try { File.Delete(dumpFilePath); } catch { }
@@ -1121,7 +1121,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Build args per attempt
-            string args = $" --uri=\"{targetConnectionString}\" --gzip {folder}\\{chunkIndex}.bson";
+            string args = $" --uri=\"{targetConnectionString}\" --gzip {Path.Combine(folder, $"{chunkIndex}.bson")}";
 
             // If first mu, drop collection, else append. Also No drop in AppendMode
             if (chunkIndex == 0 && !CurrentlyActiveJob.AppendMode)
@@ -1235,8 +1235,14 @@ namespace OnlineMongoMigrationProcessor
                         mu.MigrationChunks[chunkIndex].IsUploaded = true;
                         MigrationJobContext.SaveMigrationUnit(mu,false);
 
-                        try { File.Delete($"{folder}\\{chunkIndex}.bson"); } catch { }
-
+                        try
+                        {
+                            File.Delete($"{Path.Combine(folder, $"{chunkIndex}.bson")}");
+                        }
+                        catch
+                        {
+                            // Ignore file delete errors
+                        }
                         return Task.FromResult(TaskResult.Success);
                     }
                     else
@@ -1275,8 +1281,16 @@ namespace OnlineMongoMigrationProcessor
             string dbName = ctx.DatabaseName;
             string colName = ctx.CollectionName;
 
+
+            _log.WriteLine($"DumpFolder is {_mongoDumpOutputFolder}, working directory  is {Helper.GetWorkingFolder()}");
+            if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
+            {
+                System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);
+            }
+            _log.WriteLine($"{_mongoDumpOutputFolder} exists");
+
             // Create mongodump output folder if it does not exist
-            string folder = $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
+            string folder = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
             Directory.CreateDirectory(folder);
 
 
@@ -1421,7 +1435,7 @@ namespace OnlineMongoMigrationProcessor
 
         // Builds the dump folder path for a db/collection under the current CurrentlyActiveJob
         private string GetDumpFolder(string jobId, string dbName, string colName)
-            => $"{_mongoDumpOutputFolder}\\{jobId}\\{Helper.SafeFileName($"{dbName}.{colName}")}";
+            => Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
 
         // Core restore loop: iterates until all chunks are restored or cancellation/simulation stops it
         private void ProcessRestoreLoop(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)

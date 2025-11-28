@@ -781,6 +781,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
             _log.SetJob(CurrentlyActiveJob); // Set job reference for log level filtering
 
+            _log.WriteLine($"Working folder is {Environment.GetEnvironmentVariable("ResourceDrive")}");
 
             //encoding speacial characters
             var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.SourceConnectionString[CurrentlyActiveJob.Id]);

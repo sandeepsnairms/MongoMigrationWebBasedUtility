@@ -230,13 +230,20 @@ namespace OnlineMongoMigrationProcessor
                 return _workingFolder;
             }
 
+            if (!IsWindows())
+            {
+                _workingFolder = $"{Environment.GetEnvironmentVariable("ResourceDrive")}/";
+                return _workingFolder;
+            }
+
             //back ward compatibility, old code used to create a folder in temp path
-            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))                
+            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
             {
                 _workingFolder = Path.GetTempPath();
                 return _workingFolder;
             }
             //back ward compatibility end
+
 
             string homePath = Environment.GetEnvironmentVariable("ResourceDrive");
 
@@ -244,8 +251,9 @@ namespace OnlineMongoMigrationProcessor
             {
                 _workingFolder = Path.GetTempPath();
             }
-            
-            if(! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
+
+
+            if (! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
             {
                 _workingFolder = Path.Combine(homePath, "home//");
             }

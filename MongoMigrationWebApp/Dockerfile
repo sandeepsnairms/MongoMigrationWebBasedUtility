@@ -40,6 +40,17 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+# Create the migration data directory structure that the app expects
+# The app looks for ResourceDrive/home/ directory structure
+RUN mkdir -p /app/migration-data/home && \
+    chown -R $APP_UID:$APP_UID /app/migration-data && \
+    chmod -R 755 /app/migration-data
+
+# Switch back to non-root user for security
+RUN mkdir -p /app/mongodump /tmp/mongodump && \
+    chown -R $APP_UID:$APP_UID /app/mongodump /tmp/mongodump && \
+    chmod -R 755 /app/mongodump /tmp/mongodump
+
 # Switch back to non-root user for security
 USER $APP_UID
 

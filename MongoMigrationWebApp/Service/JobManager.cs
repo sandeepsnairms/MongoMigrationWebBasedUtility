@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using OnlineMongoMigrationProcessor;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
@@ -261,11 +262,13 @@ namespace MongoMigrationWebApp.Service
             {
                 Task.Run(() =>
                 {
-                    MigrationJobContext.Store.DeleteDocument($"migrationjobs\\{jobId}");
+                    MigrationJobContext.Store.DeleteDocument($"{Path.Combine("migrationjobs", jobId)}");
                     MigrationJobContext.Store.DeleteLogs(jobId);
                     //clearing  dumped files
-                    if (Helper.IsWindows())
-                        System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+
+                    string dumpPath = Path.Combine(Helper.GetWorkingFolder(), "mongodump", jobId);
+                    if (System.IO.Directory.Exists(dumpPath))
+                        System.IO.Directory.Delete(dumpPath, true);
 
                 });
             }
