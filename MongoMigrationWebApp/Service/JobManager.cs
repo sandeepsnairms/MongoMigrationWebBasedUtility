@@ -26,15 +26,18 @@ namespace MongoMigrationWebApp.Service
 
             MigrationJobContext.Initialize(_configuration);
 
-            Helper.LogToFile("Invoking Timer");            
-            /*
+            Helper.LogToFile("Invoking Timer");
+
+            if (!Helper.IsWindows())
+                return;
+
             // Start a timer that fires once after 1 minute
             _resumeTimer = new System.Threading.Timer(
                 ResumeTimerCallback,
                 null,
                 TimeSpan.FromMinutes(1),
                 System.Threading.Timeout.InfiniteTimeSpan
-            );*/
+            );
         }
 
         private void ResumeTimerCallback(object? state)

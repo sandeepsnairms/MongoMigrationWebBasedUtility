@@ -135,6 +135,7 @@ This option involves cloning the repository and building the C# project source f
    # Variables to be updated
    $resourceGroupName = <Replace with Existing Resource Group Name>
    $webAppName = <Replace with Web App Name>
+   $location = <Replace with Azure Region (e.g., WestUs3, EastUS, WestEurope)>
    $projectFolderPath = <Replace with path to cloned repo on local>
 
 
@@ -151,7 +152,7 @@ This option involves cloning the repository and building the C# project source f
 
    # Deploy Azure Web App
    Write-Host "Deploying Azure Web App..."
-   az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
+   az deployment group create --resource-group $resourceGroupName --template-file WebApp/main.bicep --parameters location=$location webAppName=$webAppName
 
 
     # Configure NuGet path (execute only once on a machine)
@@ -198,6 +199,7 @@ This option involves cloning the repository and building the C# project source f
    # Variables to be updated
    $resourceGroupName = <Replace with Existing Resource Group Name>
    $webAppName = <Replace with Web App Name>
+   $location = <Replace with Azure Region (e.g., WestUs3, EastUS, WestEurope)>
    $zipPath = <Replace with full path of downloaded latest release zip file on local>
 
    # Login to Azure
@@ -208,7 +210,7 @@ This option involves cloning the repository and building the C# project source f
 
    # Deploy Azure Web App 
    Write-Host "Deploying Azure Web App..."
-   az deployment group create --resource-group $resourceGroupName --template-file WebApp/main.bicep --parameters location=WestUs3 webAppName=$webAppName
+   az deployment group create --resource-group $resourceGroupName --template-file WebApp/main.bicep --parameters location=$location webAppName=$webAppName
 
    # Deploy files to Azure Web App
    Write-Host "Deploying to Azure Web App..."
