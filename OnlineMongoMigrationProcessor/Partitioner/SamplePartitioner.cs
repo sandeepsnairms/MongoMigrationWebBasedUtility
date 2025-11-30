@@ -123,7 +123,15 @@ namespace OnlineMongoMigrationProcessor
                     while (newCount > MaxSamples)
                     {
                         count++;
-                        newCount = docCountByType / ((long)minDocsPerSegment * count);
+                        count++;
+
+                        // Check for potential overflow before multiplication
+                        long multiplier = (long)minDocsPerSegment * count;
+                        if (multiplier <= 0 || multiplier > docCountByType)
+                        {                           
+                            break;
+                        }
+                        newCount = docCountByType / multiplier;
                     }
 
                     log.WriteLine($"Requested chunk count {chunkCount} exceeds maximum samples {MaxSamples} for {collection.CollectionNamespace}. Adjusting to {newCount}", LogType.Error);

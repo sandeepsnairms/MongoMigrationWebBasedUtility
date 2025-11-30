@@ -77,20 +77,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         public string GetRunningJobId()
         {
             Console.WriteLine($"GetRunningJobId :{_activeJobId}");
-            return _activeJobId;
-            if (CurrentlyActiveJob != null)
-            {
-                if (_migrationProcessor != null && _migrationProcessor.ProcessRunning)
-                {
-                    return CurrentlyActiveJob?.Id ?? string.Empty;
-                }
-                else
-                    return string.Empty;
-            }
-            else
-            {
-                return string.Empty;
-            }
+            return _activeJobId;           
         }
 
         public bool IsProcessRunning(string id)
@@ -104,19 +91,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 Console.WriteLine($"IsProcessRunning :{_activeJobId == id}");
                 return _activeJobId == id;
-            }
-
-            if (id != null && CurrentlyActiveJob != null && id == CurrentlyActiveJob.Id)
-            {
-                if (_migrationProcessor != null)
-                    return _migrationProcessor.ProcessRunning;
-                else
-                    return ProcessRunning;
-            }
-            else
-            {
-                return false;
-            }
+            }                        
         }
 
         public void StopMigration()
@@ -790,8 +765,6 @@ namespace OnlineMongoMigrationProcessor.Workers
             targetConnectionString = Helper.UpdateAppName(targetConnectionString, $"MSFTMongoWebMigration{Helper.IsOnline(CurrentlyActiveJob)}-" + CurrentlyActiveJob.Id);
 
             _log.WriteLine($"Connection strings prepared - Job ID: {CurrentlyActiveJob.Id}", LogType.Verbose);
-            //MigrationJobContext.TargetConnectionString[CurrentlyActiveJob.Id] = targetConnectionString;
-            //MigrationJobContext.SourceConnectionString[CurrentlyActiveJob.Id] = sourceConnectionString;
 
             LoadConfig();
 
@@ -801,8 +774,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             ControlledPauseRequested = false;
             
             _cts = new CancellationTokenSource();
-
-            
+                       
             
             MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
 
@@ -958,7 +930,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                             _log.WriteLine($"Job {CurrentlyActiveJob.Id} paused (controlled pause) - can be resumed", LogType.Debug);
                         }
                         
-                        //_jobList.Save();
                         MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
                     }
                 }

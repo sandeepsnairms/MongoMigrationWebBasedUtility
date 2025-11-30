@@ -132,7 +132,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error upserting document {id}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error upserting document {id}: {ex.Message}", "DocumentDBPersistence.txt");
                 return false;
             }
         }
@@ -163,7 +163,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error reading document {id}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error reading document {id}: {ex.Message}", "DocumentDBPersistence.txt");
                 return null;
             }
         }
@@ -221,7 +221,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error deleting document {id}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error deleting document {id}: {ex.Message}", "DocumentDBPersistence.txt");
                 return false;
             }
         }
@@ -245,7 +245,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error listing document IDs: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error listing document IDs: {ex.Message}", "DocumentDBPersistence.txt");
                 return new List<string>();
             }
         }
@@ -271,10 +271,10 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     // If topEntries=0 and bottomEntries=0, limit to max 50,000 logs to prevent OOM
                     if (topEntries == 0 && bottomEntries == 0)
                     {
-                        const int MAX_ALL_LOGS = 5000;
-                        int limit = Math.Min(totalLogs, MAX_ALL_LOGS);
+                        //const int MAX_ALL_LOGS = 5000;
+                        //int limit = Math.Min(totalLogs, MAX_ALL_LOGS);
                         
-                        using (var cursor = _logCollection!.Find(filter).Sort(sort).Limit(limit).ToCursor())
+                        using (var cursor = _logCollection!.Find(filter).Sort(sort).ToCursor())
                         {
                             while (cursor.MoveNext())
                             {
@@ -332,7 +332,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error downloading logs for {Id}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error downloading logs for {Id}: {ex.Message}", "DocumentDBPersistence.txt");
             }
             return Array.Empty<byte>();
         }
@@ -344,7 +344,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             if (string.IsNullOrWhiteSpace(id))
                 throw new ArgumentException("ID cannot be null or empty", nameof(id));
 
-            const int MAX_LOGS_TO_READ = 5000; // Prevent OOM by limiting max logs
+            //const int MAX_LOGS_TO_READ = 5000; // Prevent OOM by limiting max logs
 
             try
             {
@@ -356,7 +356,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 
                 // Use cursor to avoid loading all documents at once
                 var logObjects = new List<LogObject>();
-                using (var cursor = _logCollection!.Find(filter).Sort(sort).Limit(MAX_LOGS_TO_READ).ToCursor())
+                using (var cursor = _logCollection!.Find(filter).Sort(sort).ToCursor())
                 {
                     while (cursor.MoveNext())
                     {
@@ -386,7 +386,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error reading logs for job {id}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error reading logs for job {id}: {ex.Message}", "DocumentDBPersistence.txt");
             }
 
             return new LogBucket();
@@ -418,7 +418,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error pushing log entry for job {jobId}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error pushing log entry for job {jobId}: {ex.Message}", "DocumentDBPersistence.txt");
             }
         }
 
@@ -439,12 +439,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 var normalizedJobId = NormalizeIdForMongo(jobId);
                 var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedJobId);
                 var result = _logCollection!.DeleteMany(filter);
-                Console.WriteLine($"[DocumentDBPersistence] Deleted {result.DeletedCount} log entries for job {jobId}");
                 return result.DeletedCount;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DocumentDBPersistence] Error deleting logs for job {jobId}: {ex.Message}");
+                Helper.LogToFile($"[DocumentDBPersistence] Error deleting logs for job {jobId}: {ex.Message}", "DocumentDBPersistence.txt");
                 return -1;
             }
         }

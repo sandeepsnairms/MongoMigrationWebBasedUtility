@@ -47,7 +47,8 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!Directory.Exists(folderPath))
             {
-                Console.WriteLine("Folder does not exist.");
+                //Console.WriteLine("Folder does not exist.");
+                Helper.LogToFile($"Folder {folderPath} does not exist", "HelperLogs.txt");
                 return 0;
             }
 
@@ -60,12 +61,13 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (UnauthorizedAccessException e)
             {
-                Console.WriteLine($"Access denied: {e.ToString()}");
+                //Console.WriteLine($"Access denied: {e.ToString()}");
+                Helper.LogToFile($"Access denied: {e.ToString()}", "HelperLogs.txt");
                 return 0;
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error: {e.ToString()}");
+                Helper.LogToFile($"Unknown exception: {e.ToString()}", "HelperLogs.txt");
                 return 0;
             }
         }
@@ -220,7 +222,41 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        #region Logging
 
+        /// <summary>
+        /// Logs a message to the debug log file with timestamp
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public static void LogToFile(string message, string striFileName = "AutoStartLog.txt")
+        {
+            try
+            {
+                string path = string.Empty;
+                if (Helper.IsWindows())
+                {
+                    path = $"{Helper.GetWorkingFolder()}{striFileName}";
+                }
+                else
+                {
+                    if (!System.IO.Directory.Exists(path))
+                    {
+                        System.IO.Directory.CreateDirectory(path);
+                    }
+                    path = $"{Helper.GetWorkingFolder()}/{MigrationJobContext.AppId}/{striFileName}";
+                }
+
+                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
+                System.IO.File.AppendAllText(path, logEntry);
+            }
+            catch
+            {
+                // Silently ignore logging errors to prevent application crashes
+            }
+        }
+
+        #endregion 
 
         public static string GetWorkingFolder()
         {
@@ -232,7 +268,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (!IsWindows())
             {
-                _workingFolder = $"{Environment.GetEnvironmentVariable("ResourceDrive")}/";
+                _workingFolder = $"{Environment.GetEnvironmentVariable("ResourceDrive")}/{MigrationJobContext.AppId}/";
                 return _workingFolder;
             }
 
@@ -414,17 +450,17 @@ namespace OnlineMongoMigrationProcessor
             {
                 unitsToAdd = await PopulateJobCollectionsFromCSVAsync(job,namespacesToMigrate, connectionString);
                 
-                // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
-                if (allCollectionsUseObjectId)
+                
+            }
+            // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
+            if (allCollectionsUseObjectId)
+            {
+                foreach (var mu in unitsToAdd)
                 {
-                    foreach (var mu in unitsToAdd)
-                    {
-                        mu.DataTypeFor_Id = DataType.ObjectId;
-                    }
+                    mu.DataTypeFor_Id = DataType.ObjectId;
                 }
             }
 
-           
 
             return unitsToAdd;
         }

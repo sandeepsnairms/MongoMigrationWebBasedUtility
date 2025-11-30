@@ -24,9 +24,9 @@ namespace MongoMigrationWebApp.Service
         {
             _configuration = configuration;
 
-            LogToFile("Invoking Timer");
-
             MigrationJobContext.Initialize(_configuration);
+
+            Helper.LogToFile("Invoking Timer");            
             /*
             // Start a timer that fires once after 1 minute
             _resumeTimer = new System.Threading.Timer(
@@ -47,27 +47,27 @@ namespace MongoMigrationWebApp.Service
 
             try
             {
-                LogToFile("Resuming migration job after application restart...");
+                Helper.LogToFile("Resuming migration job after application restart...");
                 var migrationJobIds = GetMigrationIds(out string errorMessage);
 
-                LogToFile("Step 0");
+                Helper.LogToFile("Step 0");
 
                 if (migrationJobIds != null && migrationJobIds.Count == 1)
                 {
                     var mj= GetMigrationJobById(migrationJobIds[0]);
-                    LogToFile($"Step1 : {mj.IsStarted}-{mj.IsCompleted} -{string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id])} - {string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])} ");
+                    Helper.LogToFile($"Step1 : {mj.IsStarted}-{mj.IsCompleted} -{string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id])} - {string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])} ");
                     if (mj.IsStarted && !mj.IsCompleted && string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id]) && string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id]))
                     {
                         try
                         {
-                            LogToFile("Step2 : before reading config");
+                            Helper.LogToFile("Step2 : before reading config");
 
                             var sourceConnectionString = _configuration.GetConnectionString("SourceConnectionString");
                             var targetConnectionString = _configuration.GetConnectionString("TargetConnectionString");
 
                             if (sourceConnectionString != null && targetConnectionString != null)
                             {
-                                LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("cluster"));
+                                Helper.LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("cluster"));
 
                                 var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
                                 var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
@@ -76,24 +76,24 @@ namespace MongoMigrationWebApp.Service
                                     MigrationJobContext.SourceConnectionString[mj.Id] = sourceConnectionString;
                                     MigrationJobContext.TargetConnectionString[mj.Id] = targetConnectionString;
 
-                                    LogToFile("Job Starting");
+                                    Helper.LogToFile("Job Starting");
 
                                     StartMigrationAsync(mj, sourceConnectionString, targetConnectionString, mj.NameSpaces ?? string.Empty, mj.JobType, Helper.IsOnline(mj));
 
-                                    LogToFile("Job Started");
+                                    Helper.LogToFile("Job Started");
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            LogToFile($"Exception : {ex}");
+                            Helper.LogToFile($"Exception : {ex}");
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                LogToFile($"Exception : {ex}");
+                Helper.LogToFile($"Exception : {ex}");
             }
             finally
             {
@@ -103,27 +103,7 @@ namespace MongoMigrationWebApp.Service
             }
         }
 
-        #region Logging
-
-        /// <summary>
-        /// Logs a message to the debug log file with timestamp
-        /// </summary>
-        /// <param name="message">The message to log</param>
-        private void LogToFile(string message)
-        {
-            try
-            {
-                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
-                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}AutoStartLog.txt", logEntry);
-            }
-            catch
-            {
-                // Silently ignore logging errors to prevent application crashes
-            }
-        }
-
-        #endregion 
+        
         #region _configuration Management
 
         public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updated_config, out string errorMessage)

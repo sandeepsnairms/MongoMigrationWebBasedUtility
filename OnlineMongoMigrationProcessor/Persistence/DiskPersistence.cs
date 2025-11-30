@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 using JsonSerializer = System.Text.Json.JsonSerializer;
 
 namespace OnlineMongoMigrationProcessor.Persistence
@@ -171,7 +172,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskPersistence] Error upserting document {id}: {ex.Message}");
+                Helper.LogToFile($"[DiskPersistence] Error upserting document {id}: {ex.Message}", "DiskPersistence.txt");
                 return false;
             }
         }
@@ -205,7 +206,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskPersistence] Error reading document {id}: {ex.Message}");
+                Helper.LogToFile($"[DiskPersistence] Error reading document {id}: {ex.Message}", "DiskPersistence.txt");
                 return null;
             }
         }
@@ -277,7 +278,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskPersistence] Error deleting document/folder {id}: {ex.Message}");
+                Helper.LogToFile($"[DiskPersistence] Error deleting document/folder {id}: {ex.Message}", "DiskPersistence.txt");
                 return false;
             }
         }
@@ -313,7 +314,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskPersistence] Error listing document IDs: {ex.Message}");
+                Helper.LogToFile($"[DiskPersistence] Error listing document IDs: {ex.Message}", "DiskPersistence.txt");
                 return new List<string>();
             }
         }
@@ -463,7 +464,8 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Failed to write log entry: {ex.Message}");
+                        Helper.LogToFile($"Failed to write log entry: {ex.Message}", "DiskPersistence.txt");
+
                         // Continue writing other logs
                     }
                 }
@@ -473,7 +475,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error writing binary log: {ex.Message}");
+                Helper.LogToFile($"Error writing binary log: {ex.Message}", "DiskPersistence.txt");
                 throw;
             }
         }
@@ -558,7 +560,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error parsing binary log file: {ex.Message}");
+                Helper.LogToFile($"Error parsing binary log file: {ex.Message}", "DiskPersistence.txt");
             }
 
             return logBucket;
@@ -577,21 +579,21 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
                 if (len <= 0 || len > MaxReasonableLength)
                 {
-                    Console.WriteLine($"Invalid message length: {len}");
+                    Helper.LogToFile($"Invalid message length: {len}", "DiskPersistence.txt");
                     return null;
                 }
 
                 long requiredBytes = len + 1 + 8;
                 if (br.BaseStream.Position + requiredBytes > br.BaseStream.Length)
                 {
-                    Console.WriteLine($"Incomplete log entry. Message length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}");
+                    Helper.LogToFile($"Incomplete log entry. Message length={len}, remaining={br.BaseStream.Length - br.BaseStream.Position}", "DiskPersistence.txt");
                     return null;
                 }
 
                 byte[] bytes = br.ReadBytes(len);
                 if (bytes.Length != len)
                 {
-                    Console.WriteLine($"ReadBytes returned {bytes.Length}, expected {len}");
+                    Helper.LogToFile($"ReadBytes returned {bytes.Length}, expected {len}", "DiskPersistence.txt");
                     return null;
                 }
 
@@ -605,7 +607,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Exception while reading log entry: {ex.Message}");
+                Helper.LogToFile($"Exception while reading log entry: {ex.Message}", "DiskPersistence.txt");
                 return null;
             }
         }
@@ -653,18 +655,18 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 if (File.Exists(binPath))
                 {
                     File.Delete(binPath);
-                    Console.WriteLine($"[DiskPersistence] Deleted log file for job {jobId}");
+                    Helper.LogToFile($"[DiskPersistence] Deleted log file for job {jobId}", "DiskPersistence.txt");
                     return 1;
                 }
                 else
                 {
-                    Console.WriteLine($"[DiskPersistence] Log file for job {jobId} does not exist");
+                    Helper.LogToFile($"[DiskPersistence] Log file for job {jobId} does not exist", "DiskPersistence.txt");
                     return 0;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DiskPersistence] Error deleting logs for job {jobId}: {ex.Message}");
+                Helper.LogToFile($"[DiskPersistence] Error deleting logs for job {jobId}: {ex.Message}", "DiskPersistence.txt");
                 return -1;
             }
         }

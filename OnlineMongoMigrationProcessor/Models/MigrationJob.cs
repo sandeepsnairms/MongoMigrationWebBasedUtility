@@ -23,11 +23,6 @@ namespace OnlineMongoMigrationProcessor
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
         
-        /// <summary>
-        /// Transient flag (not persisted) used during job creation to indicate all collections use ObjectId for _id field.
-        /// This is only used as input when creating migration units.
-        /// </summary>
-        [JsonIgnore]
         public bool AllCollectionsUseObjectId { get; set; }
         
         public DateTime? StartedOn { get; set; }

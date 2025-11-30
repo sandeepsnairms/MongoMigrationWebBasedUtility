@@ -33,6 +33,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static PersistenceStorage? Store  {get; private set; }
 
+        public static string? AppId { get; private set; }
         public static void Initialize(IConfiguration configuration)
         {
             bool isLocal = true;
@@ -70,6 +71,7 @@ namespace OnlineMongoMigrationProcessor.Context
                         throw new InvalidOperationException("Please configure 'StateStore:AppID' in appsettings.json or 'StateStoreAppID' environment variable.");
                     }
 
+                    AppId=appId;
                     Store = new DocumentDBPersistence();
                     Store.Initialize(stateStoreCSorPath, appId);
                 } 
@@ -85,7 +87,7 @@ namespace OnlineMongoMigrationProcessor.Context
                 {
                     throw new InvalidOperationException("Please configure 'StateStoreAppID'  environment variable.");
                 }
-
+                AppId = appId;
                 Store = new DocumentDBPersistence();
                 Store.Initialize(stateStoreCSorPath, appId);
             }

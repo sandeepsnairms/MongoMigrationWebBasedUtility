@@ -5,7 +5,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-  <AssemblyName>OnlineMongoMigrationProcessor</AssemblyName>
+	<AssemblyName>OnlineMongoMigrationProcessor</AssemblyName>
+	<NoWarn>CS8602;CS8603;CS8604;CS8618;CS1998;CS0219;CS0618;CS0105;CS8600;CS8625;CS8619;CS0168;CS8629;CS0472</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

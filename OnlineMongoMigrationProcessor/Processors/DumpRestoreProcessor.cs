@@ -963,7 +963,7 @@ namespace OnlineMongoMigrationProcessor
             _cts.Token.ThrowIfCancellationRequested();
 
             // Build base args per attempt
-            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\"  --out {Path.Combine(folder,$"{chunkIndex}.bson")}";
+            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";//  --out {Path.Combine(folder,$"{chunkIndex}.bson")}";
 
             // Disk space/backpressure check (retain existing behavior)
             bool continueDownloads;
@@ -1039,6 +1039,7 @@ namespace OnlineMongoMigrationProcessor
                     docCount, 
                     $"{MongoToolsFolder}mongodump", 
                     args,
+                    dumpFilePath,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterDumpProcess(pid),
                     onProcessEnded: (pid) => UnregisterDumpProcess(pid)
@@ -1121,7 +1122,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Build args per attempt
-            string args = $" --uri=\"{targetConnectionString}\" --gzip {Path.Combine(folder, $"{chunkIndex}.bson")}";
+            string args = $" --uri=\"{targetConnectionString}\" --gzip --archive";// {Path.Combine(folder, $"{chunkIndex}.bson")}";
 
             // If first mu, drop collection, else append. Also No drop in AppendMode
             if (chunkIndex == 0 && !CurrentlyActiveJob.AppendMode)
@@ -1166,7 +1167,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 // Create dedicated executor for this worker to avoid shared state issues
                 var processExecutor = new ProcessExecutor(_log,_muCache);
-
+                var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
                 var task = Task.Run(() => processExecutor.Execute(
                     mu, 
                     mu.MigrationChunks[chunkIndex], 
@@ -1176,6 +1177,7 @@ namespace OnlineMongoMigrationProcessor
                     docCount, 
                     $"{MongoToolsFolder}mongorestore", 
                     args,
+                    dumpFilePath,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterRestoreProcess(pid),
                     onProcessEnded: (pid) => UnregisterRestoreProcess(pid)

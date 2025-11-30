@@ -41,6 +41,7 @@ namespace OnlineMongoMigrationProcessor
 
         public CollectionStatus SourceStatus { get; set; }
         public bool ResetChangeStream { get; set; }
+        public DataType? DataTypeFor_Id { get; set; } = null;
 
         public bool Remove()
         {
@@ -143,7 +144,7 @@ namespace OnlineMongoMigrationProcessor
         public long SyncBackDocsUpdated { get; set; }
         public long SyncBackDuplicateDocsSkipped { get; set; }
 
-        public DataType? DataTypeFor_Id { get; set; } = null;
+       
 
         // Aggressive Change Stream cleanup tracking
         public bool AggressiveCacheDeleted { get; set; } = false;
@@ -202,7 +203,7 @@ namespace OnlineMongoMigrationProcessor
             mub.RestoreComplete = this.RestoreComplete;
             mub.SourceStatus = this.SourceStatus;
             mub.ResetChangeStream = this.ResetChangeStream;
-
+            mub.DataTypeFor_Id = this.DataTypeFor_Id;
             return mub;
         }
 
