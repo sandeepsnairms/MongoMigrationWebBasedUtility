@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MongoMigrationWebApp.Service;
 using OnlineMongoMigrationProcessor;
 using System.Security.AccessControl;
+using Microsoft.AspNetCore.Components.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -57,6 +58,12 @@ builder.Services.AddSingleton(builder.Configuration);
 builder.Services.AddSingleton<JobManager>();
 builder.Services.AddScoped<FileService>();
 
+// Add authentication services
+builder.Services.AddSingleton<PasswordManager>();
+builder.Services.AddScoped<AuthenticationService>();
+builder.Services.AddScoped<AuthenticationStateProvider, CustomAuthenticationStateProvider>();
+builder.Services.AddAuthorizationCore();
+
 var app = builder.Build();
 
 // _configure the HTTP request pipeline.
@@ -72,6 +79,9 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 
 app.UseRouting();
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapBlazorHub();
 app.MapFallbackToPage("/_Host");
