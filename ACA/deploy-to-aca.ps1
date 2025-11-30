@@ -76,14 +76,15 @@ if ($DnsNameLabel) {
 az @bicepParams
 
 Write-Host "`nStep 2: Building and pushing Docker image to ACR..." -ForegroundColor Yellow
+Write-Host "Note: Warnings about packing source code and excluding .git files are normal and expected." -ForegroundColor Gray
 
 $ErrorActionPreference = 'Continue'
 az acr build `
     --registry $AcrName `
     --resource-group $ResourceGroupName `
     --image "$($ContainerAppName):$($ImageTag)" `
-    --file MongoMigrationWebApp/Dockerfile `
-    .
+    --file ../MongoMigrationWebApp/Dockerfile `
+    ..
 $ErrorActionPreference = 'Stop'
 
 Write-Host "`nStep 3: Prompting for StateStore connection string..." -ForegroundColor Yellow
@@ -129,7 +130,7 @@ $appUrl = az containerapp show `
     --resource-group $ResourceGroupName `
     --query "properties.configuration.ingress.fqdn" `
     --output tsv `
-    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' }
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
 $ErrorActionPreference = 'Stop'
 
 if ($appUrl) {

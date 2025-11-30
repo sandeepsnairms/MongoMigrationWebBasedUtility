@@ -26,14 +26,15 @@ Write-Host ""
 
 # Step 1: Build and push new image to ACR
 Write-Host "Step 1: Building and pushing Docker image to ACR..." -ForegroundColor Yellow
+Write-Host "Note: Warnings about packing source code and excluding .git files are normal and expected." -ForegroundColor Gray
 
 $ErrorActionPreference = 'Continue'
 az acr build `
     --registry $AcrName `
     --resource-group $ResourceGroupName `
     --image "$($ContainerAppName):$($ImageTag)" `
-    --file MongoMigrationWebApp/Dockerfile `
-    .
+    --file ../MongoMigrationWebApp/Dockerfile `
+    ..
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`nError: Failed to build and push Docker image" -ForegroundColor Red
@@ -45,6 +46,7 @@ Write-Host "`nDocker image built and pushed successfully." -ForegroundColor Gree
 
 # Step 2: Update Container App with new image
 Write-Host "`nStep 2: Updating Container App with new image..." -ForegroundColor Yellow
+Write-Host "Note: Warnings about cryptography or UserWarnings are normal and can be ignored." -ForegroundColor Gray
 
 $imageName = "$AcrName.azurecr.io/$($ContainerAppName):$($ImageTag)"
 
@@ -74,7 +76,7 @@ $appUrl = az containerapp show `
     --resource-group $ResourceGroupName `
     --query "properties.configuration.ingress.fqdn" `
     --output tsv `
-    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' }
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
 $ErrorActionPreference = 'Stop'
 
 if ($appUrl) {
