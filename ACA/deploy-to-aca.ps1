@@ -119,4 +119,27 @@ az @finalBicepParams
 
 Remove-Variable connString, secureConnString -ErrorAction Ignore
 
-Write-Host "`nDeployment Complete." -ForegroundColor Cyan
+Write-Host "`n=== Deployment Complete ===" -ForegroundColor Cyan
+
+# Retrieve and display the application URL
+Write-Host "Retrieving application URL..." -ForegroundColor Yellow
+$ErrorActionPreference = 'Continue'
+$appUrl = az containerapp show `
+    --name $ContainerAppName `
+    --resource-group $ResourceGroupName `
+    --query "properties.configuration.ingress.fqdn" `
+    --output tsv `
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' }
+$ErrorActionPreference = 'Stop'
+
+if ($appUrl) {
+    Write-Host ""
+    Write-Host "===========================================" -ForegroundColor Green
+    Write-Host "  Application deployed successfully!" -ForegroundColor Green
+    Write-Host "===========================================" -ForegroundColor Green
+    Write-Host "  Launch URL: https://$appUrl" -ForegroundColor Cyan
+    Write-Host "===========================================" -ForegroundColor Green
+    Write-Host ""
+} else {
+    Write-Host "Unable to retrieve application URL. Please check the Azure Portal." -ForegroundColor Yellow
+}

@@ -107,11 +107,11 @@ try {
 
 # Validate Bicep template
 Write-Host "8. Validating Bicep template..." -ForegroundColor Yellow
-if (Test-Path "aca_main.bicep") {
+if (Test-Path "ACA/aca_main.bicep") {
     try {
         $validation = az deployment group validate `
             --resource-group $ResourceGroupName `
-            --template-file aca_main.bicep `
+            --template-file ACA/aca_main.bicep `
             --parameters acrName=$AcrName `
             --parameters location=$Location `
             --only-show-errors 2>&1
@@ -126,7 +126,7 @@ if (Test-Path "aca_main.bicep") {
         Write-Host "✗ Error validating template: $_" -ForegroundColor Red
     }
 } else {
-    Write-Host "✗ aca_main.bicep not found in current directory" -ForegroundColor Red
+    Write-Host "✗ ACA/aca_main.bicep not found" -ForegroundColor Red
 }
 
 Write-Host "`n=== Troubleshooting Summary ===" -ForegroundColor Cyan

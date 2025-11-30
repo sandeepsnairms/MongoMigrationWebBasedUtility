@@ -17,13 +17,10 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 ## Table of Contents
 
 - [Key Features](#key-features)
-- [Azure Deployment](#azure-deployment)
-  - [Prerequisites](#prerequisites)
-  - [Deploy on Azure using Source Files (option 1)](#deploy-on-azure-using-source-files-option-1)
-  - [Deploy on Azure using precompiled binaries (option 2)](#deploy-on-azure-using-precompiled-binaries-option-2)
-  - [Enable App Authentication](#enable-app-authentication-optional-but-recommended)
-  - [Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional)
-  - [Enable Private Endpoint on the Azure Web App (Optional)](#enable-private-endpoint-on-the-azure-web-app-optional)
+- [Azure Deployment Options](#azure-deployment-options)
+  - [Option 1: Azure Web App (App Service)](#option-1-azure-web-app-app-service)
+  - [Option 2: Azure Container Apps (ACA)](#option-2-azure-container-apps-aca)
+  - [Choosing the Right Deployment](#choosing-the-right-deployment)
 - [On-Premises Deployment](#on-premises-deployment)
   - [Steps to Deploy on a Windows Server](#steps-to-deploy-on-a-windows-server)
 - [How to Use](#how-to-use)
@@ -61,7 +58,7 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
   Migration resumes automatically in case of connection loss, ensuring uninterrupted reliability.
 
 - **Private Deployment**  
-  Deploy the tool within your private virtual network (VNet) for enhanced security. (Update `main.bicep` for VNet configuration.)
+  Deploy the tool within your private virtual network (VNet) for enhanced security. (Update `WebApp/main.bicep` for VNet configuration.)
 
 - **Standalone Solution**  
   Operates independently, with no dependencies on other Azure resources.
@@ -69,7 +66,7 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 - **Scalable Performance**  
   Select your Azure Web App pricing plan based on performance requirements:  
   - Default: **B1**  
-  - Recommended for large workloads: **Premium v3 P2V3** (Update `main.bicep` accordingly.)
+  - Recommended for large workloads: **Premium v3 P2V3** (Update `WebApp/main.bicep` accordingly.)
 
 - **Customizable**  
   Modify the provided C# code to suit your specific use cases.
@@ -78,18 +75,53 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 
 Effortlessly migrate your MongoDB collections while maintaining control, security, and scalability. Begin your migration today and unlock the full potential of Azure Cosmos DB!
 
-## Azure Deployment
+## Azure Deployment Options
 
-Follow these steps to migrate data from a cloud-based MongoDB VM or MongoDB Atlas. You can deploy the utility either by building it from the source files or using the precompiled binaries.
+The MongoDB Migration Web-Based Utility can be deployed to Azure using two different options, each optimized for different workload requirements:
 
-### Prerequisites
+### Option 1: Azure Web App (App Service)
 
-1. Azure Subscription
-1. Azure CLI Installed
-1. PowerShell
+**Best for**: Small to medium workloads and short-running migrations
 
+- ✅ Quick and simple deployment
+- ✅ Lower cost for smaller workloads
+- ✅ Standard web application hosting
+- ✅ Ideal for migrations under 24 hours
 
-### Deploy on Azure using Source Files (option 1)
+**[📖 Deploy to Azure Web App Guide](WebApp/DeployToWebApp_README.md)**
+
+### Option 2: Azure Container Apps (ACA)
+
+**Best for**: Medium to large workloads and long-running migrations
+
+- ✅ Configurable high-performance compute (up to 32 vCores, 64GB RAM)
+- ✅ Persistent storage that survives deployments (100GB Azure File Share)
+- ✅ Dedicated resources for intensive migrations
+- ✅ Enterprise networking with VNet integration
+- ✅ Ideal for migrations over 24 hours
+
+**[📖 Deploy to Azure Container Apps Guide](ACA/DeployToACA_README.md)**
+
+### Choosing the Right Deployment
+
+| Feature | Azure Web App | Azure Container Apps |
+|---------|---------------|----------------------|
+| **Workload Size** | Small to Medium | Medium to Large |
+| **Migration Duration** | < 24 hours | 24+ hours |
+| **CPU** | Shared/Basic tier | Up to 32 dedicated vCores |
+| **Memory** | Up to 14GB (P3V3) | Up to 64GB |
+| **Persistent Storage** | App Service storage | 100GB Azure File Share |
+| **Deployment Time** | < 10 minutes | ~ 15-20 minutes |
+| **Cost** | Lower for small workloads | Optimized for large workloads |
+| **Best Use Case** | Quick migrations, dev/test | Production, large-scale migrations |
+
+### Need Help Deciding?
+
+- **Start small?** Use [Azure Web App](WebApp/DeployToWebApp_README.md) for quick setup and testing
+- **Production migration?** Use [Azure Container Apps](ACA/DeployToACA_README.md) for reliability and performance
+- **Not sure?** Start with Web App and migrate to Container Apps if needed
+
+## On-Premises Deployment
 This option involves cloning the repository and building the C# project source files locally on a Windows machine. If you’re not comfortable working with code, consider using Option 2 below.
 
 
@@ -176,7 +208,7 @@ This option involves cloning the repository and building the C# project source f
 
    # Deploy Azure Web App 
    Write-Host "Deploying Azure Web App..."
-   az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
+   az deployment group create --resource-group $resourceGroupName --template-file WebApp/main.bicep --parameters location=WestUs3 webAppName=$webAppName
 
    # Deploy files to Azure Web App
    Write-Host "Deploying to Azure Web App..."
