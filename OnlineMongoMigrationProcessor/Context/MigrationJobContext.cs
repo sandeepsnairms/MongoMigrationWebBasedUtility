@@ -30,6 +30,7 @@ namespace OnlineMongoMigrationProcessor.Context
         public static ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
         public static ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
 
+        public static JobList JobList {  get; private set; }
         // In-memory cache of migration jobs to ensure consistency
         private static Dictionary<string, MigrationJob> MigrationJobs { get; set; } = new Dictionary<string, MigrationJob>();
         
@@ -124,6 +125,18 @@ namespace OnlineMongoMigrationProcessor.Context
                 Store = new DocumentDBPersistence();
                 Store.Initialize(stateStoreCSorPath, appId);
             }
+
+            JobList= LoadJobList(out bool notFound,out string errorMessage);
+            if(notFound && JobList == null)
+            {
+                JobList=new JobList();
+                JobList.MigrationJobIds=new List<string>();                
+            }
+            else if(JobList == null && !string.IsNullOrEmpty(errorMessage))
+            {
+                throw new InvalidOperationException($"Error initializing Job List: {errorMessage}");
+            }
+            JobList.Persist();
         }
         public static MigrationJob? GetMigrationJob(string jobId)
         {
@@ -205,6 +218,69 @@ namespace OnlineMongoMigrationProcessor.Context
             }
         }
 
+
+        private static JobList LoadJobList(out bool notFound,out string errorMessage)
+        {
+            errorMessage = string.Empty;
+            notFound = false;
+
+            string newFormatPath = $"migrationjobs\\joblist.json";
+
+            try
+            {
+                int max = 5;
+
+                for (int i = 0; i < max; i++)
+                {
+                    try
+                    {
+                        if (!MigrationJobContext.Store.DocumentExists(newFormatPath))
+                        {
+                            notFound = true;
+                            errorMessage = "No suitable file in new format found.";
+                        }
+                        else
+                        {
+                            string json = MigrationJobContext.Store.ReadDocument(newFormatPath);
+                            var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
+                            List<string> MigrationJobIds = null;
+                            if (loadedObject != null)
+                            {
+                                if (loadedObject.MigrationJobIds == null)
+                                {
+                                    errorMessage = $"Job List is corrupted, missing MigrationJobIds.";
+                                    return null;
+                                }
+                                else
+                                {
+                                    JobList = loadedObject;
+                                    return JobList;
+                                }
+                            }                            
+                        }
+                    }
+                    catch (JsonException ex)
+                    {
+                        errorMessage = $"Error deserializing Job List: {ex.Message}";
+                    }
+                    finally
+                    {
+                        // Small delay before retrying
+                        Task.Delay(200).Wait();
+                    }
+                }
+                errorMessage = $"Error loading migration jobs.";
+                return null;
+
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error loading migration jobs: {ex}";
+                return null;
+            }
+            
+        }
+
         public static bool SaveMigrationJob(MigrationJob job)
         {
             try
@@ -233,15 +309,15 @@ namespace OnlineMongoMigrationProcessor.Context
             }
         }
 
-        public static bool SaveJobList(JobList jobList)
+        public static bool SaveJobList()
         {
             try
             {
-                if (jobList != null)
+                if (JobList != null)
                 {
                     lock (_writeJobListLock)
                     {
-                        jobList.Persist();
+                        JobList.Persist();
                     }
                 }
                 return true;

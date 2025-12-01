@@ -11,7 +11,7 @@ namespace MongoMigrationWebApp.Service
 
     public class JobManager
     {
-        private JobList? _jobList;
+        //private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
@@ -130,10 +130,10 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Job Management
 
-        public JobList GetJobList()
-        {
-            return _jobList ??= new JobList();
-        }
+        //public JobList GetJobList()
+        //{
+        //    return _jobList ??= new JobList();
+        //}
 
        
         public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
@@ -166,36 +166,36 @@ namespace MongoMigrationWebApp.Service
         public List<string> GetMigrationIds(out string errorMessage)
         {
             errorMessage = string.Empty;
-            bool isSucess = true;
-            if (_jobList == null)
-            {
-                _jobList = new JobList();
-                isSucess = _jobList.LoadJobList(out errorMessage);          
-            }
-            else
-            {
-                errorMessage = string.Empty;
-                return _jobList.MigrationJobIds ?? new List<string>();
-            }
+            //bool isSucess = true;
+            //if (_jobList == null)
+            //{
+            //    _jobList = new JobList();
+            //    isSucess = _jobList.LoadJobList(out errorMessage);          
+            //}
+            //else
+            //{
+            //    errorMessage = string.Empty;
+            //    return _jobList.MigrationJobIds ?? new List<string>();
+            //}
 
-            // create a empty list if no file found
-            if (_jobList.MigrationJobIds == null)
-            {
-                _jobList.MigrationJobIds = new List<string>();
-                if (isSucess)
-                    MigrationJobContext.SaveJobList(_jobList);
-            }
-            else
-                MigrationJobContext.SaveJobList(_jobList);
+            //// create a empty list if no file found
+            //if (_jobList.MigrationJobIds == null)
+            //{
+            //    _jobList.MigrationJobIds = new List<string>();
+            //    if (isSucess)
+            //        MigrationJobContext.SaveJobList(_jobList);
+            //}
+            //else
+            //    MigrationJobContext.SaveJobList(_jobList);
         
 
-                return _jobList.MigrationJobIds;
+            return MigrationJobContext.JobList.MigrationJobIds;
         }
 
         public void ClearJobFiles(string jobId)
         {
-            _jobList.MigrationJobIds?.Remove(jobId);
-            MigrationJobContext.SaveJobList(_jobList);
+            MigrationJobContext.JobList.MigrationJobIds?.Remove(jobId);
+            MigrationJobContext.SaveJobList();
 ;
             try
             {
@@ -331,7 +331,7 @@ namespace MongoMigrationWebApp.Service
         {
             
 
-            MigrationWorker = new MigrationWorker(GetJobList());
+            MigrationWorker = new MigrationWorker();
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
 
@@ -348,7 +348,7 @@ namespace MongoMigrationWebApp.Service
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
-            MigrationWorker = new MigrationWorker(GetJobList());
+            MigrationWorker = new MigrationWorker();
 
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;

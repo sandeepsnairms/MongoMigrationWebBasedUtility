@@ -68,60 +68,6 @@ namespace OnlineMongoMigrationProcessor
         }
 
 
-        public bool LoadJobList(out string errorMessage)
-        {
-            errorMessage = string.Empty;
-
-            lock (_loadLock)
-            {
-
-                string newFormatPath = $"migrationjobs\\joblist.json";
-
-                try
-                {
-                    int max = 5;
-                   
-                    for (int i = 0; i < max; i++) 
-                    {
-                        try
-                        {
-                            //load new format
-                            if (!MigrationJobContext.Store.DocumentExists(newFormatPath))
-                            {
-                                errorMessage = "No suitable file in new format found.";
-                                return false;
-                            }
-                               
-                            string json = MigrationJobContext.Store.ReadDocument(newFormatPath);
-                            var loadedObject = JsonConvert.DeserializeObject<JobList>(json);
-                            if (loadedObject != null)
-                            {
-                                MigrationJobs = loadedObject.MigrationJobs;
-                                MigrationJobIds = loadedObject.MigrationJobIds;
-                            }
-
-                            if (MigrationJobIds != null)
-                            {
-                                errorMessage = string.Empty;
-                                return true;
-                            }
-                        }
-                        catch (JsonException)
-                        {
-                            // If deserialization fails, wait and retry
-                            Thread.Sleep(100); // Wait for 100 milliseconds before retrying
-                        }
-                    }
-                    errorMessage = $"Error loading migration jobs.";
-                    return false;                        
-                    
-                }                   
-                catch (Exception ex)
-                {
-                    errorMessage = $"Error loading migration jobs: {ex}";
-                    return false;
-                }
-            }
-        }        
+         
     }
 }

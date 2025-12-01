@@ -59,7 +59,7 @@
             }
             
             @* Display controlled pause status *@
-            @if (JobManager.IsControlledPauseRequested())
+            @if (JobManager.IsControlledPauseRequested() && IsJobRunning())
             {
                 <span class="badge bg-warning text-dark mx-2" title="Controlled pause in progress - waiting for active chunks to complete">
                     <i class="bi bi-hourglass-split"></i> Pausing...
@@ -896,7 +896,7 @@ else if (@_showLogBackupFile)
     private async Task OnLogLevelChanged()
     {
         // Save the job when log level changes
-        var jobList = JobManager.GetJobList();
+        //var jobList = JobManager.GetJobList();
         MigrationJobContext.SaveMigrationJob(MigrationJob);
 
         await InvokeAsync(StateHasChanged);
@@ -1268,9 +1268,9 @@ else if (@_showLogBackupFile)
 
         mj.IsStarted = true;  
 
-        var jobList = JobManager.GetJobList();
+        //var jobList = JobManager.GetJobList();
         MigrationJobContext.SaveMigrationJob(mj);
-        MigrationJobContext.SaveJobList(jobList);
+        MigrationJobContext.SaveJobList();
 
 
         // Check if we should show the loading spinner
@@ -1457,7 +1457,7 @@ else if (@_showLogBackupFile)
         var mj = MigrationJob;
         if (migrationUnits != null && mj?.MigrationUnitBasics != null)
         {
-            var jobList = JobManager.GetJobList();
+            //var jobList = JobManager.GetJobList();
             var migrationUnitsToReset = JobManager.GetMigrationUnits(mj);
             for (int i = 0; i < migrationUnitsToReset.Count; i++)
             {
@@ -1526,7 +1526,7 @@ else if (@_showLogBackupFile)
     private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
     {
         _yesNoDialogOpen = false;
-        var jobList = JobManager.GetJobList();
+        //var jobList = JobManager.GetJobList();
         if (result.IsConfirmed)
         {           
 
@@ -1588,7 +1588,7 @@ else if (@_showLogBackupFile)
     {
         _errorMessage = string.Empty;
         JobManager.StopMigration();
-        var jobList = JobManager.GetJobList();
+        //var jobList = JobManager.GetJobList();
         if (MigrationJobContext.SaveMigrationJob(MigrationJob))
             return;
         _refreshTimer = null;
@@ -1599,7 +1599,7 @@ else if (@_showLogBackupFile)
         _errorMessage = string.Empty;
         JobManager.ControlledPauseMigration();
 
-        var jobList = JobManager.GetJobList();
+        //var jobList = JobManager.GetJobList();
         if (MigrationJobContext.SaveMigrationJob(MigrationJob))
             return;
     }

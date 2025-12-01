@@ -59,8 +59,6 @@ namespace OnlineMongoMigrationProcessor.Processors
             if (updateStatus)
                 ProcessRunning = false;
 
-            // Reset controlled pause flag when stopping
-            _controlledPauseRequested = false;
 
             _cts?.Cancel();
 
@@ -213,14 +211,9 @@ namespace OnlineMongoMigrationProcessor.Processors
                                     _log.WriteLine($"{CurrentlyActiveJob.Id} completed.");
                                     CurrentlyActiveJob.IsCompleted = true;
                                     MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
-                                }
-                                else
-                                {
-                                    _log.WriteLine($"{CurrentlyActiveJob.Id} paused (controlled pause) - can be resumed");
-                                }
+                                }                                
                                 
                                 StopProcessing(true);
-                                //_jobList.Save();
                             }
                         }
                         else if (!_postUploadCSProcessing && Helper.IsOnline(CurrentlyActiveJob))

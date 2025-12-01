@@ -486,7 +486,7 @@ namespace OnlineMongoMigrationProcessor
             // Check for controlled pause - workers have finished, now stop
             if (_controlledPauseRequested)
             {
-                _log.WriteLine("Controlled pause - dump workers completed, stopping processor");
+                _log.WriteLine("Controlled pause - dump workers completed, stopping processor", LogType.Debug);
                 StopProcessing(updateStatus: true);
                 return TaskResult.Success;
             }
@@ -532,7 +532,7 @@ namespace OnlineMongoMigrationProcessor
                 // Check for controlled pause first
                 if (_controlledPauseRequested)
                 {
-                    _log.WriteLine($"Dump worker {workerId}: Controlled pause active - exiting");
+                    _log.WriteLine($"Dump worker {workerId}: Controlled pause active - exiting", LogType.Debug);
                     break;
                 }
                 
@@ -560,14 +560,12 @@ namespace OnlineMongoMigrationProcessor
                     // Check again after dequeue in case pause was requested
                     if (_controlledPauseRequested)
                     {
-                        // Put the work item back for later
-                        _dumpQueue.Enqueue(workItem);
-                        _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning chunk {workItem.ChunkIndex}");
+                        _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning at chunk {workItem.ChunkIndex}", LogType.Debug);
                         break;
                     }
-                    
-                    _log.WriteLine($"Worker {workerId} processing chunk {workItem.ChunkIndex}");
-                    
+
+                    _log.WriteLine($"Worker {workerId} processing chunk {workItem.ChunkIndex}", LogType.Debug);
+
                     double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
                     double contributionFactor = 1.0 / workItem.MigrationUnit.MigrationChunks.Count;
                     
@@ -686,7 +684,9 @@ namespace OnlineMongoMigrationProcessor
                     restoredChunks++;
                     restoredDocs += chunk.RestoredSuccessDocCount;
                 }
-                
+
+                _log.WriteLine($"Restored chunks for {mu.DatabaseName}.{mu.CollectionName}: {restoredChunks}, Restored documents: {restoredDocs}",LogType.Verbose);
+
                 return new RestoreResult 
                 { 
                     Result = TaskResult.Success, 
@@ -849,8 +849,8 @@ namespace OnlineMongoMigrationProcessor
                     if (_controlledPauseRequested)
                     {
                         // Put the work item back for later
-                        restoreQueue.Enqueue(workItem);
-                        _log.WriteLine($"Restore worker {workerId}: Controlled pause active - returning chunk {workItem.ChunkIndex}");
+                        //restoreQueue.Enqueue(workItem);
+                        _log.WriteLine($"Restore worker {workerId}: Controlled pause active - returning chunk {workItem.ChunkIndex}", LogType.Debug);
                         break;
                     }
                     
@@ -974,8 +974,8 @@ namespace OnlineMongoMigrationProcessor
                 // Check for controlled pause
                 if (_controlledPauseRequested)
                 {
-                    _log.WriteLine("Controlled pause detected in disk space check - exiting dump");
-                    return Task.FromResult(TaskResult.Success);
+                    _log.WriteLine("Controlled pause detected - exiting dump");
+                    return Task.FromResult(TaskResult.Canceled);
                 }
                 
                 continueDownloads = Helper.CanProceedWithDownloads(folder, _config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB);
@@ -1176,7 +1176,7 @@ namespace OnlineMongoMigrationProcessor
                 var processExecutor = new ProcessExecutor(_log,_muCache);
                 var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
 
-                if (!File.Exists(dumpFilePath))
+                if (!File.Exists(dumpFilePath)) //data integrity check,force controlled pause if dump file missing
                 {
                     _log.WriteLine($"Restore file for {dbName}.{colName}[{chunkIndex}] not found at {dumpFilePath}, Controlled pause requested.", LogType.Error);
                     mu.DumpComplete = false;
@@ -1297,6 +1297,7 @@ namespace OnlineMongoMigrationProcessor
             MigrationUnit mu;
             try
             {
+                _controlledPauseRequested = false;
                 ProcessRunning = true;
                 mu = _muCache.GetMigrationUnit(migrationUnitId);
                 mu.ParentJob = CurrentlyActiveJob;
@@ -1404,14 +1405,11 @@ namespace OnlineMongoMigrationProcessor
                     if (!_controlledPauseRequested)
                     {
                         _log.WriteLine($"{dbName}.{colName} dump complete, adding  to restore queue.");
-                        //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
+  
                         _migrationUnitsPendingUpload.Add(mu.Id);
                         _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
                     }
-                    else
-                    {
-                        _log.WriteLine($"{dbName}.{colName} dump complete, but controlled pause active - restore will not start automatically");
-                    }
+                    
                 }
             }
             else if (mu.DumpComplete && !mu.RestoreComplete && !_cts.Token.IsCancellationRequested)
@@ -1441,7 +1439,7 @@ namespace OnlineMongoMigrationProcessor
             // Don't restart processing if controlled pause was requested
             if (_controlledPauseRequested)
             {
-                _log.WriteLine($"Upload skipped for {migrationUnitId} - controlled pause is active");
+                _log.WriteLine($"Upload skipped for {migrationUnitId} - controlled pause is active",LogType.Debug);
                 try { _uploadLock.Release(); } catch { }
                 return;
             }
@@ -1530,8 +1528,9 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
-            if (mu.DumpComplete && !mu.RestoreComplete && !Directory.Exists(folder))
+            if (mu.DumpComplete && !mu.RestoreComplete && !Directory.Exists(folder)) //data missing issue, forcing controlled pause
             {
+                _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
                 mu.DumpComplete = false;
                 MigrationJobContext.SaveMigrationUnit(mu, true);
                 _muCache.RemoveMigrationUnit(mu.Id);
@@ -1547,7 +1546,7 @@ namespace OnlineMongoMigrationProcessor
                 // Check for controlled pause at start of loop iteration
                 if (_controlledPauseRequested)
                 {
-                    _log.WriteLine($"Controlled pause detected in restore loop for {dbName}.{colName} - exiting");
+                    _log.WriteLine($"Controlled pause detected in restore loop for {dbName}.{colName} - exiting",LogType.Debug);
                     return;
                 }
                 
@@ -1614,7 +1613,10 @@ namespace OnlineMongoMigrationProcessor
         }
 
         private bool ShouldContinueUploadLoop(MigrationUnit mu, string folder)
-            => !mu.RestoreComplete && Directory.Exists(folder) && !_cts.Token.IsCancellationRequested && !CurrentlyActiveJob.IsSimulatedRun && !_controlledPauseRequested;
+        { 
+            _log.WriteLine($"Checking if restore should continue for {mu.DatabaseName}.{mu.CollectionName}: RestoreComplete={mu.RestoreComplete}, DumpFolderExists={Directory.Exists(folder)}, CancellationRequested={_cts.Token.IsCancellationRequested}, IsSimulatedRun={CurrentlyActiveJob.IsSimulatedRun}", LogType.Verbose);
+            return !mu.RestoreComplete && Directory.Exists(folder) && !_cts.Token.IsCancellationRequested && !CurrentlyActiveJob.IsSimulatedRun;
+        }
 
         // Performs a single pass over all chunks, restoring any downloaded-but-not-uploaded ones
         private void RestoreAllPendingChunksOnce(
@@ -1664,16 +1666,21 @@ namespace OnlineMongoMigrationProcessor
             }
             catch { }
 
+            if (_controlledPauseRequested)
+                return;
+
             // Start change stream immediately if configured
             AddCollectionToChangeStreamQueue(migrationunitId, targetConnectionString);
 
             // Remove from upload queue
-            //MigrationUnitsPendingUpload.Remove(key);
             _migrationUnitsPendingUpload.Remove(migrationunitId);
 
             // Process next pending upload if any
             if (_migrationUnitsPendingUpload.Count>0)
-            {                
+            {
+                if (_controlledPauseRequested)
+                    return;
+
                 Upload(_migrationUnitsPendingUpload[0], targetConnectionString, true);
                 return;
             }
@@ -1682,31 +1689,23 @@ namespace OnlineMongoMigrationProcessor
 
             // Handle offline completion and post-upload CS logic
             if (!_cts.Token.IsCancellationRequested)
-            {
-                //var migrationJob = _jobList.GetMigrationJob(jobId);
-                //if (migrationJob != null)
-                //{
-                    if (!Helper.IsOnline(CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
+            {                
+                if (!Helper.IsOnline(CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
+                {
+                    // Don't mark as completed if this is a controlled pause
+                    if (!_controlledPauseRequested)
                     {
-                        // Don't mark as completed if this is a controlled pause
-                        if (!_controlledPauseRequested)
-                        {
-                            _log.WriteLine($"Job {CurrentlyActiveJob.Id} Completed");
-                            CurrentlyActiveJob.IsCompleted = true;
-                            MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
-                    }
-                        else
-                        {
-                            _log.WriteLine($"Job {CurrentlyActiveJob.Id} paused (controlled pause) - can be resumed");
-                        }
+                        _log.WriteLine($"Job {CurrentlyActiveJob.Id} Completed");
+                        CurrentlyActiveJob.IsCompleted = true;
+                        MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                    }                        
                         
-                        StopProcessing();
-                    }
-                    else
-                    {
-                        RunChangeStreamProcessorForAllCollections(targetConnectionString);
-                    }
-                //}
+                    StopProcessing();
+                }
+                else
+                {
+                    RunChangeStreamProcessorForAllCollections(targetConnectionString);
+                }                
             }
         }
         
@@ -1730,11 +1729,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine("Hard stop - killing active processes");
                 KillAllActiveProcesses();
-            }
-            else
-            {
-                _log.WriteLine("Controlled pause - processes completed naturally, no kill needed");
-            }
+            }            
             
             // Dispose worker pools (handles semaphores and blocker tasks)
             _dumpPool?.Dispose();

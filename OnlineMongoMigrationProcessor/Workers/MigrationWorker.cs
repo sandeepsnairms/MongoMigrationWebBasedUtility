@@ -50,11 +50,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             get => MigrationJobContext.CurrentlyActiveJob;
         }
 
-        public MigrationWorker(JobList jobList)
+        public MigrationWorker()
         {            
-            _log = new Log();
-            //_jobList = jobList;            
-            jobList.SetLog(_log);
+            _log = new Log();          
+            MigrationJobContext.JobList.SetLog(_log);
         }
 
         public LogBucket? GetLogBucket(string jobId)
@@ -142,11 +141,9 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         public void ControlledPauseMigration()
         {
-            _log.WriteLine("Controlled pause requested - will stop after current chunks complete");
-            _log.WriteLine("ControlledPauseMigration - Setting flag and initiating processor pause", LogType.Debug);
+            _log.WriteLine("Controlled pause requested - will stop after at logical point.");
             
-            ControlledPauseRequested = true;
-            
+            ControlledPauseRequested = true;            
             _migrationProcessor?.InitiateControlledPause();
         }
 
@@ -411,12 +408,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             foreach (var mu in unitsForPrep)
             {
-                // Check for controlled pause
-                if (ControlledPauseRequested)
-                {
-                    _log.WriteLine("Controlled pause detected - stopping partition preparation loop", LogType.Info);
-                    break;
-                }
+                if (HandleControlPause())
+                    return TaskResult.Canceled;
 
                 if (mu.SourceStatus == CollectionStatus.IsView)
                     continue;
@@ -597,12 +590,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (_migrationCancelled) 
                     return TaskResult.Canceled;
 
-                // Check for controlled pause
-                if (ControlledPauseRequested)
-                {
-                    _log.WriteLine("Controlled pause detected - stopping collection processing loop", LogType.Info);
-                    break;
-                }
+                if (HandleControlPause())
+                    return TaskResult.Canceled;
 
                 var migrationUnit = _muCache.GetMigrationUnit(mub.Id);
                 migrationUnit.ParentJob = CurrentlyActiveJob;
@@ -661,14 +650,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (createPartitionsResult != TaskResult.Success)
                                 return createPartitionsResult;
 
-                            // Check for controlled pause after partition creation (async operation)
-                            if (ControlledPauseRequested)
-                            {
-                                _log.WriteLine("Controlled pause detected after partition creation - stopping", LogType.Info);
-                                break;
-                            }
+                            if (HandleControlPause())
+                                return TaskResult.Canceled;
 
-                            if(Helper.IsOnline(CurrentlyActiveJob))
+
+                            if (Helper.IsOnline(CurrentlyActiveJob))
                             {
                                 // For online jobs, ensure change stream resume tokens are set
                                 var setResumeResult = await SetResumeTokens(migrationUnit, ctsToken);
@@ -676,12 +662,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                                     return setResumeResult;
                             }
 
-                            // Check for controlled pause after resume token setup (async operation)
-                            if (ControlledPauseRequested)
-                            {
-                                _log.WriteLine("Controlled pause detected after resume token setup - stopping", LogType.Info);
-                                break;
-                            }
+                            if (HandleControlPause())
+                                return TaskResult.Canceled;
 
                             if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[CurrentlyActiveJob.Id]) || string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[CurrentlyActiveJob.Id]))
                                 return TaskResult.Abort;
@@ -691,6 +673,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                             if (result == TaskResult.Success)
                             {
+                                if (HandleControlPause())
+                                    return TaskResult.Canceled;
+
                                 _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
                                 // since CS processsing has started, we can break the loop. No need to process all collections
                                 if (Helper.IsOnline(CurrentlyActiveJob) && CurrentlyActiveJob.SyncBackEnabled && (CurrentlyActiveJob.CSPostProcessingStarted && !CurrentlyActiveJob.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
@@ -722,18 +707,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine("Waiting for migration processor to complete all activities", LogType.Verbose);
             while (_migrationProcessor!=null && _migrationProcessor.ProcessRunning)
             {
+                if (HandleControlPause())
+                    return TaskResult.Canceled;
+
                 //check back after 10 sec
                 Task.Delay(10000, ctsToken).Wait(ctsToken);
-            }
-            
-            // If stopped due to controlled pause, log it but DON'T reset flag
-            // Caller needs to check the flag to avoid marking job as complete
-            if (ControlledPauseRequested)
-            {
-                _log.WriteLine("MigrateJobCollections stopped due to controlled pause - job not complete", LogType.Info);
-                return TaskResult.Success;
-            }
-            
+            }           
+
             _log.WriteLine("MigrateJobCollections completed - all activities finished", LogType.Debug);
             return TaskResult.Success; //all  actiivty completed successfully
         }
@@ -757,12 +737,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (_migrationCancelled)
                         return TaskResult.Canceled;
 
-                    // Check for controlled pause
-                    if (ControlledPauseRequested)
-                    {
-                        _log.WriteLine("Controlled pause detected - stopping change stream queue setup", LogType.Info);
-                        break;
-                    }
+                    if (HandleControlPause())
+                        return TaskResult.Canceled;
+ 
 
                     if (Helper.IsMigrationUnitValid(migrationUnit))
                     {
@@ -794,6 +771,19 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
+        private bool HandleControlPause()
+        {
+            if (ControlledPauseRequested)
+            {
+                _log.WriteLine("Controlled pause requested - stopping migration processor", LogType.Info);
+                _migrationProcessor?.StopProcessing(true);
+                ProcessRunning = false;
+                JobStarting = false;
+                StopMigration();
+                return true;
+            }
+            return false;
+        }
 
         public async Task StartMigrationAsync(string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
@@ -838,8 +828,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             // Reset controlled pause flag when resuming/starting job
             ControlledPauseRequested = false;
             
-            _cts = new CancellationTokenSource();
-                       
+            _cts = new CancellationTokenSource();                       
             
             MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
 
@@ -873,6 +862,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
 
+            if (HandleControlPause())
+                return;
+
+
+
             if (CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
             {
                 if (!Helper.IsWindows())
@@ -902,6 +896,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
             }
 
+            if (HandleControlPause())
+                return;
+
+
             _log.WriteLine("Starting PrepareForMigration with retry logic", LogType.Debug);
 			TaskResult result = await new RetryHelper().ExecuteTask(
                 () => PrepareForMigration(),
@@ -921,9 +919,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             JobStarting = false;
             bool skipPartitioning = false;// in all case it Off for now.
 
-
-
-
+            if (HandleControlPause())
+                  return;
 
 
             _log.WriteLine("Starting PreparePartitionsAsync with retry logic", LogType.Debug);
@@ -942,7 +939,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 StopMigration();
                 return;
             }
-          
+
+            if (HandleControlPause())
+                return;
+
 
             //if run comparison is set by customer.
             if (CurrentlyActiveJob.RunComparison)
@@ -953,13 +953,16 @@ namespace OnlineMongoMigrationProcessor.Workers
                 await compareHelper.CompareRandomDocumentsAsync(_log, CurrentlyActiveJob, _config!, _compare_cts.Token);
                 compareHelper = null;
                 CurrentlyActiveJob.RunComparison = false;
-                //_jobList.Save();
+
                 MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
                 _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
             }
-            
 
-            if(Helper.IsOnline(CurrentlyActiveJob) && !CurrentlyActiveJob.CSStartsAfterAllUploads)
+            if (HandleControlPause())
+                return;
+
+
+            if (Helper.IsOnline(CurrentlyActiveJob) && !CurrentlyActiveJob.CSStartsAfterAllUploads)
             {
                 _log.WriteLine("Starting online change stream processor in background (not awaited)", LogType.Debug);
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
@@ -967,12 +970,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 StartOnlineForJobCollections(_cts.Token, _migrationProcessor!);
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
-                _log.WriteLine("Delaying 30 seconds to allow change stream processor to initialize", LogType.Verbose);
                 await Task.Delay(30000);
             }
 
+            if (HandleControlPause())
+                return;
 
-            _log.WriteLine("Starting MigrateJobCollections with retry logic", LogType.Debug);
+            _log.WriteLine("Starting MigrateJobCollections.", LogType.Debug);
             result = await new RetryHelper().ExecuteTask(
                 () => MigrateJobCollections(_cts.Token),
                 (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(
@@ -981,6 +985,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 ),
                 _log
             );
+
+            if (HandleControlPause())
+                return;
+
 
             if (result==TaskResult.Success|| result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
             {
@@ -994,13 +1002,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             CurrentlyActiveJob.IsCompleted = true;
                             _log.WriteLine("Job marked as completed", LogType.Verbose);
-                        }
-                        else
-                        {
-                            _log.WriteLine($"Job {CurrentlyActiveJob.Id} paused (controlled pause) - can be resumed", LogType.Info);
-                            // Reset the flag now that we've checked it
-                            ControlledPauseRequested = false;
-                        }
+                        }                    
                         
                         MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
                     }
@@ -1154,13 +1156,11 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                     foreach (var dataType in dataTypes)
                     {
-                        // Check for controlled pause
-                        if (ControlledPauseRequested)
+                        if (HandleControlPause())
                         {
-                            _log.WriteLine("Controlled pause detected - stopping partition creation by datatype", LogType.Info);
-                            break;
+                            return null;
                         }
-                        
+
                         long docCountByType;
                         _log.WriteLine($"Creating partitions for DataType: {dataType}", LogType.Verbose);
                         ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(_log, CurrentlyActiveJob.JobType == JobType.DumpAndRestore, collection, totalChunks, dataType, minDocsInChunk, cts, migrationUnit!,optimizeForObjectId , _config,out docCountByType);
