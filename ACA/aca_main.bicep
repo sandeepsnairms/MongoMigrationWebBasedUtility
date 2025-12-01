@@ -402,6 +402,47 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
               secretRef: 'statestore-connection'
             }
           ] : [])
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/api/HealthCheck/ping'
+                port: 8080
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 30
+              successThreshold: 1
+              timeoutSeconds: 3
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/HealthCheck/ping'
+                port: 8080
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 0
+              periodSeconds: 30
+              failureThreshold: 3
+              successThreshold: 1
+              timeoutSeconds: 5
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/api/HealthCheck/ping'
+                port: 8080
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
+              successThreshold: 1
+              timeoutSeconds: 3
+            }
+          ]
         }
       ]
       volumes: [

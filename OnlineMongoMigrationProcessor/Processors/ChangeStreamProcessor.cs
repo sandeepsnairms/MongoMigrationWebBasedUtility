@@ -37,7 +37,7 @@ namespace OnlineMongoMigrationProcessor
 
         public MigrationJob CurrentlyActiveJob
         {
-            get => MigrationJobContext.MigrationJob;
+            get => MigrationJobContext.CurrentlyActiveJob;
         }
         // Resume token cache - used by collection-level processors to track individual collection resume tokens
         // Server-level processors don't need this as they use MigrationJob properties directly for global tokens

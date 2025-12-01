@@ -16,7 +16,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         public MigrationJob CurrentlyActiveJob
         {
-            get => MigrationJobContext.MigrationJob;
+            get => MigrationJobContext.CurrentlyActiveJob;
         }
         // Fix: Make _sourceClient, _sourceCollection, _targetCollection fields and MongoToolsFolder property nullable to resolve CS8618
 
@@ -58,6 +58,9 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             if (updateStatus)
                 ProcessRunning = false;
+
+            // Reset controlled pause flag when stopping
+            _controlledPauseRequested = false;
 
             _cts?.Cancel();
 

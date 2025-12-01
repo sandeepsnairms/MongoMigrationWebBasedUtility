@@ -32,7 +32,7 @@ namespace OnlineMongoMigrationProcessor
         //private readonly MigrationJob CurrentlyActiveJob;
         public MigrationJob CurrentlyActiveJob
         {
-            get => MigrationJobContext.MigrationJob;
+            get => MigrationJobContext.CurrentlyActiveJob;
         }
 
         public bool ExecutionCancelled

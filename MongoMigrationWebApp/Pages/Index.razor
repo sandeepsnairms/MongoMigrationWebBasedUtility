@@ -179,7 +179,7 @@
     private List<MigrationJob> GetMigrationsFromManager(bool silent)
     {
         var ids = JobManager.GetMigrationIds(out string errorMessage);
-        var result = JobManager.GetMigrationJobs(ids);
+        var result = MigrationJobContext.PopulateMigrationJobs(ids);
         if(!string.IsNullOrEmpty(errorMessage) || result==null)
         {
             if (!silent)

@@ -22,6 +22,7 @@ namespace OnlineMongoMigrationProcessor.Context
         public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public static List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
 
+        public static string ActiveMigrationJobId { get; set; }
 
         private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
         private static readonly Dictionary<string, string> _targetConnectionStrings = new();
@@ -29,7 +30,38 @@ namespace OnlineMongoMigrationProcessor.Context
         public static ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
         public static ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
 
-        public static MigrationJob? MigrationJob { get; set; }
+        // In-memory cache of migration jobs to ensure consistency
+        private static Dictionary<string, MigrationJob> MigrationJobs { get; set; } = new Dictionary<string, MigrationJob>();
+        
+        // Cached instance of the currently active migration job for consistency across the application
+        private static MigrationJob? _cachedCurrentlyActiveJob = null;
+        
+        /// <summary>
+        /// Gets the currently active migration job with intelligent caching
+        /// </summary>
+        public static MigrationJob? CurrentlyActiveJob
+        {
+            get
+            {
+                // If we have a cached instance and it matches the active job ID, use it
+                if (_cachedCurrentlyActiveJob != null && 
+                    !string.IsNullOrEmpty(ActiveMigrationJobId) && 
+                    _cachedCurrentlyActiveJob.Id == ActiveMigrationJobId)
+                {
+                    return _cachedCurrentlyActiveJob;
+                }
+                
+                // Otherwise, fetch from GetMigrationJob and cache it
+                if (!string.IsNullOrEmpty(ActiveMigrationJobId))
+                {
+                    _cachedCurrentlyActiveJob = GetMigrationJob(ActiveMigrationJobId);
+                    return _cachedCurrentlyActiveJob;
+                }
+                
+                return null;
+            }
+        }
+        
 
         public static PersistenceStorage? Store  {get; private set; }
 
@@ -93,6 +125,52 @@ namespace OnlineMongoMigrationProcessor.Context
                 Store.Initialize(stateStoreCSorPath, appId);
             }
         }
+        public static MigrationJob? GetMigrationJob(string jobId)
+        {
+            if (MigrationJobs.ContainsKey(jobId))
+            {
+                return MigrationJobs[jobId];
+            }
+            else
+            {
+                try
+                {
+                    var filePath = $"{Path.Combine("migrationjobs", jobId, "jobdefinition.json")}";
+
+                    var json = Store.ReadDocument(filePath);
+                    var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
+                    if(loadedObject == null)
+                        return null;
+                    MigrationJobs[jobId]= loadedObject;
+                    return loadedObject;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+        }
+
+
+        //public static MigrationJob? GetCurrentlyActiveMigrationJob()
+        //{
+        //    // Use the cached property instead of directly calling GetMigrationJob
+        //    return CurrentlyActiveJob;
+        //}
+
+
+
+        public static List<MigrationJob>  PopulateMigrationJobs(List<string> ids)
+        {
+            List<MigrationJob> jobs = new List<MigrationJob>();
+            foreach (var id in ids)
+            {
+                var job=GetMigrationJob(id);
+                if(job != null)
+                    jobs.Add(job);
+            }
+            return jobs;
+        }
 
         public static bool SaveMigrationUnit(MigrationUnit mu, bool updateParent)
         {
@@ -101,8 +179,8 @@ namespace OnlineMongoMigrationProcessor.Context
                 if (mu == null)
                     return false;
 
-                if (MigrationJob != null)
-                    mu.ParentJob = MigrationJob;
+                if (CurrentlyActiveJob != null)
+                    mu.ParentJob = CurrentlyActiveJob;
 
                 if(mu.ParentJob != null && updateParent)
                     mu.UpdateParentJob();      
@@ -112,11 +190,11 @@ namespace OnlineMongoMigrationProcessor.Context
                     mu.Persist();
                 }
 
-                if (MigrationJob != null && updateParent)
+                if (CurrentlyActiveJob != null && updateParent)
                 {
                     lock (_writeJobLock)
                     {
-                        MigrationJob.Persist();                        
+                        CurrentlyActiveJob.Persist();                        
                     }
                 }
                 return true;
@@ -136,6 +214,15 @@ namespace OnlineMongoMigrationProcessor.Context
                     lock (_writeJobLock)
                     {
                         job.Persist();
+                        
+                        // ALWAYS update the in-memory cache for this job ID
+                        MigrationJobs[job.Id] = job;
+                        
+                        // Update the cached currently active job if this is the active job
+                        if (!string.IsNullOrEmpty(ActiveMigrationJobId) && job.Id == ActiveMigrationJobId)
+                        {
+                            _cachedCurrentlyActiveJob = job;
+                        }
                     }
                 }
                 return true;
@@ -165,21 +252,7 @@ namespace OnlineMongoMigrationProcessor.Context
             }
         }
 
-        public static MigrationJob GetMigrationJob(string jobId)
-        {
-            try
-            {
-                var filePath = $"{Path.Combine("migrationjobs",jobId,"jobdefinition.json")}";
-
-                var json=Store.ReadDocument(filePath);
-                var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
-                return loadedObject;
-            }
-            catch
-            {
-                return null;
-            }
-        }
+       
 
         public static MigrationUnit GetMigrationUnit(string jobId, string unitId)
         {
@@ -195,6 +268,14 @@ namespace OnlineMongoMigrationProcessor.Context
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// Clears the cached currently active job. Use this when switching active jobs or when you need to force a reload.
+        /// </summary>
+        public static void ClearCurrentlyActiveJobCache()
+        {
+            _cachedCurrentlyActiveJob = null;
         }
 
     }

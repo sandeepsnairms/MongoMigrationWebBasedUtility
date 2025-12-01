@@ -11,7 +11,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
     {
         public MigrationJob CurrentlyActiveJob
         {
-            get => MigrationJobContext.MigrationJob;
+            get => MigrationJobContext.CurrentlyActiveJob;
         }
 
 

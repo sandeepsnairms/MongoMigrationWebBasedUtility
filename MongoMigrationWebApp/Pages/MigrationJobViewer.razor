@@ -959,7 +959,7 @@ else if (@_showLogBackupFile)
                 }
 
                 // Trigger immediate refresh
-                MigrationJob = GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
+                MigrationJob =MigrationJobContext.GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
                 if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
                 {
                     if (_isLoadingCollections && @MigrationJob.MigrationUnitBasics != null && @MigrationJob.MigrationUnitBasics.Count > 0)
@@ -989,7 +989,7 @@ else if (@_showLogBackupFile)
     {
         _showLogBackupFile = false;
         _logBackupFile = string.Empty;  
-        MigrationJob = GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
+        MigrationJob = MigrationJobContext.GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             // Only start timer if AutoRefreshEnabled is true (default)
@@ -1011,7 +1011,7 @@ else if (@_showLogBackupFile)
     private List<MigrationJob> GetMigrations()
     {
         var ids = JobManager.GetMigrationIds(out string errorMessage);
-        var list = JobManager.GetMigrationJobs(ids);
+        var list = MigrationJobContext.PopulateMigrationJobs(ids);
         //var list = JobManager.GetMigrations(out string errorMessage);
         if (!string.IsNullOrEmpty(errorMessage))
         {
@@ -1071,7 +1071,7 @@ else if (@_showLogBackupFile)
         // Marshal ALL component state changes to the UI thread to prevent cross-thread access issues
         InvokeAsync(() =>
         {
-            MigrationJob = GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
+            MigrationJob = MigrationJobContext.GetMigrationJob(JobId);// GetMigrations()(m => m.Id == JobId);
             if (MigrationJob != null && (MigrationJob.IsStarted || JobManager.DidMigrationJobExitRecently(JobId)) && !_showLogBackupFile)
             {
                 // Check if we should hide loading spinner
@@ -1121,7 +1121,7 @@ else if (@_showLogBackupFile)
             return; // Exit if the JobId does not match
         }
 
-        MigrationJob = GetMigrationJob(JobId);//GetMigrations()(m => m.Id == id);
+        MigrationJob = MigrationJobContext.GetMigrationJob(JobId);//GetMigrations()(m => m.Id == id);
         if (MigrationJob != null && MigrationJob.IsStarted)
         {
             LogBucket = JobManager.GetLogBucket(id, out string logBackup, out bool isLive);
@@ -1194,23 +1194,25 @@ else if (@_showLogBackupFile)
 
 
 
-    private MigrationJob GetMigrationJob(string id)
-    {
-        MigrationJob = JobManager.GetMigrationJobById(JobId);
-        if(MigrationJob.Id == id)
-        {
-            return MigrationJob;
-        }
-        else
-        {
-            throw new Exception("Migration Job not found");            
-        }
-        //return null;
-    }
+    // private MigrationJob GetMigrationJob(string id)
+    // {
+    //     MigrationJob = JobManager.GetMigrationJobById(JobId);
+    //     if (MigrationJob==null)
+    //     re
+    //     if(MigrationJob.Id == id)
+    //     {
+    //         return MigrationJob;
+    //     }
+    //     else
+    //     {
+    //         throw new Exception("Migration Job not found");            
+    //     }
+    //     //return null;
+    // }
 
     protected override async Task OnParametersSetAsync()
     {
-        MigrationJob = GetMigrationJob(JobId);
+        MigrationJob = MigrationJobContext.GetMigrationJob(JobId);
 
         if (MigrationJob == null) // Fixed the condition to check for null
         {

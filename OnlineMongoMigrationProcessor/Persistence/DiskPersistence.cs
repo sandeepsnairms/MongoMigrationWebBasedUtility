@@ -381,14 +381,32 @@ namespace OnlineMongoMigrationProcessor.Persistence
             var folder = Path.Combine(_storagePath, "migrationlogs");
             var binPath = Path.Combine(folder, $"{id}.bin");
             var logs = ParseLogBinFile(binPath, topEntries, bottomEntries);
-            // Serialize selected logs to JSON
-            var options = new JsonSerializerOptions
+            
+            // Format logs as multi-line string with Type|DateTime|Message format
+            var sb = new System.Text.StringBuilder();
+            
+            foreach (var log in logs.Logs)
             {
-                WriteIndented = true,
-                Converters = { new JsonStringEnumConverter() }
-            };
-
-            return JsonSerializer.SerializeToUtf8Bytes(logs, options);
+                // Convert LogType to single character (E=Error, W=Warning, I=Info, D=Debug, V=Verbose)
+                char typeChar = log.Type switch
+                {
+                    LogType.Error => 'E',
+                    LogType.Warning => 'W',
+                    LogType.Info => 'I',
+                    LogType.Message => 'L', // Legacy - use 'L' for old Message type
+                    LogType.Debug => 'D',
+                    LogType.Verbose => 'V',
+                    _ => '?'
+                };
+                
+                // Format DateTime as short format (MM/dd/yyyy HH:mm:ss)
+                string dateTime = log.Datetime.ToString("MM/dd/yyyy HH:mm:ss");
+                
+                // Build the line: Type|DateTime|Message
+                sb.AppendLine($"{typeChar}|{dateTime}|{log.Message}");
+            }
+            
+            return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
         }
         public override LogBucket ReadLogs(string id, out string fileName)
         {

@@ -71,16 +71,31 @@ Write-Host ""
 # Step 3: Restart the Container App
 Write-Host "Step 3: Restarting Container App to apply changes..." -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
-az containerapp revision restart `
+
+# Get the active revision name
+$activeRevision = az containerapp revision list `
     --name $ContainerAppName `
     --resource-group $ResourceGroupName `
+    --query "[?properties.active==``true``].name" `
+    --output tsv `
     2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "`nWarning: Failed to restart Container App. You may need to restart it manually." -ForegroundColor Yellow
+if ($activeRevision) {
+    az containerapp revision restart `
+        --name $ContainerAppName `
+        --resource-group $ResourceGroupName `
+        --revision $activeRevision `
+        2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' } | Out-Null
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Container App restarted successfully." -ForegroundColor Green
+    } else {
+        Write-Host "Warning: Failed to restart Container App. You may need to restart it manually." -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "Container App restarted successfully." -ForegroundColor Green
+    Write-Host "Warning: Could not determine active revision. You may need to restart manually." -ForegroundColor Yellow
 }
+
 $ErrorActionPreference = 'Stop'
 Write-Host ""
 

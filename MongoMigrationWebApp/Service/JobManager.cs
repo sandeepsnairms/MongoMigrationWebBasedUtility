@@ -144,35 +144,22 @@ namespace MongoMigrationWebApp.Service
         
         public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
-            if(active)
-            {
-                if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
-                {
-                    Console.WriteLine($"GetMigrationJobById from MigrationWorker.CurrentlyActiveJob");
-                    var mj = MigrationWorker.CurrentlyActiveJob;
-                    if(mj != null)
-                        return mj;
-                }
-            }
-            Console.WriteLine($"GetMigrationJobById from Store");
+            //if(active)
+            //{
+            //    if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
+            //    {
+            //        Console.WriteLine($"GetMigrationJobById from MigrationWorker.CurrentlyActiveJob");
+            //        var mj = MigrationWorker.CurrentlyActiveJob;
+            //        if(mj != null)
+            //            return mj;
+            //    }
+            //}
+            //Console.WriteLine($"GetMigrationJobById from Store");
             var job = MigrationJobContext.GetMigrationJob(id);
-            MigrationJobContext.MigrationJob = job;
+            //MigrationJobContext.ActiveMigrationJobId = id;
             return job;
         }
 
-        public List<MigrationJob> GetMigrationJobs(List<string> ids)
-        {
-            List<MigrationJob> jobs = new List<MigrationJob>();
-            foreach (var id in ids)
-            {
-                var job = MigrationJobContext.GetMigrationJob(id);
-                if (job != null)
-                {
-                    jobs.Add(job);
-                }
-            }
-            return jobs;
-        }
 
 
 
@@ -348,7 +335,7 @@ namespace MongoMigrationWebApp.Service
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
 
-            MigrationJobContext.MigrationJob = job;
+            MigrationJobContext.ActiveMigrationJobId = job.Id;
 
             // Fire-and-forget: UI should not block on long-running migration
             _ = MigrationWorker?.StartMigrationAsync(namespacesToMigrate, jobType, trackChangeStreams);
@@ -365,7 +352,7 @@ namespace MongoMigrationWebApp.Service
 
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
-            MigrationJobContext.MigrationJob = job;
+            MigrationJobContext.ActiveMigrationJobId = job.Id;
 
             MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString);
         }

@@ -266,14 +266,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 
                 if (totalLogs > 0)
                 {
-                    var selectedLogs = new BsonArray();
+                    var selectedLogs = new List<BsonDocument>();
 
-                    // If topEntries=0 and bottomEntries=0, limit to max 50,000 logs to prevent OOM
+                    // If topEntries=0 and bottomEntries=0, get all logs
                     if (topEntries == 0 && bottomEntries == 0)
                     {
-                        //const int MAX_ALL_LOGS = 5000;
-                        //int limit = Math.Min(totalLogs, MAX_ALL_LOGS);
-                        
                         using (var cursor = _logCollection!.Find(filter).Sort(sort).ToCursor())
                         {
                             while (cursor.MoveNext())
@@ -315,19 +312,38 @@ namespace OnlineMongoMigrationProcessor.Persistence
                         }
                     }
                     
-                    var resultDocument = new BsonDocument
+                    // Format logs as multi-line string with Type|DateTime|Message format
+                    var sb = new System.Text.StringBuilder();
+                    
+                    foreach (var doc in selectedLogs)
                     {
-                        { "JobId", normalizedId },
-                        { "TotalLogs", totalLogs },
-                        { "ReturnedLogs", selectedLogs.Count },
-                        { "logs", selectedLogs }
-                    };
-                    var jsonString = resultDocument.ToJson(new MongoDB.Bson.IO.JsonWriterSettings
-                    {
-                        Indent = true,
-                        IndentChars = "  "
-                    });
-                    return System.Text.Encoding.UTF8.GetBytes(jsonString);
+                        // Parse LogType from document
+                        LogType logType = Enum.Parse<LogType>(doc.GetValue("Type").AsString);
+                        
+                        // Convert LogType to single character (E=Error, W=Warning, I=Info, D=Debug, V=Verbose)
+                        char typeChar = logType switch
+                        {
+                            LogType.Error => 'E',
+                            LogType.Warning => 'W',
+                            LogType.Info => 'I',
+                            LogType.Message => 'L', // Legacy - use 'L' for old Message type
+                            LogType.Debug => 'D',
+                            LogType.Verbose => 'V',
+                            _ => '?'
+                        };
+                        
+                        // Get DateTime and format as short format (MM/dd/yyyy HH:mm:ss)
+                        DateTime dateTime = doc.GetValue("Datetime").ToUniversalTime();
+                        string dateTimeStr = dateTime.ToString("MM/dd/yyyy HH:mm:ss");
+                        
+                        // Get message
+                        string message = doc.GetValue("Message").AsString;
+                        
+                        // Build the line: Type|DateTime|Message
+                        sb.AppendLine($"{typeChar}|{dateTimeStr}|{message}");
+                    }
+                    
+                    return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
                 }
             }
             catch (Exception ex)
