@@ -233,18 +233,14 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 string path = string.Empty;
-                if (Helper.IsWindows())
-                {
-                    path = $"{Helper.GetWorkingFolder()}{striFileName}";
-                }
-                else
-                {
-                    if (!System.IO.Directory.Exists(path))
-                    {
-                        System.IO.Directory.CreateDirectory(path);
-                    }
-                    path = $"{Helper.GetWorkingFolder()}/{MigrationJobContext.AppId}/{striFileName}";
-                }
+                //if (Helper.IsWindows())
+                //{
+                    path = Path.Combine(Helper.GetWorkingFolder(),striFileName);
+                //}
+                //else
+                //{                    
+                    //path = $"{Helper.GetWorkingFolder()}/{striFileName}";
+                //}
 
                 string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
                 string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
@@ -269,6 +265,10 @@ namespace OnlineMongoMigrationProcessor
             if (!IsWindows())
             {
                 _workingFolder = $"{Environment.GetEnvironmentVariable("ResourceDrive")}/{MigrationJobContext.AppId}/";
+
+                if (!System.IO.Directory.Exists(_workingFolder))
+                    System.IO.Directory.CreateDirectory(_workingFolder);
+
                 return _workingFolder;
             }
 

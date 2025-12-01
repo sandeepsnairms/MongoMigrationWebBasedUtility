@@ -13,15 +13,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         {
             get => MigrationJobContext.MigrationJob;
         }
-        //private readonly JobList _jobList;
-        //private readonly MigrationJob CurrentlyActiveJob;
 
 
         private List<MigrationUnit> _migrationUnits;
         public ActiveMigrationUnitsCache()
         {
-            //_jobList = jobList;
-            //CurrentlyActiveJob = job;
             _migrationUnits = new List<MigrationUnit>();
         }
 

@@ -33,7 +33,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static PersistenceStorage? Store  {get; private set; }
 
-        public static string? AppId { get; private set; }
+        public static string? AppId { get; set; }
         public static void Initialize(IConfiguration configuration)
         {
             bool isLocal = true;
@@ -44,6 +44,7 @@ namespace OnlineMongoMigrationProcessor.Context
                 bool.TryParse(configuration["StateStore:UseLocalDisk"], out isLocal);
                 stateStoreCSorPath = configuration["StateStore:ConnectionStringOrPath"];             
                 appId = configuration["StateStore:AppID"];
+                AppId = appId;
             }
             catch
             {

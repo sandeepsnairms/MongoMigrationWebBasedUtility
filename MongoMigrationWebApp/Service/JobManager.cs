@@ -135,46 +135,13 @@ namespace MongoMigrationWebApp.Service
             return _jobList ??= new JobList();
         }
 
-
-        //public DateTime GetJobBackupDate()
-        //{
-        //    return GetJobList().GetBackupDate();
-        //}
-
        
         public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
         {            
             return Helper.GetMigrationUnitsToMigrate(mj);
         }
 
-        //public bool RestoreJobsFromBackup(out string errorMessage)
-        //{
-        //    _jobList = null;
-        //    _jobList = new JobList();
-
-        //    var success = _jobList.LoadJobs(out errorMessage, true);
-        //    if (!success)
-        //    {
-        //        return false;
-        //    }
-
-        //    if (MigrationWorker != null)
-        //    {
-        //        MigrationWorker.StopMigration();
-        //        MigrationWorker = null;
-        //    }
-
-        //    MigrationWorker = new MigrationWorker(_jobList);
-
-        //    errorMessage = string.Empty;
-        //    return success;
-        //}
-
-        //public bool SaveJobs(out string errorMessage)
-        //{
-        //    return GetJobList().Save(out errorMessage);
-        //}
-
+        
         public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
             if(active)
@@ -187,7 +154,9 @@ namespace MongoMigrationWebApp.Service
                         return mj;
                 }
             }
+            Console.WriteLine($"GetMigrationJobById from Store");
             var job = MigrationJobContext.GetMigrationJob(id);
+            MigrationJobContext.MigrationJob = job;
             return job;
         }
 
@@ -361,16 +330,13 @@ namespace MongoMigrationWebApp.Service
 
         public Task CancelMigration(string id)
         {
-            //var list = GetJobList().MigrationJobs;
-            //if (list != null)
-            //{
+
             var migration = MigrationJobContext.GetMigrationJob(id);
             if (migration != null)
             {
                 migration.IsCancelled = true;
                 migration.IsStarted = false;
             }
-            //}
             return Task.CompletedTask;
         }
 
@@ -407,37 +373,7 @@ namespace MongoMigrationWebApp.Service
         {
             return MigrationWorker?.GetRunningJobId() ?? string.Empty;
         }
-
-        //public JobList.ConnectionAccessor SourceConnectionString
-        //{
-        //    get => MigrationJobContext.SourceConnectionString;
-        //    set
-        //    {
-        //        // Optional: if you want to copy data from another accessor
-        //        if (value != null)
-        //        {
-        //            foreach (var key in value.Keys)
-        //            {
-        //                MigrationJobContext.SourceConnectionString[key] = value[key];
-        //            }
-        //        }
-        //    }
-        //}
-
-        //public JobList.ConnectionAccessor TargetConnectionString
-        //{
-        //    get => MigrationJobContext.TargetConnectionString;
-        //    set
-        //    {
-        //        if (value != null)
-        //        {
-        //            foreach (var key in value.Keys)
-        //            {
-        //                MigrationJobContext.TargetConnectionString[key] = value[key];
-        //            }
-        //        }
-        //    }
-        //}
+               
 
         public bool IsProcessRunning(string id)
         {

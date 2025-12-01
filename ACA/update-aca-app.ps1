@@ -68,6 +68,22 @@ Write-Host "The Container App '$ContainerAppName' has been updated with image: $
 Write-Host "Environment variables and secrets remain unchanged." -ForegroundColor Green
 Write-Host ""
 
+# Step 3: Restart the Container App
+Write-Host "Step 3: Restarting Container App to apply changes..." -ForegroundColor Yellow
+$ErrorActionPreference = 'Continue'
+az containerapp revision restart `
+    --name $ContainerAppName `
+    --resource-group $ResourceGroupName `
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nWarning: Failed to restart Container App. You may need to restart it manually." -ForegroundColor Yellow
+} else {
+    Write-Host "Container App restarted successfully." -ForegroundColor Green
+}
+$ErrorActionPreference = 'Stop'
+Write-Host ""
+
 # Retrieve and display the application URL
 Write-Host "Retrieving application URL..." -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'

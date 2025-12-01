@@ -5,6 +5,7 @@ using MongoMigrationWebApp.Service;
 using OnlineMongoMigrationProcessor;
 using System.Security.AccessControl;
 using Microsoft.AspNetCore.Components.Authorization;
+using OnlineMongoMigrationProcessor.Context;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +44,7 @@ try
     if (!string.IsNullOrEmpty(appId))
     {
         builder.Configuration["StateStore:AppID"] = appId;
+        MigrationJobContext.AppId= appId;
     }
     bool.TryParse( Environment.GetEnvironmentVariable("StateStoreUseLocalDisk"), out var useLocal);
     builder.Configuration["StateStore:UseLocalDisk"] = useLocal.ToString();

@@ -32,8 +32,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         private string _toolsDestinationFolder = $"{Helper.GetWorkingFolder()}mongo-tools";
         private string _toolsLaunchFolder = string.Empty;
         private bool _migrationCancelled = false;
-        //private JobList _jobList;
-        //private MigrationJob? CurrentlyActiveJob;
+
         private string _activeJobId = string.Empty;
         private Log _log;
         private MongoClient? _sourceClient;
@@ -44,6 +43,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
 
+        private bool JobStarting = false;
         public MigrationJob CurrentlyActiveJob
         {
             get => MigrationJobContext.MigrationJob;
@@ -84,13 +84,31 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             if (string.IsNullOrWhiteSpace(_activeJobId))
             {
-                Console.WriteLine( $"IsProcessRunning  IsNullOrWhiteSpace :true");
+                Console.WriteLine( $"IsProcessRunning false,  IsNullOrWhiteSpace :true");
                 return false;
             }
             else
             {
-                Console.WriteLine($"IsProcessRunning :{_activeJobId == id}");
-                return _activeJobId == id;
+                if (JobStarting && _activeJobId == id)//To handle the time between setting JobStarting and actual start of processor
+                {
+                    Console.WriteLine($"IsProcessRunning true, JobStarting :true");
+                    return true;
+                }
+                else
+                {
+                    if (_activeJobId == id && _migrationProcessor != null && _migrationProcessor.ProcessRunning)
+                    {
+                        Console.WriteLine($"IsProcessRunning true,  ProcessorRunning :true");
+                        return true;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"IsProcessRunning false,  ProcessorRunning :false");
+                        return false;
+                    }
+                }
+                //Console.WriteLine($"IsProcessRunning :{_activeJobId == id}");
+                //return _activeJobId == id;
             }                        
         }
 
@@ -732,16 +750,16 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
+            JobStarting=true;
             if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id))
             {
                 StopMigration(); //stop any existing
                 return;
-            }
-
-           
+            }           
 
             StopMigration(); //stop any existing
             ProcessRunning = true;
+   
             _activeJobId = CurrentlyActiveJob.Id;
             Console.WriteLine($"_activeJobId: {_activeJobId}");
             _muCache = new ActiveMigrationUnitsCache();
@@ -853,8 +871,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 StopMigration();
                 return;
             }
-
+            JobStarting = false;
             bool skipPartitioning = false;// in all case it Off for now.
+
+
+
+
+
 
             _log.WriteLine("Starting PreparePartitionsAsync with retry logic", LogType.Debug);
             result = await new RetryHelper().ExecuteTask(
@@ -950,6 +973,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString)
         {
+            JobStarting= true;
             if (string.IsNullOrWhiteSpace(CurrentlyActiveJob.Id)) 
             {
                 StopMigration(); //stop any existing
@@ -957,6 +981,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             ProcessRunning = true;
+            
             LoadConfig();
 
             if(_log==null)
@@ -978,6 +1003,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
             _migrationProcessor = new SyncBackProcessor(_log, _muCache, dummySourceClient, _config!);
             _migrationProcessor.ProcessRunning = true;
+            JobStarting = false;
             var dummyUnit = new MigrationUnit(CurrentlyActiveJob,"", "", new List<MigrationChunk>());
 
             MigrationJobContext.SaveMigrationUnit(dummyUnit,false);
