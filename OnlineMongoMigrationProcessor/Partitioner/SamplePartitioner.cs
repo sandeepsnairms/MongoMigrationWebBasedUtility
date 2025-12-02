@@ -65,7 +65,11 @@ namespace OnlineMongoMigrationProcessor
                     if (optimizeForObjectId && userFilter != null && userFilter.ElementCount == 0)
                         docCountByType = GetDocumentCountByDataType(collection, DataType.ObjectId, true, new BsonDocument(), true);//use esimated count, don't need exact count for objectId 
                     else
+                    {
                         docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
+                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} for {dataType} with user filter {userFilter}", LogType.Verbose);
+                    }
+
                 }
                 catch (Exception ex)
                 {

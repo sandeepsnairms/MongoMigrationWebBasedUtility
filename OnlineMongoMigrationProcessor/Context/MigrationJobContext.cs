@@ -92,7 +92,6 @@ namespace OnlineMongoMigrationProcessor.Context
                     Store = new DiskPersistence();
                     var localPath = string.IsNullOrEmpty(stateStoreCSorPath) ? Helper.GetWorkingFolder() : stateStoreCSorPath;
                     Store.Initialize(localPath, string.Empty);
-                    return;
                 }
                 else
                 {                  

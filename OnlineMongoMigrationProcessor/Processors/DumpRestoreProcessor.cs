@@ -658,151 +658,225 @@ namespace OnlineMongoMigrationProcessor
         {
             int restoredChunks = 0;
             long restoredDocs = 0;
-            
-            _cts.Token.ThrowIfCancellationRequested();
-            
-            // Build work queue (ordered by chunk index)
-            var sortedChunks = mu.MigrationChunks
-                .Select((chunk, index) => new ChunkWorkItem
-                {
-                    ChunkIndex = index,
-                    MigrationUnit = mu,
-                    Chunk = chunk,
-                    QueuedAt = DateTime.UtcNow
-                })
-                .Where(item => item.Chunk.IsUploaded != true && item.Chunk.IsDownloaded == true)
-                .OrderBy(item => item.ChunkIndex)
-                .ToList();
-            
-            if (!sortedChunks.Any())
-            {
-                _log.WriteLine($"All chunks already restored for {dbName}.{colName}");
-                
-                // Count already restored chunks
-                foreach (var chunk in mu.MigrationChunks.Where(c => c.IsUploaded == true))
-                {
-                    restoredChunks++;
-                    restoredDocs += chunk.RestoredSuccessDocCount;
-                }
 
-                _log.WriteLine($"Restored chunks for {mu.DatabaseName}.{mu.CollectionName}: {restoredChunks}, Restored documents: {restoredDocs}",LogType.Verbose);
 
-                return new RestoreResult 
-                { 
-                    Result = TaskResult.Success, 
-                    RestoredChunks = restoredChunks, 
-                    RestoredDocs = restoredDocs 
-                };
-            }
-            
-            _log.WriteLine($"Starting parallel restore of {sortedChunks.Count} chunks with {_restorePool!.MaxWorkers} workers");
-            
-            // Store context for dynamic worker spawning
-            _currentFolder = folder;
-            _currentMigrationUnit = mu;
-            _nextRestoreWorkerId = 1;
-            
-            // Clear chunk errors before starting
-            _chunkErrors.Clear();
-            
-            // Enqueue restore work to global queue
-            foreach (var chunk in sortedChunks)
+            try
+
             {
-                _restoreQueue.Enqueue(chunk);
-            }
-            
-            // Start worker tasks
-            Task<TaskResult>[] workerTaskArray;
-            lock (_workerLock)
-            {
-                _activeRestoreWorkers.Clear();
-                for (int i = 0; i < Math.Min(_restorePool.MaxWorkers, sortedChunks.Count); i++)
-                {
-                    int workerId = _nextRestoreWorkerId++;
-                    var workerTask = Task.Run(async () =>
+                _cts.Token.ThrowIfCancellationRequested();
+
+                // Build work queue (ordered by chunk index)
+                var sortedChunks = mu.MigrationChunks
+                    .Select((chunk, index) => new ChunkWorkItem
                     {
-                        return await RestoreWorkerAsync(
-                            workerId,
-                            _restoreQueue,
-                            folder,
-                            targetConnectionString,
-                            dbName,
-                            colName
-                        );
-                    }, _cts.Token);
-                    
-                    _activeRestoreWorkers.Add(workerTask);
-                }
-                workerTaskArray = _activeRestoreWorkers.ToArray();
-            }
-            
-            // Wait for all workers to complete
-            var results = await Task.WhenAll(workerTaskArray);
-            
-            // Clear context
-            _currentFolder = null;
-            
-            // Check for controlled pause - workers have finished, now stop
-            if (_controlledPauseRequested)
-            {
-                _log.WriteLine("Controlled pause - restore workers completed, stopping processor");
-                StopProcessing(updateStatus: true);
-                return new RestoreResult 
-                { 
-                    Result = TaskResult.Success, 
-                    RestoredChunks = restoredChunks, 
-                    RestoredDocs = restoredDocs 
-                };
-            }
-            
-            // Check if any worker failed
-            if (results.Any(r => r == TaskResult.FailedAfterRetries || r == TaskResult.Abort))
-            {
-                _log.WriteLine($"Restore failed for {dbName}.{colName}", LogType.Error);
-                return new RestoreResult 
-                { 
-                    Result = TaskResult.FailedAfterRetries, 
-                    RestoredChunks = restoredChunks, 
-                    RestoredDocs = restoredDocs 
-                };
-            }
-            
-            if (results.Any(r => r == TaskResult.Canceled))
-            {
-                return new RestoreResult 
-                { 
-                    Result = TaskResult.Canceled, 
-                    RestoredChunks = restoredChunks, 
-                    RestoredDocs = restoredDocs 
-                };
-            }
-            
-            // Calculate restored counts
-            foreach (var chunk in mu.MigrationChunks)
-            {
-                if (chunk.IsUploaded == true)
+                        ChunkIndex = index,
+                        MigrationUnit = mu,
+                        Chunk = chunk,
+                        QueuedAt = DateTime.UtcNow
+                    })
+                    .Where(item => item.Chunk.IsUploaded != true && item.Chunk.IsDownloaded == true)
+                    .OrderBy(item => item.ChunkIndex)
+                    .ToList();
+
+                // Check if all chunks are already uploaded (not just that there are no pending chunks)
+                bool allChunksUploaded = mu.MigrationChunks.All(c => c.IsUploaded == true);
+
+                // Check if mu.DumpComplete == true but some chunks have IsDownloaded = false
+                if(mu.DumpComplete && mu.MigrationChunks.Any(c => c.IsDownloaded != true))
                 {
-                    restoredChunks++;
-                    restoredDocs += Math.Max(chunk.RestoredSuccessDocCount, chunk.DocCountInTarget);
+                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} marked as downloaded but has chunks not yet downloaded. Resetting it as not downloaded and requesting controlled pause.", LogType.Warning);
+                    mu.DumpComplete = false;
+
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
+                    MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+          
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.Canceled,
+                        RestoredChunks = restoredChunks,
+                        RestoredDocs = restoredDocs
+                    };
                 }
-            }
-            
-            // Report errors if any
-            if (_chunkErrors.Any())
-            {
-                _log.WriteLine($"Restore completed with {_chunkErrors.Count} chunk errors:", LogType.Warning);
-                foreach (var (index, error) in _chunkErrors.Take(5))
+
+
+                if (!sortedChunks.Any() && allChunksUploaded)
                 {
-                    _log.WriteLine($"  Chunk {index}: {Helper.RedactPii(error.Message)}", LogType.Error);
+                    _log.WriteLine($"{mu.MigrationChunks.Count} chunks in {dbName}.{colName}");
+
+                    // Count already restored chunks
+                    long dumpedDocs = 0;
+                    foreach (var chunk in mu.MigrationChunks.Where(c => c.IsUploaded == true))
+                    {
+                        restoredChunks++;
+                        restoredDocs += chunk.RestoredSuccessDocCount;
+                        dumpedDocs += chunk.DumpQueryDocCount;
+                    }
+
+                    _log.WriteLine($"{restoredChunks} chunks restored for {mu.DatabaseName}.{mu.CollectionName}, Restored documents: {restoredDocs}", LogType.Verbose);
+
+                    if (restoredDocs < dumpedDocs)
+                    {
+                        _log.WriteLine($"Only {restoredDocs} out of {dumpedDocs} documents restored. Resetting chunk states for all chunks for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Warning);
+                        foreach (var chunk in mu.MigrationChunks)
+                        {
+                            chunk.IsUploaded = false;
+                            chunk.RestoredSuccessDocCount = 0;
+                        }
+
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                        MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+
+                        _controlledPauseRequested=true;
+
+                        // Return 0 to trigger retry since we reset the chunks
+                        return new RestoreResult
+                        {
+                            Result = TaskResult.Canceled,
+                            RestoredChunks = 0,
+                            RestoredDocs = 0
+                        };
+                    }
+
+                    // Return the actual count of restored chunks, not 0
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.Success,
+                        RestoredChunks = restoredChunks,
+                        RestoredDocs = restoredDocs
+                    };
                 }
+                
+                // If no chunks are ready for restore yet (still being downloaded), return early
+                if (!sortedChunks.Any())
+                {
+                    _log.WriteLine($"No chunks ready for restore yet for {dbName}.{colName} - waiting for dump to complete", LogType.Debug);
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.Success,
+                        RestoredChunks = 0,
+                        RestoredDocs = 0
+                    };
+                }
+
+                _log.WriteLine($"Starting parallel restore of {sortedChunks.Count} chunks with {_restorePool!.MaxWorkers} workers");
+
+                // Store context for dynamic worker spawning
+                _currentFolder = folder;
+                _currentMigrationUnit = mu;
+                _nextRestoreWorkerId = 1;
+
+                // Clear chunk errors before starting
+                _chunkErrors.Clear();
+
+                // Enqueue restore work to global queue
+                foreach (var chunk in sortedChunks)
+                {
+                    _restoreQueue.Enqueue(chunk);
+                }
+
+                // Start worker tasks
+                Task<TaskResult>[] workerTaskArray;
+                lock (_workerLock)
+                {
+                    _activeRestoreWorkers.Clear();
+                    for (int i = 0; i < Math.Min(_restorePool.MaxWorkers, sortedChunks.Count); i++)
+                    {
+                        int workerId = _nextRestoreWorkerId++;
+                        var workerTask = Task.Run(async () =>
+                        {
+                            return await RestoreWorkerAsync(
+                                workerId,
+                                _restoreQueue,
+                                folder,
+                                targetConnectionString,
+                                dbName,
+                                colName
+                            );
+                        }, _cts.Token);
+
+                        _activeRestoreWorkers.Add(workerTask);
+                    }
+                    workerTaskArray = _activeRestoreWorkers.ToArray();
+                }
+
+                // Wait for all workers to complete
+                var results = await Task.WhenAll(workerTaskArray);
+
+                // Clear context
+                _currentFolder = null;
+
+                // Check for controlled pause - workers have finished, now stop
+                if (_controlledPauseRequested)
+                {
+                    _log.WriteLine("Controlled pause - restore workers completed, stopping processor");
+                    StopProcessing(updateStatus: true);
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.Success,
+                        RestoredChunks = restoredChunks,
+                        RestoredDocs = restoredDocs
+                    };
+                }
+
+                // Check if any worker failed
+                if (results.Any(r => r == TaskResult.FailedAfterRetries || r == TaskResult.Abort))
+                {
+                    _log.WriteLine($"Restore failed for {dbName}.{colName}", LogType.Error);
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.FailedAfterRetries,
+                        RestoredChunks = restoredChunks,
+                        RestoredDocs = restoredDocs
+                    };
+                }
+
+                if (results.Any(r => r == TaskResult.Canceled))
+                {
+                    return new RestoreResult
+                    {
+                        Result = TaskResult.Canceled,
+                        RestoredChunks = restoredChunks,
+                        RestoredDocs = restoredDocs
+                    };
+                }
+
+                // Calculate restored counts
+                foreach (var chunk in mu.MigrationChunks)
+                {
+                    if (chunk.IsUploaded == true)
+                    {
+                        restoredChunks++;
+                        restoredDocs += Math.Max(chunk.RestoredSuccessDocCount, chunk.DocCountInTarget);
+                    }
+                }
+
+                // Report errors if any
+                if (_chunkErrors.Any())
+                {
+                    _log.WriteLine($"Restore completed with {_chunkErrors.Count} chunk errors:", LogType.Warning);
+                    foreach (var (index, error) in _chunkErrors.Take(5))
+                    {
+                        _log.WriteLine($"  Chunk {index}: {Helper.RedactPii(error.Message)}", LogType.Error);
+                    }
+                }
+
+                return new RestoreResult
+                {
+                    Result = TaskResult.Success,
+                    RestoredChunks = restoredChunks,
+                    RestoredDocs = restoredDocs
+                };
             }
-            
-            return new RestoreResult 
-            { 
-                Result = TaskResult.Success, 
-                RestoredChunks = restoredChunks, 
-                RestoredDocs = restoredDocs 
-            };
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Exception in Parallel Restore chunks for {{mu.DatabaseName}}.{{mu.CollectionName}}, Details: {ex}", LogType.Error);
+                return new RestoreResult
+                {
+                    Result = TaskResult.Retry,
+                    RestoredChunks = 0,
+                    RestoredDocs = 0
+                };                
+            }
         }
 
         private async Task<TaskResult> RestoreWorkerAsync(
@@ -813,7 +887,7 @@ namespace OnlineMongoMigrationProcessor
             string dbName,
             string colName)
         {
-            _log.WriteLine($"Restore worker {workerId} started");
+            _log.WriteLine($"Restore worker {workerId} started", LogType.Debug);
             
             while (true)
             {
@@ -1315,17 +1389,7 @@ namespace OnlineMongoMigrationProcessor
                 return TaskResult.Retry;
             }
 
-            _log.WriteLine($"DumpFolder is {_mongoDumpOutputFolder}, working directory  is {Helper.GetWorkingFolder()}",LogType.Verbose);
-            if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
-            {
-                System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);
-            }
-
-
-            // mongodump output folder 
-            string folder = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
             
-
             // when resuming a CurrentlyActiveJob, check if post-upload change stream processing is already in progress
             if (CheckChangeStreamAlreadyProcessingAsync(ctx))
                 return TaskResult.Success;
@@ -1334,9 +1398,40 @@ namespace OnlineMongoMigrationProcessor
             if (!mu.BulkCopyStartedOn.HasValue || mu.BulkCopyStartedOn == DateTime.MinValue)
                 mu.BulkCopyStartedOn = DateTime.UtcNow;
 
-            // DumpAndRestore
+            //check if dump complete but restore not complete  yet all chunks are downloaded
+            if (mu.DumpComplete && !mu.RestoreComplete && mu.MigrationChunks.All(c => c.IsDownloaded == true))
+            {
+                _log.WriteLine($"{dbName}.{colName} dump already complete, but chunks are still being processed. Will reprocess the chunks.", LogType.Warning);
+                mu.DumpComplete = false;
+            }
+
+            //check to make sure chunk files are present, else mark chunk as not downloaded
+            if (mu.DumpComplete && !mu.RestoreComplete)
+            {                 
+                for (int i=0;i< mu.MigrationChunks.Count;i++)
+                {
+                    string chunkFilePath = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"), $"{i}.bson");
+                    if (!File.Exists(chunkFilePath))
+                    {
+                        _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}, marking chunk as not downloaded.", LogType.Warning);
+                        mu.MigrationChunks[i].IsDownloaded = false;
+                    }
+                }
+                mu.DumpComplete = false;
+            }
+
+            // check if  dump complete and process chunks as needed
             if (!mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
+                _log.WriteLine($"DumpFolder is {_mongoDumpOutputFolder}, working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
+                if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
+                {
+                    System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);
+                }
+
+                // mongodump output folder 
+                string folder = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
+
                 Directory.CreateDirectory(folder);
 
                 _log.WriteLine($"{dbName}.{colName} download started");
@@ -1588,6 +1683,7 @@ namespace OnlineMongoMigrationProcessor
 
                         try
                         {
+                            _log.WriteLine($"Restore loop for {dbName}.{colName} sleeping for 10 seconds before next pass...");
                             Task.Delay(10000, _cts.Token).Wait(_cts.Token);
                         }
                         catch (OperationCanceledException)
@@ -1644,7 +1740,9 @@ namespace OnlineMongoMigrationProcessor
             
             restoredChunks = result.RestoredChunks;
             restoredDocs = result.RestoredDocs;
-            
+
+            _log.WriteLine($"Completed ParallelRestoreChunksAsync for {mu.DatabaseName}.{mu.CollectionName} with {_restorePool!.MaxWorkers} worker(s)", LogType.Verbose);
+
             if (result.Result == TaskResult.Abort || result.Result == TaskResult.FailedAfterRetries)
             {
                 _log.WriteLine($"Restore operation for {dbName}.{colName} failed after multiple attempts.", LogType.Error);

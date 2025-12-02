@@ -1010,17 +1010,9 @@ else if (@_showLogBackupFile)
 
     private List<MigrationJob> GetMigrations()
     {
-        var ids = JobManager.GetMigrationIds(out string errorMessage);
+        var ids = JobManager.GetMigrationIds();
         var list = MigrationJobContext.PopulateMigrationJobs(ids);
-        //var list = JobManager.GetMigrations(out string errorMessage);
-        if (!string.IsNullOrEmpty(errorMessage))
-        {
-            _errorMessage = errorMessage;
-        }
-        // Return a snapshot copy to prevent cross-thread access issues
-        // The original list can be modified by background threads (migration workers, timers)
-        // while the UI thread iterates over it, causing casting/enumeration exceptions
-        return list != null ? new List<MigrationJob>(list) : new List<MigrationJob>();
+        return list;
     }
 
     private async Task DownloadLogBackupFile()

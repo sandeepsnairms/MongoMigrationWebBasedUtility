@@ -640,7 +640,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (checkExist)
                             {
                                 if (!CurrentlyActiveJob.CSPostProcessingStarted)
-                                    _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on the target and is ready.");
+                                    _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} already exists on the target and is ready.", LogType.Debug);
                             }
                         }
                         if (_migrationProcessor != null)
@@ -676,7 +676,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 if (HandleControlPause())
                                     return TaskResult.Canceled;
 
-                                _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
+                                if (CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
+                                    _log.WriteLine($"Dump processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
+                                else
+                                    _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
+
                                 // since CS processsing has started, we can break the loop. No need to process all collections
                                 if (Helper.IsOnline(CurrentlyActiveJob) && CurrentlyActiveJob.SyncBackEnabled && (CurrentlyActiveJob.CSPostProcessingStarted && !CurrentlyActiveJob.AggresiveChangeStream) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
                                 {
@@ -838,7 +842,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 CurrentlyActiveJob.MigrationUnitBasics = new List<MigrationUnitBasic>();
             }
 
-            _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate}", LogType.Verbose);
+            _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate.Replace(",",", ")}", LogType.Verbose);
             var unitsToAdd = await Helper.PopulateJobCollectionsAsync(CurrentlyActiveJob, namespacesToMigrate, sourceConnectionString, CurrentlyActiveJob.AllCollectionsUseObjectId);
 
             //find new units to add

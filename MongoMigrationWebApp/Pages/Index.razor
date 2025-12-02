@@ -178,19 +178,9 @@
 
     private List<MigrationJob> GetMigrationsFromManager(bool silent)
     {
-        var ids = JobManager.GetMigrationIds(out string errorMessage);
+        var ids = JobManager.GetMigrationIds();
         var result = MigrationJobContext.PopulateMigrationJobs(ids);
-        if(!string.IsNullOrEmpty(errorMessage) || result==null)
-        {
-            if (!silent)
-            {
-                _message = "Unable to load job details at the moment. Please wait a while and try again.";
-                _messageDialogOpen = true;            
-            }
-            return new List<MigrationJob>();
-        }
         return result;
-
     }
 
 

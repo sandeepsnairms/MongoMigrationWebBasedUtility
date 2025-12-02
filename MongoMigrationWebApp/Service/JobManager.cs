@@ -51,7 +51,7 @@ namespace MongoMigrationWebApp.Service
             try
             {
                 Helper.LogToFile("Resuming migration job after application restart...");
-                var migrationJobIds = GetMigrationIds(out string errorMessage);
+                var migrationJobIds = GetMigrationIds();
 
                 Helper.LogToFile("Step 0");
 
@@ -163,31 +163,8 @@ namespace MongoMigrationWebApp.Service
 
 
 
-        public List<string> GetMigrationIds(out string errorMessage)
-        {
-            errorMessage = string.Empty;
-            //bool isSucess = true;
-            //if (_jobList == null)
-            //{
-            //    _jobList = new JobList();
-            //    isSucess = _jobList.LoadJobList(out errorMessage);          
-            //}
-            //else
-            //{
-            //    errorMessage = string.Empty;
-            //    return _jobList.MigrationJobIds ?? new List<string>();
-            //}
-
-            //// create a empty list if no file found
-            //if (_jobList.MigrationJobIds == null)
-            //{
-            //    _jobList.MigrationJobIds = new List<string>();
-            //    if (isSucess)
-            //        MigrationJobContext.SaveJobList(_jobList);
-            //}
-            //else
-            //    MigrationJobContext.SaveJobList(_jobList);
-        
+        public List<string> GetMigrationIds()
+        {  
 
             return MigrationJobContext.JobList.MigrationJobIds;
         }
