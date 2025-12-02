@@ -296,33 +296,15 @@ namespace OnlineMongoMigrationProcessor
                 {
                     //add to _allCollectionsAsMigrationUnit dynamically
                     _uniqueCollectionKeys.Add(collectionKey);
-                    //if (!_allCollectionsAsMigrationUnit.ContainsKey(collectionKey))
-                    //{
-                    //    migrationUnit = new MigrationUnit(databaseName, collectionName, new List<MigrationChunk>());
-                    //    _allCollectionsAsMigrationUnit.TryAdd(collectionKey, migrationUnit);
-                    //}
-                    //else
-                    //{
-                    //    _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
-                    //}
                 }
                 else
                 {
                     // Check if this change belongs to one of our collections with SourceStatus.OK
-                    //if (!_migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit))
-                    //{
-                    //    return (true, counter); // Skip changes for collections not in our job
-                    //}
                     var id = Helper.GenerateMigrationUnitId(collectionKey);
                     if (!_migrationUnitsToProcess.ContainsKey(id))
                     {
                         return (true, counter); // Skip changes for collections not in our job
                     }
-
-                    //if (!Helper.IsMigrationUnitValid(migrationUnit))
-                    //{
-                    //    return (true, counter); // Skip changes for collections with errors
-                    //}
 
                     migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
                     migrationUnit.ParentJob = CurrentlyActiveJob;
@@ -396,15 +378,6 @@ namespace OnlineMongoMigrationProcessor
 
                 if (totalChanges > 0)
                 {
-
-                    //if (_monitorAllCollections)
-                    //{
-                    //    found = _allCollectionsAsMigrationUnit.TryGetValue(collectionKey, out migrationUnit);
-                    //}
-                    //else
-                    //{
-                    //    found = _migrationUnitsToProcess.TryGetValue(collectionKey, out migrationUnit);
-                    //}
 
                     var muId = Helper.GenerateMigrationUnitId(collectionKey);
                     var mu = _muCache.GetMigrationUnit(muId);

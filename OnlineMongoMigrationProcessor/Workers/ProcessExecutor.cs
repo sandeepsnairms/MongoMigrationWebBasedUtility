@@ -274,7 +274,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                 {
-                    _log.WriteLine($"{processType} Response: {Helper.RedactPii(data)}");
+                    _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(data)}");
                 }
             }
         }

@@ -36,6 +36,17 @@ namespace OnlineMongoMigrationProcessor.Processors
         // Add this property to the MigrationProcessor class
         public string? MongoToolsFolder { get; set; }
 
+        // Expose WaitForResumeTokenTaskDelegate from the change stream processor
+        public Func<string, Task>? WaitForResumeTokenTaskDelegate
+        {
+            get => _changeStreamProcessor?.WaitForResumeTokenTaskDelegate;
+            set
+            {
+                if (_changeStreamProcessor != null)
+                    _changeStreamProcessor.WaitForResumeTokenTaskDelegate = value;
+            }
+        }
+
         protected MigrationProcessor(Log log, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
         {
             _log = log;

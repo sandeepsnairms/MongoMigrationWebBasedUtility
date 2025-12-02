@@ -57,6 +57,9 @@ namespace OnlineMongoMigrationProcessor
         protected static readonly object _processingLock = new object();
         protected static readonly object _cleanupLock = new object();
 
+        // Delegate to wait for resume token setup task for a specific collection
+        public Func<string, Task>? WaitForResumeTokenTaskDelegate { get; set; }
+
         // Global backpressure tracking across ALL collections/processors to prevent OOM
         //protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
@@ -203,7 +206,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing was paused.");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is TimeoutException)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Timeout during change stream processing: {ex}", LogType.Verbose);
+            }
+            catch (Exception ex) 
             {
                 _log.WriteLine($"{_syncBackPrefix}Error during change stream processing: {ex}", LogType.Error);
             }

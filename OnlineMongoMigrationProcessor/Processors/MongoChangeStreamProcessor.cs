@@ -45,6 +45,16 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        public Func<string, Task>? WaitForResumeTokenTaskDelegate
+        {
+            get => _processor?.WaitForResumeTokenTaskDelegate;
+            set
+            {
+                if (_processor != null)
+                    _processor.WaitForResumeTokenTaskDelegate = value;
+            }
+        }
+
         public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient,  ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
         {
             _log = log;

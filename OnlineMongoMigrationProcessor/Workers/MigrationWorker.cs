@@ -45,6 +45,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private bool JobStarting = false;
         
+        // Track resume token setup tasks per collection to enable per-collection waiting
+        private Dictionary<string, Task> _resumeTokenTasksByCollection = new Dictionary<string, Task>();
+        
         public MigrationJob CurrentlyActiveJob
         {
             get => MigrationJobContext.CurrentlyActiveJob;
@@ -180,6 +183,23 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
+        public async Task WaitForResumeTokenTask(string collectionKey)
+        {
+            if (_resumeTokenTasksByCollection.TryGetValue(collectionKey, out var task))
+            {
+                _log.WriteLine($"Waiting for resume token setup task to complete for {collectionKey}", LogType.Verbose);
+                try
+                {
+                    await task;
+                    _log.WriteLine($"Resume token setup task completed for {collectionKey}", LogType.Verbose);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"Resume token setup task failed for {collectionKey}: {ex.Message}", LogType.Error);
+                }
+            }
+        }
+
         private async Task<TaskResult> PrepareForMigration()
         {
             _log.WriteLine("PrepareForMigration started", LogType.Verbose);
@@ -267,6 +287,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                     break;
             }
             _migrationProcessor.ProcessRunning = true;
+            
+            // Set the delegate to wait for resume token tasks before processing collections
+            _migrationProcessor.WaitForResumeTokenTaskDelegate = WaitForResumeTokenTask;
+            _log.WriteLine("WaitForResumeTokenTaskDelegate set for migration processor", LogType.Verbose);
 
             return TaskResult.Success;
         }
@@ -345,7 +369,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success;
         }
 
-        private async Task<TaskResult> SetResumeTokens(MigrationUnit mu, CancellationToken _cts)
+        private async Task<TaskResult> SetResumeTokens(MigrationUnit mu, CancellationToken _cts, List<Task> resumeTokenTasks)
         {
             _log.WriteLine($"SetResumeTokens called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Verbose);
             bool useServerLevel = CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
@@ -359,29 +383,40 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (mu.ResetChangeStream)
             {
                 //if reset CS need to get the latest CS resume token synchronously
-                _log.WriteLine($"Resetting change stream for {mu.DatabaseName}.{mu.CollectionName}.");
-                _log.WriteLine($"Synchronous resume token setup initiated (30s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                _log.WriteLine($"Resetting change stream for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
+                _log.WriteLine($"Synchronous resume token setup initiated (30s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                 await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, CurrentlyActiveJob, mu, 30, _cts);
+                _log.WriteLine($"Synchronous resume token setup completed for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
             }
             else
             {
-                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                 
+                string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
                 try
                 {
-                    _ = Task.Run(async () =>
+                    var task = Task.Run(async () =>
                     {
                         try
                         {
+                            _log.WriteLine($"[ASYNC] Starting SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                             await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, CurrentlyActiveJob, mu, 300, _cts);
+                            _log.WriteLine($"[ASYNC] Completed SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                         }
-                        catch
+                        catch (Exception ex)
                         {
+                            _log.WriteLine($"[ASYNC] ERROR in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
                         }
                     });
+                    
+                    // Store task in dictionary by collection key
+                    _resumeTokenTasksByCollection[collectionKey] = task;
+                    // Also add to list for tracking
+                    resumeTokenTasks.Add(task);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    _log.WriteLine($"ERROR creating async task for SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
                 }
             }
            
@@ -393,6 +428,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _log.WriteLine($"PreparePartitionsAsync started - SkipPartitioning: {skipPartitioning}", LogType.Debug);
             bool checkedCS = false;
             bool serverLevelResumeTokenSet = false; // Track if server-level resume token has been set
+            List<Task> resumeTokenTasks = new List<Task>(); // Track all async resume token setup tasks
             
             if (CurrentlyActiveJob == null || _sourceClient == null)
                 return TaskResult.FailedAfterRetries;
@@ -572,6 +608,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 MigrationJobContext.SaveMigrationUnit(mu,false);
             }
             
+            // Note: No need to wait for all resume token tasks here.
+            // The change stream processor checks mu.ResumeToken for each collection before processing.
+            // This allows collections with ready tokens to start processing immediately.
+            
             return TaskResult.Success;
         }
 
@@ -583,6 +623,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             //var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(_jobList, CurrentlyActiveJob);
            
+            // Track resume token tasks for this migration path as well
+            List<Task> resumeTokenTasks = new List<Task>();
 
             _log.WriteLine($"Processing {CurrentlyActiveJob.MigrationUnitBasics.Count} migration units", LogType.Verbose);
             foreach (var mub in CurrentlyActiveJob.MigrationUnitBasics)
@@ -657,7 +699,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (Helper.IsOnline(CurrentlyActiveJob))
                             {
                                 // For online jobs, ensure change stream resume tokens are set
-                                var setResumeResult = await SetResumeTokens(migrationUnit, ctsToken);
+                                var setResumeResult = await SetResumeTokens(migrationUnit, ctsToken, resumeTokenTasks);
                                 if (setResumeResult != TaskResult.Success)
                                     return setResumeResult;
                             }
@@ -717,6 +759,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 //check back after 10 sec
                 Task.Delay(10000, ctsToken).Wait(ctsToken);
             }           
+
+            // Note: No need to wait for all resume token tasks here.
+            // The change stream processor checks mu.ResumeToken for each collection before processing.
+            // This allows collections with ready tokens to start processing immediately.
 
             _log.WriteLine("MigrateJobCollections completed - all activities finished", LogType.Debug);
             return TaskResult.Success; //all  actiivty completed successfully

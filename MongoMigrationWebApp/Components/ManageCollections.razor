@@ -344,6 +344,15 @@
 
     private void HandleSubmit()
     {
+        errorMessage = string.Empty;
+        
+        // Check if there's text in newCollection that hasn't been added
+        if (!string.IsNullOrWhiteSpace(newCollection))
+        {
+            errorMessage = "You were trying to add collections using the 'Collections To Add' field. Please click 'Add' to add them or clear the text box before submitting.";
+            return;
+        }
+        
         if (OnCollectionsUpdated.HasDelegate)
         {
             OnCollectionsUpdated.InvokeAsync(updatedMigrationUnits);
