@@ -424,9 +424,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument userFilterDoc, bool skipDataTypeFilter = false)
         {
             FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType,userFilterDoc, skipDataTypeFilter);
-
-            // Execute the query and return the count
-            return collection.CountDocuments(filter);           
+                        
+            // Execute the query and return the count with 10 minute timeout
+            return collection.CountDocuments(filter, new CountOptions { MaxTime = TimeSpan.FromMinutes(10) });           
         }
 
         public static long GetDocumentCount(

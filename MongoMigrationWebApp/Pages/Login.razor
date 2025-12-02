@@ -11,11 +11,11 @@
 <div class="login-container">
     <div class="login-box">
         <h2>Login</h2>
-        <p>Please enter the password to access the application.</p>
+
 
         <EditForm Model="@loginModel" OnValidSubmit="@HandleLogin">
             <div class="form-group">
-                <label for="password">Password:</label>
+                <label for="password">Enter your password to continue:</label>
                 <InputText type="password" @bind-Value="loginModel.Password" class="form-control" id="password" />
             </div>
 

@@ -1123,7 +1123,8 @@ namespace OnlineMongoMigrationProcessor
                     dumpFilePath,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterDumpProcess(pid),
-                    onProcessEnded: (pid) => UnregisterDumpProcess(pid)
+                    onProcessEnded: (pid) => UnregisterDumpProcess(pid),
+                    isControlledPauseRequested: () => _controlledPauseRequested
                 ), _cts.Token);
                 task.Wait(_cts.Token);
                 bool result = task.Result;
@@ -1272,7 +1273,8 @@ namespace OnlineMongoMigrationProcessor
                     dumpFilePath,
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterRestoreProcess(pid),
-                    onProcessEnded: (pid) => UnregisterRestoreProcess(pid)
+                    onProcessEnded: (pid) => UnregisterRestoreProcess(pid),
+                    isControlledPauseRequested: () => _controlledPauseRequested
                 ), _cts.Token);
                 task.Wait(_cts.Token);
                 bool result = task.Result;                             
