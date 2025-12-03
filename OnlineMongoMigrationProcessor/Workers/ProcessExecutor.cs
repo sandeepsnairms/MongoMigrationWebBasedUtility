@@ -228,8 +228,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             string percentValue = ExtractPercentage(data);
             string docsProcessed = ExtractDocCount(data);
 
-            _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(data)}, Target Count:{targetCount}, Percent {percentValue}", LogType.Verbose);
-
+          
             double percent = 0;
             int count;
 
@@ -319,19 +318,22 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
 
                 }
-                //else if (processType == "MongoDump")
-                //{
-                //    // Check for final dump counts
-                //    int dumpedCount = ExtractDumpedDocumentCount(data);
-                //    if (dumpedCount > 0)
-                //    {
-                //        chunk.DumpResultDocCount = dumpedCount;
-                //    }
-                //}
-                
-                if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
+
+
+                // Check if this is a restore progress line with byte size (e.g., "sampledb.MultiIdMixed30gb 1.22GB")
+                bool isRestoreProgressWithBytes = processType == "MongoRestore" &&
+                                Regex.IsMatch(data, @"[\d.]+\s*(GB|MB|TB|KB)\s*$", RegexOptions.IgnoreCase);
+
+                if (isRestoreProgressWithBytes)
                 {
-                    _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(data)}");
+                    _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {data}");
+                }
+                else
+                {
+                    if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
+                    {
+                        _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(data)}");
+                    }
                 }
             }
         }
@@ -602,6 +604,31 @@ namespace OnlineMongoMigrationProcessor.Workers
         //        }
         //    }
         //}
+
+        /// <summary>
+        /// Stops and cleans up all percentage calculation timers.
+        /// Call this when stopping a migration job to prevent timers from previous jobs
+        /// from interfering with new jobs for the same collections.
+        /// </summary>
+        public static void StopAllPercentageTimers()
+        {
+            lock (_timerLock)
+            {
+                foreach (var kvp in _percentageTimers)
+                {
+                    try
+                    {
+                        kvp.Value.Stop();
+                        kvp.Value.Dispose();
+                    }
+                    catch
+                    {
+                        // Ignore errors during cleanup
+                    }
+                }
+                _percentageTimers.Clear();
+            }
+        }
     }
 }
 

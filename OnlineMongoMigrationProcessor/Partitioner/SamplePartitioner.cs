@@ -127,7 +127,6 @@ namespace OnlineMongoMigrationProcessor
                     while (newCount > MaxSamples)
                     {
                         count++;
-                        count++;
 
                         // Check for potential overflow before multiplication
                         long multiplier = (long)minDocsPerSegment * count;

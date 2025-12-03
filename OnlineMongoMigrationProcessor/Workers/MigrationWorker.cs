@@ -131,6 +131,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 ControlledPauseRequested = false; // Reset controlled pause flag
                 _muCache = null;
                 
+                // Stop all percentage timers to prevent interference with new jobs
+                ProcessExecutor.StopAllPercentageTimers();
+                
                 // Clear the centralized cache when stopping
                 MigrationJobContext.ClearCurrentlyActiveJobCache();
                 
