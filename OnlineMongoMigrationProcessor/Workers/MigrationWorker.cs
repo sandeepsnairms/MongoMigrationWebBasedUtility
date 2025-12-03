@@ -945,6 +945,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         return;
                     }
                     _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
+                    _log.WriteLine($"Working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
                     _toolsLaunchFolder = $"{_toolsLaunchFolder}\\";
                 }
             }

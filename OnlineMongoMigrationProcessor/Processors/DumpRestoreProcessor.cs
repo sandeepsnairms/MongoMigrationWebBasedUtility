@@ -1425,7 +1425,7 @@ namespace OnlineMongoMigrationProcessor
             // check if  dump complete and process chunks as needed
             if (!mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
-                _log.WriteLine($"DumpFolder is {_mongoDumpOutputFolder}, working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
+                
                 if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
                 {
                     System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);

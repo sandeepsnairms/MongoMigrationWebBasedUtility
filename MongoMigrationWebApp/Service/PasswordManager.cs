@@ -20,10 +20,10 @@ namespace MongoMigrationWebApp.Service
                 Directory.CreateDirectory(workingFolder);
             }
 
-            if (!Helper.IsWindows())
-            {
-                workingFolder = $"{workingFolder}/{MigrationJobContext.AppId}/";
-            }
+            //if (!Helper.IsWindows())
+            //{
+            //    workingFolder = $"{workingFolder}/{MigrationJobContext.AppId}/";
+            //}
 
             _passwordFilePath = Path.Combine(workingFolder, PasswordFileName);
         }

@@ -232,16 +232,7 @@ namespace OnlineMongoMigrationProcessor
         {
             try
             {
-                string path = string.Empty;
-                //if (Helper.IsWindows())
-                //{
-                    path = Path.Combine(Helper.GetWorkingFolder(),striFileName);
-                //}
-                //else
-                //{                    
-                    //path = $"{Helper.GetWorkingFolder()}/{striFileName}";
-                //}
-
+                string path = path = Path.Combine(Helper.GetWorkingFolder(),striFileName);
                 string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
                 string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
                 System.IO.File.AppendAllText(path, logEntry);

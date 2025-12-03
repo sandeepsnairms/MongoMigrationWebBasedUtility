@@ -121,6 +121,18 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 var document = BsonDocument.Parse(jsonContent);
                 document["_id"] = normalizedId;
 
+                // When IsLog is false, extract JobId and add as attribute
+                if (!IsLog)
+                {
+                    // Extract JobId using regex
+                    // Format: "aca_server1.migrationjobs_<jobId>_..."
+                    var jobId = ExtractJobIdFromNormalizedId(normalizedId);
+                    if (!string.IsNullOrEmpty(jobId))
+                    {
+                        document["JobId"] = jobId;
+                    }
+                }
+
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
 
                 if (IsLog)
@@ -135,6 +147,15 @@ namespace OnlineMongoMigrationProcessor.Persistence
                 Helper.LogToFile($"[DocumentDBPersistence] Error upserting document {id}: {ex.Message}", "DocumentDBPersistence.txt");
                 return false;
             }
+        }
+
+        // Helper method to extract JobId from normalizedId
+        private static string ExtractJobIdFromNormalizedId(string normalizedId)
+        {
+            // Example: aca_server1.migrationjobs_4f007573-9b88-472b-9229-3b4657713193_4A47FD3...
+            // Regex: migrationjobs_([0-9a-fA-F\-]+)
+            var match = System.Text.RegularExpressions.Regex.Match(normalizedId, @"migrationjobs_([0-9a-fA-F\-]+)");
+            return match.Success ? match.Groups[1].Value : string.Empty;
         }
 
         /// <summary>
@@ -212,10 +233,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
             try
             {
                 var normalizedId = NormalizeIdForMongo(id);
-                var filter = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(normalizedId)}"));
+                var regexFilter = Builders<BsonDocument>.Filter.Regex("_id", new BsonRegularExpression($"^{System.Text.RegularExpressions.Regex.Escape(normalizedId)}"));
+                var jobIdFilter = Builders<BsonDocument>.Filter.Eq("JobId", id);
+                var filter = Builders<BsonDocument>.Filter.Or(regexFilter, jobIdFilter);
 
                 IMongoCollection<BsonDocument> collectionToUse = isLog ? _logCollection! : _dataCollection!;
-                
                 var result = collectionToUse.DeleteMany(filter);
                 return result.DeletedCount > 0;
             }

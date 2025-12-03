@@ -83,10 +83,18 @@ namespace OnlineMongoMigrationProcessor
                             
                             var collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
                             
-                            // Wait for resume token setup task to complete before processing this collection
+                            // Check if resume token setup is still pending - if so, skip this collection
                             if (WaitForResumeTokenTaskDelegate != null)
                             {
-                                await WaitForResumeTokenTaskDelegate(collectionKey);
+                                // Create a completed task to check if resume token is ready without waiting
+                                var checkTask = WaitForResumeTokenTaskDelegate(collectionKey);
+                                if (!checkTask.IsCompleted)
+                                {
+                                    _log.ShowInMonitor($"{_syncBackPrefix}Skipping collection {collectionKey} - resume token not yet ready");
+                                    continue; // Skip this collection and move to the next one
+                                }
+                                // If task is completed, await it to ensure any exceptions are observed
+                                await checkTask;
                             }
                             
                             collectionProcessed.Add(collectionKey);
