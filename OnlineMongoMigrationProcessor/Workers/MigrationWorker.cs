@@ -768,7 +768,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
 
 
-        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor)
+        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor, bool clearCache=false)
         {
             try
             {
@@ -777,7 +777,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (MigrationJobContext.CurrentlyActiveJob == null)
                     return TaskResult.FailedAfterRetries;
 
-                MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
                 var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
 
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Verbose);
@@ -806,6 +805,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                             _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Verbose);
                             
                         }
+                    }
+
+                    if(clearCache)
+                    {
+                        //clear cache to free memory
+                        MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(migrationUnit.Id);                        
                     }
                 }
                 processor.RunChangeStreamProcessorForAllCollections(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
@@ -836,238 +841,246 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
-            JobStarting=true;
-            if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id))
+            try
             {
+
+                JobStarting = true;
+                if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id))
+                {
+                    StopMigration(); //stop any existing
+                    return;
+                }
+
                 StopMigration(); //stop any existing
-                return;
-            }           
+                ProcessRunning = true;
 
-            StopMigration(); //stop any existing
-            ProcessRunning = true;
-   
-            _activeJobId = MigrationJobContext.CurrentlyActiveJob.Id;
-            Console.WriteLine($"_activeJobId: {_activeJobId}");
-            MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
+                _activeJobId = MigrationJobContext.CurrentlyActiveJob.Id;
+                Console.WriteLine($"_activeJobId: {_activeJobId}");
+                MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
 
-            string logfile = _log.Init(MigrationJobContext.CurrentlyActiveJob.Id);
-            if (logfile != MigrationJobContext.CurrentlyActiveJob.Id)
-            {
-                _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
-            }
-            _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} started on {MigrationJobContext.CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
-
-            _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
-            _log.SetJob(MigrationJobContext.CurrentlyActiveJob); // Set job reference for log level filtering
-
-            _log.WriteLine($"Working folder is {Environment.GetEnvironmentVariable("ResourceDrive")}");
-
-            MigrationJobContext.Log = _log;
-
-            //encoding speacial characters
-            var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
-            var targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
-
-            targetConnectionString = Helper.UpdateAppName(targetConnectionString, $"MSFTMongoWebMigration{Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob)}-" + MigrationJobContext.CurrentlyActiveJob.Id);
-
-            _log.WriteLine($"Connection strings prepared - Job ID: {MigrationJobContext.CurrentlyActiveJob.Id}", LogType.Verbose);
-
-            LoadConfig();
-
-            _migrationCancelled = false;
-            
-            // Reset controlled pause flag when resuming/starting job
-            ControlledPauseRequested = false;
-            
-            _cts = new CancellationTokenSource();                       
-            
-            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-
-
-            if (MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics == null)
-            {
-                MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics = new List<MigrationUnitBasic>();
-            }
-
-            _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate.Replace(",",", ")}", LogType.Verbose);
-            var unitsToAdd = await Helper.PopulateJobCollectionsAsync(MigrationJobContext.CurrentlyActiveJob, namespacesToMigrate, sourceConnectionString, MigrationJobContext.CurrentlyActiveJob.AllCollectionsUseObjectId);
-
-            //find new units to add
-
-            var newUnits = unitsToAdd
-                .Where(mu => !MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics
-                .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
-                .ToList();
-
-            if (newUnits.Count > 0)
-            {
-
-                _log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
-                foreach (var mu in newUnits)
+                string logfile = _log.Init(MigrationJobContext.CurrentlyActiveJob.Id);
+                if (logfile != MigrationJobContext.CurrentlyActiveJob.Id)
                 {
-                   MigrationJobContext.SaveMigrationUnit(mu,false);
-                   Helper.AddMigrationUnit(mu,MigrationJobContext.CurrentlyActiveJob);
+                    _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
                 }
-                // Save job after all units are added to persist changes
-                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-            }
+                _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} started on {MigrationJobContext.CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
 
+                _log.WriteLine($"StartMigrationAsync called - JobType: {jobtype}, TrackChangeStreams: {trackChangeStreams}", LogType.Debug);
+                _log.SetJob(MigrationJobContext.CurrentlyActiveJob); // Set job reference for log level filtering
 
-            if (HandleControlPause())
-                return;
+                _log.WriteLine($"Working folder is {Environment.GetEnvironmentVariable("ResourceDrive")}");
 
+                MigrationJobContext.Log = _log;
 
+                //encoding speacial characters
+                var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
+                var targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
 
-            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
-            {
-                if (!Helper.IsWindows())
-                {
-                    //ACA
-                    _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
-                    if (!await Helper.ValidateMongoToolsAvailableAsync(_log))
-                    {
-                        StopMigration();
-                        return;
-                    }
-                    _toolsLaunchFolder=string.Empty;
-                }
-                else
-                {
-                    //WebApp
-                    _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
-                    _toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(_log, _toolsDestinationFolder, _config!);
-                    if (string.IsNullOrEmpty(_toolsLaunchFolder))
-                    {
-                        _log.WriteLine("MongoDB tools not available - stopping migration", LogType.Error);
-                        StopMigration();
-                        return;
-                    }
-                    _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
-                    _log.WriteLine($"Working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
-                    _toolsLaunchFolder = $"{_toolsLaunchFolder}\\";
-                }
-            }
+                targetConnectionString = Helper.UpdateAppName(targetConnectionString, $"MSFTMongoWebMigration{Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob)}-" + MigrationJobContext.CurrentlyActiveJob.Id);
 
-            if (HandleControlPause())
-                return;
+                _log.WriteLine($"Connection strings prepared - Job ID: {MigrationJobContext.CurrentlyActiveJob.Id}", LogType.Verbose);
 
+                LoadConfig();
 
-            _log.WriteLine("Starting PrepareForMigration with retry logic", LogType.Debug);
-			TaskResult result = await new RetryHelper().ExecuteTask(
-                () => PrepareForMigration(),
-                (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
-                    ex, attemptCount,
-                    "Preperation step", currentBackoff
-                ),
-                _log
-            );
+                _migrationCancelled = false;
 
-            if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
-            {
-                _log.WriteLine($"PrepareForMigration returned {result} - stopping migration", LogType.Debug);
-                StopMigration();
-                return;
-            }
-            JobStarting = false;
-            bool skipPartitioning = false;// in all case it Off for now.
+                // Reset controlled pause flag when resuming/starting job
+                ControlledPauseRequested = false;
 
-            if (HandleControlPause())
-                  return;
-
-
-            _log.WriteLine("Starting PreparePartitionsAsync with retry logic", LogType.Debug);
-            result = await new RetryHelper().ExecuteTask(
-                () => PreparePartitionsAsync(_cts.Token, skipPartitioning),
-                (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
-                    ex, attemptCount,
-                    "Partition step", currentBackoff
-                ),
-                _log
-            );
-
-            if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
-            {
-                _log.WriteLine($"PreparePartitionsAsync returned {result} - stopping migration", LogType.Debug);
-                StopMigration();
-                return;
-            }
-
-            if (HandleControlPause())
-                return;
-
-
-            //if run comparison is set by customer.
-            if (MigrationJobContext.CurrentlyActiveJob.RunComparison)
-            {
-                _log.WriteLine("RunComparison flag is set - starting comparison", LogType.Debug);
-                var compareHelper = new ComparisonHelper();
-                _compare_cts = new CancellationTokenSource();
-                await compareHelper.CompareRandomDocumentsAsync(_log, MigrationJobContext.CurrentlyActiveJob, _config!, _compare_cts.Token);
-                compareHelper = null;
-                MigrationJobContext.CurrentlyActiveJob.RunComparison = false;
+                _cts = new CancellationTokenSource();
 
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
-            }
-
-            if (HandleControlPause())
-                return;
 
 
-            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
-            {
-                _log.WriteLine("Starting online change stream processor in background for Immediate mode", LogType.Debug);
+                if (MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics == null)
+                {
+                    MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics = new List<MigrationUnitBasic>();
+                }
+
+                _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate.Replace(",", ", ")}", LogType.Verbose);
+                var unitsToAdd = await Helper.PopulateJobCollectionsAsync(MigrationJobContext.CurrentlyActiveJob, namespacesToMigrate, sourceConnectionString, MigrationJobContext.CurrentlyActiveJob.AllCollectionsUseObjectId);
+
+                //find new units to add
+
+                var newUnits = unitsToAdd
+                    .Where(mu => !MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics
+                    .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
+                    .ToList();
+
+                if (newUnits.Count > 0)
+                {
+
+                    _log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
+                    foreach (var mu in newUnits)
+                    {
+                        MigrationJobContext.SaveMigrationUnit(mu, false);
+                        Helper.AddMigrationUnit(mu, MigrationJobContext.CurrentlyActiveJob);
+                    }
+                    // Save job after all units are added to persist changes
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                }
+
+
+                if (HandleControlPause())
+                    return;
+
+
+
+                if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
+                {
+                    if (!Helper.IsWindows())
+                    {
+                        //ACA
+                        _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
+                        if (!await Helper.ValidateMongoToolsAvailableAsync(_log))
+                        {
+                            StopMigration();
+                            return;
+                        }
+                        _toolsLaunchFolder = string.Empty;
+                    }
+                    else
+                    {
+                        //WebApp
+                        _log.WriteLine("Ensuring MongoDB tools are available for DumpAndRestore job", LogType.Debug);
+                        _toolsLaunchFolder = await Helper.EnsureMongoToolsAvailableAsync(_log, _toolsDestinationFolder, _config!);
+                        if (string.IsNullOrEmpty(_toolsLaunchFolder))
+                        {
+                            _log.WriteLine("MongoDB tools not available - stopping migration", LogType.Error);
+                            StopMigration();
+                            return;
+                        }
+                        _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
+                        _log.WriteLine($"Working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
+                        _toolsLaunchFolder = $"{_toolsLaunchFolder}\\";
+                    }
+                }
+
+                if (HandleControlPause())
+                    return;
+
+
+                _log.WriteLine("Starting PrepareForMigration with retry logic", LogType.Debug);
+                TaskResult result = await new RetryHelper().ExecuteTask(
+                    () => PrepareForMigration(),
+                    (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
+                        ex, attemptCount,
+                        "Preperation step", currentBackoff
+                    ),
+                    _log
+                );
+
+                if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
+                {
+                    _log.WriteLine($"PrepareForMigration returned {result} - stopping migration", LogType.Debug);
+                    StopMigration();
+                    return;
+                }
+                JobStarting = false;
+
+
+                if (HandleControlPause())
+                    return;
+
+
+                if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
+                {
+                    _log.WriteLine("Starting online change stream processor in background for Immediate mode", LogType.Debug);
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-                //deliberately not awaiting this task, since it is expected to run in parallel with the migration
-                StartOnlineForJobCollections(_cts.Token, _migrationProcessor!);
+                    //deliberately not awaiting this task, since it is expected to run in parallel with the migration
+                    StartOnlineForJobCollections(_cts.Token, _migrationProcessor!, true);
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
-                //clearing cache to free up memory as all collections would have got added to cache.
-                foreach (var migrationUnit in MigrationJobContext.CurrentlyActiveJob.MigrationUnits)
-                {
-                    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(migrationUnit.Id);
+
+                    await Task.Delay(30000);
                 }
 
-                await Task.Delay(30000);
-            }
-
-            if (HandleControlPause())
-                return;
-
-            _log.WriteLine("Starting MigrateJobCollections.", LogType.Debug);
-            result = await new RetryHelper().ExecuteTask(
-                () => MigrateJobCollections(_cts.Token),
-                (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(
-                    ex, attemptCount,
-                    "Migrate collections", currentBackoff
-                ),
-                _log
-            );
-
-            if (HandleControlPause())
-                return;
 
 
-            if (result==TaskResult.Success|| result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
-            {
-                _log.WriteLine($"MigrateJobCollections completed with result: {result}", LogType.Debug);
-                if (result == TaskResult.Success)
+                if (HandleControlPause())
+                    return;
+
+                bool skipPartitioning = false;// in all case it Off for now.
+                _log.WriteLine("Starting PreparePartitionsAsync with retry logic", LogType.Debug);
+                result = await new RetryHelper().ExecuteTask(
+                    () => PreparePartitionsAsync(_cts.Token, skipPartitioning),
+                    (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
+                        ex, attemptCount,
+                        "Partition step", currentBackoff
+                    ),
+                    _log
+                );
+
+                if (result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
                 {
-                    if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+                    _log.WriteLine($"PreparePartitionsAsync returned {result} - stopping migration", LogType.Debug);
+                    StopMigration();
+                    return;
+                }
+
+                if (HandleControlPause())
+                    return;
+
+
+                //if run comparison is set by customer.
+                if (MigrationJobContext.CurrentlyActiveJob.RunComparison)
+                {
+                    _log.WriteLine("RunComparison flag is set - starting comparison", LogType.Debug);
+                    var compareHelper = new ComparisonHelper();
+                    _compare_cts = new CancellationTokenSource();
+                    await compareHelper.CompareRandomDocumentsAsync(_log, MigrationJobContext.CurrentlyActiveJob, _config!, _compare_cts.Token);
+                    compareHelper = null;
+                    MigrationJobContext.CurrentlyActiveJob.RunComparison = false;
+
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                    _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
+                }
+
+
+
+                if (HandleControlPause())
+                    return;
+
+                _log.WriteLine("Starting MigrateJobCollections.", LogType.Debug);
+                result = await new RetryHelper().ExecuteTask(
+                    () => MigrateJobCollections(_cts.Token),
+                    (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(
+                        ex, attemptCount,
+                        "Migrate collections", currentBackoff
+                    ),
+                    _log
+                );
+
+                if (HandleControlPause())
+                    return;
+
+
+                if (result == TaskResult.Success || result == TaskResult.Abort || result == TaskResult.FailedAfterRetries || _migrationCancelled)
+                {
+                    _log.WriteLine($"MigrateJobCollections completed with result: {result}", LogType.Debug);
+                    if (result == TaskResult.Success)
                     {
-                        // Don't mark as completed if this is a controlled pause
-                        if (!ControlledPauseRequested)
+                        if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
                         {
-                            MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
-                            _log.WriteLine("Job marked as completed", LogType.Verbose);
-                        }                    
-                        
-                        MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                    }
-                }
+                            // Don't mark as completed if this is a controlled pause
+                            if (!ControlledPauseRequested)
+                            {
+                                MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
+                                _log.WriteLine("Job marked as completed", LogType.Verbose);
+                            }
 
+                            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                        }
+                    }
+
+                    StopMigration();
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Fatal error in StartMigrationAsync: {ex}", LogType.Error);
                 StopMigration();
-                return;
             }
 
         }
@@ -1102,7 +1115,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack = true;
             MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-            
+            MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
             //_jobList.Save();
 
             if (_migrationProcessor != null)

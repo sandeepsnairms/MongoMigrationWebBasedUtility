@@ -153,7 +153,7 @@
 }
 @if (_collectionDetailsDialogOpen && _selectedMigrationUnit != null)
 {
-    <CollectionDetails MigrationJob="@MigrationJob" MigrationUnit="@JobManager.GetMigrationUnits(MigrationJob).Find(mu => mu.Id == _selectedMigrationUnit.Id)" OnClose="HandleCollectionDetailsClose" />
+    <CollectionDetails MigrationJob="@MigrationJob" MigrationUnit="@MigrationJobContext.GetMigrationUnit(MigrationJob.Id, _selectedMigrationUnit.Id)" OnClose="HandleCollectionDetailsClose" />
 }
 
 @* Collections Loading Spinner *@
@@ -1491,6 +1491,7 @@ else if (@_showLogBackupFile)
             {
                 tobDel.ParentJob = MigrationJob;
                 tobDel.Remove();
+                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(tobDel.Id);//remove from cache
             }
 
 

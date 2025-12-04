@@ -96,7 +96,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (!string.IsNullOrEmpty(args.Data))
                     {
                         outputBuffer.AppendLine(args.Data);
-                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}");
+                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}");
                     }
                 };
 
@@ -104,7 +104,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
-                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}", LogType.Debug);
+                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}", LogType.Debug);
                         errorBuffer.AppendLine(args.Data);
                         ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount);
                     }
@@ -113,7 +113,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _process.Start();
                 int processId = _process.Id;
                 onProcessStarted?.Invoke(processId);
-                _log.WriteLine($"{processType} process started: PID {processId} for chunk {chunkIndex}");
+                _log.WriteLine($"{processType} process started: PID {processId} for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]");
 
                 if (processType == "MongoDump")
                 {

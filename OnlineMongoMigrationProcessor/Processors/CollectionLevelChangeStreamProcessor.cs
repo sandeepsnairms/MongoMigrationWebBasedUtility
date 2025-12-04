@@ -189,8 +189,8 @@ namespace OnlineMongoMigrationProcessor
                     // Increased to 5000ms to address OOM issues and server CPU spikes
                     Thread.Sleep(5000);
                 }
-
-                _log.WriteLine($"{_syncBackPrefix}Completed round {loops + 1} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts.");
+                loops++;
+                _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts.");
 
                 //static collections resume tokens need adjustment
                 AdjustCusrsorTimeForStaticCollections();
