@@ -10,14 +10,15 @@ using System.Text;
 using System.Threading.Tasks;
 using static System.Reflection.Metadata.BlobBuilder;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Context;
 
 namespace OnlineMongoMigrationProcessor.Processors
 {
     internal class SyncBackProcessor : MigrationProcessor
     {
 
-        public SyncBackProcessor(Log log, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
-           : base(log,  muCache, sourceClient, config)
+        public SyncBackProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
+           : base(log, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -55,7 +56,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             _log.WriteLine($"SyncBack to source starting.");
 
-            var units = Helper.GetMigrationUnitsToMigrate(CurrentlyActiveJob);
+            var units = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
             if (units != null)
             {
                 foreach (MigrationUnit mu in units)
@@ -75,7 +76,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
             ProcessRunning = true;
 
-            CurrentlyActiveJob.IsStarted = true;
+             MigrationJobContext.CurrentlyActiveJob.IsStarted = true;
 
             if (string.IsNullOrWhiteSpace(sourceConnectionString)) throw new ArgumentNullException(nameof(sourceConnectionString));
             if (string.IsNullOrWhiteSpace(targetConnectionString)) throw new ArgumentNullException(nameof(targetConnectionString));
@@ -83,7 +84,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
             _changeStreamProcessor = null;
-            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _muCache, _config, true);
+            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, MigrationJobContext.MigrationUnitsCache, _config, true);
 
             _cts=new CancellationTokenSource();
 

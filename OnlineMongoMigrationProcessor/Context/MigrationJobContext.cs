@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Persistence;
 using System;
 using System.Collections.Generic;
@@ -17,6 +18,7 @@ namespace OnlineMongoMigrationProcessor.Context
         private static readonly object _writeJobLock = new object();
         private static readonly object _writeJobListLock = new object();
 
+        public static ActiveMigrationUnitsCache MigrationUnitsCache { get; set; }
 
         // Thread-safe process ID tracking for parallel execution
         public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
@@ -36,7 +38,20 @@ namespace OnlineMongoMigrationProcessor.Context
         
         // Cached instance of the currently active migration job for consistency across the application
         private static MigrationJob? _cachedCurrentlyActiveJob = null;
-        
+
+        private static Log _log;
+        public static Log? Log
+        {
+            get => _log;
+            set
+            {
+                if (_log == null && value != null)
+                {
+                    _log = value;
+                }
+            }
+        }
+  
         /// <summary>
         /// Gets the currently active migration job with intelligent caching
         /// </summary>
@@ -56,6 +71,7 @@ namespace OnlineMongoMigrationProcessor.Context
                 if (!string.IsNullOrEmpty(ActiveMigrationJobId))
                 {
                     _cachedCurrentlyActiveJob = GetMigrationJob(ActiveMigrationJobId);
+                    MigrationUnitsCache=new ActiveMigrationUnitsCache();
                     return _cachedCurrentlyActiveJob;
                 }
                 
@@ -191,6 +207,12 @@ namespace OnlineMongoMigrationProcessor.Context
                 if (mu == null)
                     return false;
 
+                if(_log != null &&( mu.DumpPercent==0 || mu.RestorePercent==0))
+                {
+                   _log.WriteLine($"Saving MU:UnitId={mu.Id}, DumpPercent={mu.DumpPercent}, RestorePercent={mu.RestorePercent}", LogType.Verbose);
+                }
+                
+  
                 if (CurrentlyActiveJob != null)
                     mu.ParentJob = CurrentlyActiveJob;
 
@@ -208,6 +230,11 @@ namespace OnlineMongoMigrationProcessor.Context
                     {
                         CurrentlyActiveJob.Persist();                        
                     }
+                }
+
+                if(MigrationUnitsCache != null)
+                {
+                    MigrationUnitsCache.UpdateMigrationUnit(mu);
                 }
                 return true;
             }

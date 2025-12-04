@@ -26,19 +26,15 @@ namespace OnlineMongoMigrationProcessor
         protected MongoClient _sourceClient;
         protected MongoClient _targetClient;
         //protected JobList? _jobList;
-        //protected MigrationJob? CurrentlyActiveJob;
+        //protected MigrationJob? MigrationJobContext.CurrentlyActiveJob;
 
-        protected ActiveMigrationUnitsCache? _muCache;
         protected MigrationSettings? _config;
         protected bool _syncBack = false;
         protected string _syncBackPrefix = string.Empty;
         protected bool _isCSProcessing = false;
         protected Log _log;
 
-        public MigrationJob CurrentlyActiveJob
-        {
-            get => MigrationJobContext.CurrentlyActiveJob;
-        }
+       
         // Resume token cache - used by collection-level processors to track individual collection resume tokens
         // Server-level processors don't need this as they use MigrationJob properties directly for global tokens
         protected virtual bool UseResumeTokenCache => true; // Override in server-level processor to return false
@@ -61,10 +57,7 @@ namespace OnlineMongoMigrationProcessor
         public Func<string, Task>? WaitForResumeTokenTaskDelegate { get; set; }
 
         // Global backpressure tracking across ALL collections/processors to prevent OOM
-        //protected static int _globalPendingWrites = 0;
         protected static readonly object _pendingWritesLock = new object();
-        //protected const int MAX_GLOBAL_PENDING_WRITES = 20; // Max 20 concurrent bulk writes across ALL collections
-        //protected const int MEMORY_THRESHOLD_PERCENT = 60; // Lowered from 80 to prevent OOM - apply backpressure earlier
 
         // UI update throttling to prevent Blazor rendering OOM (max 1 update per second per collection)
         const int GLOBAL_UI_UPDATE_INTERVAL_MS = 500; // 500ms global throttling across all collections
@@ -94,7 +87,7 @@ namespace OnlineMongoMigrationProcessor
             _log = log;
             _sourceClient = sourceClient;
             _targetClient = targetClient;
-            _muCache= muCache;
+            MigrationJobContext.MigrationUnitsCache= muCache;
             _config = config;
             _syncBack = syncBack;
             if (_syncBack)
@@ -109,23 +102,29 @@ namespace OnlineMongoMigrationProcessor
 
         public bool AddCollectionsToProcess(string migrationUnitId, CancellationTokenSource cts)
         {
-            var mu = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id,migrationUnitId);
+            _log.WriteLine($"{_syncBackPrefix} AddCollectionsToProcess invoked for {migrationUnitId}", LogType.Verbose);
+
+            var mu = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id,migrationUnitId);
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
-            if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && !CurrentlyActiveJob.AggresiveChangeStream))
+
+            _log.WriteLine($"{_syncBackPrefix}Evaluating {key} for change streams processing. IsValid:{Helper.IsMigrationUnitValid(mu)} DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Verbose);
+            if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive))
             {
-                //_log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Error);
+                _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Verbose);
                 return false;
             }
-            if (!_migrationUnitsToProcess.ContainsKey(mu.Id) && !Helper.IsMigrationUnitValid(mu))
+
+            if (!_migrationUnitsToProcess.ContainsKey(mu.Id))
             {
                 _migrationUnitsToProcess.TryAdd(mu.Id, 0);
                 _log.WriteLine($"{_syncBackPrefix}Collection added to change stream queue - Key: {key}, DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Verbose);
-
+                _log.ShowInMonitor($"Change stream processor added {mu.DatabaseName}.{mu.CollectionName} to the monitoring queue.");
                 _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
                 return true;
             }
             else
             {
+                _log.WriteLine($"{_syncBackPrefix} {key} is already added for change stream  processing.", LogType.Verbose);
                 return false;
             }
         }
@@ -141,31 +140,35 @@ namespace OnlineMongoMigrationProcessor
                 _isCSProcessing = true;
             }
 
+            _log.WriteLine($"{_syncBackPrefix} RunCSPostProcessingAsync invoked", LogType.Verbose);
             try
             {
                 cts = new CancellationTokenSource();
                 var token = cts.Token;
 
                 _migrationUnitsToProcess.Clear();
-                foreach (var mu in CurrentlyActiveJob.MigrationUnitBasics)
+                foreach (var mu in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
                 {
-                    var migrationUnit = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, mu.Id);
-                    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || CurrentlyActiveJob.AggresiveChangeStream)))
+                    _log.WriteLine($"{_syncBackPrefix}RunCSPostProcessingAsync looping for {mu.Id} ", LogType.Verbose);
+
+                    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mu.Id);
+                    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive)))
                     {
                         _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
 
                         // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
-                        if (CurrentlyActiveJob.AggresiveChangeStream && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
+                        if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
                         {
                             string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
                             _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Verbose);
-                            
+
                             try
                             {
-                                _ = Task.Run(async () => 
+                                _ = Task.Run(async () =>
                                 {
                                     try
                                     {
+                                        _log.WriteLine($"{_syncBackPrefix}Starting aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
                                         await CleanupAggressiveCSAsync(migrationUnit);
                                     }
                                     catch (Exception ex)
@@ -179,12 +182,16 @@ namespace OnlineMongoMigrationProcessor
                             {
                             }
                         }
+                        else
+                        { 
+                            _log.WriteLine($"{_syncBackPrefix}Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - RestoreComplete: {migrationUnit.RestoreComplete}, AggressiveCacheDeleted: {migrationUnit.AggressiveCacheDeleted}", LogType.Verbose);
+                        }
                     }
                 }
 
-                CurrentlyActiveJob.CSPostProcessingStarted = true;
+                MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted = true;
 
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob); // persist state
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); // persist state
 
 
                 if (_migrationUnitsToProcess.Count == 0)
@@ -195,11 +202,13 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
+                _log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {_migrationUnitsToProcess.Count} collections.",LogType.Verbose);
+
                 await ProcessChangeStreamsAsync(token);
 
                 _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
 
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
 
             }
             catch (OperationCanceledException)
@@ -225,49 +234,12 @@ namespace OnlineMongoMigrationProcessor
 
         protected abstract Task ProcessChangeStreamsAsync(CancellationToken token);
 
-        #region Global Backpressure Methods - Shared by All Processors
-
         
-        //protected bool IsMemoryExhausted(out long currentMB, out long maxMB, out double percent)
-        //{
-        //    GCMemoryInfo gcInfo = GC.GetGCMemoryInfo();
-        //    maxMB = gcInfo.TotalAvailableMemoryBytes / (1024 * 1024);
-        //    currentMB = GC.GetTotalMemory(false) / (1024 * 1024);
-        //    percent = (double)currentMB / maxMB * 100;
-
-        //    return percent >= MEMORY_THRESHOLD_PERCENT;
-        //}
-
-        //protected async Task WaitForMemoryRecoveryAsync(string collectionName)
-        //{
-        //    const int MAX_WAIT_SECONDS = 60;
-        //    DateTime startWait = DateTime.UtcNow;
-            
-        //    while (IsMemoryExhausted(out long currentMB, out long maxMB, out double percent))
-        //    {
-        //        if ((DateTime.UtcNow - startWait).TotalSeconds > MAX_WAIT_SECONDS)
-        //        {
-        //            // Memory stayed high for 60 seconds - STOP JOB
-        //            string errorMsg = $"CRITICAL: Memory exhausted for 60+ seconds ({currentMB}MB / {maxMB}MB = {percent:F1}%). Stopping job to prevent crash.";
-        //            _log.ShowInMonitor($"{_syncBackPrefix}ERROR: {errorMsg}");
-        //            _log.WriteLine($"{_syncBackPrefix}{errorMsg}", LogType.Error);
-        //            throw new OutOfMemoryException(errorMsg);
-        //        }
-                
-        //        _log.WriteLine($"{_syncBackPrefix}Waiting for memory recovery: {currentMB}MB / {maxMB}MB ({percent:F1}%), {GetGlobalPendingWriteCount()} pending writes", LogType.Warning);
-        //        await Task.Delay(5000); // Check every 5 seconds
-        //    }
-            
-        //    _log.WriteLine($"{_syncBackPrefix}Memory recovered for {collectionName}", LogType.Info);
-        //}
-
-        #endregion
-
         protected IMongoCollection<BsonDocument> GetTargetCollection(string databaseName, string collectionName)
         {
             if (!_syncBack)
             {
-                if (!CurrentlyActiveJob.IsSimulatedRun)
+                if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 {
                     var targetDb = _targetClient.GetDatabase(databaseName);
                     return targetDb.GetCollection<BsonDocument>(collectionName);
@@ -421,10 +393,10 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 // Get context for aggressive change stream functionality
-                bool isAggressive = CurrentlyActiveJob.AggresiveChangeStream;
+                bool isAggressive = MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive;
                 bool isAggressiveComplete = mu.AggressiveCacheDeleted;
-                string jobId = CurrentlyActiveJob.Id ?? string.Empty;
-                bool isSimulatedRun = CurrentlyActiveJob.IsSimulatedRun;
+                string jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty;
+                bool isSimulatedRun = MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun;
                 
                 _log.WriteLine($"{_syncBackPrefix}Processing context - Aggressive: {isAggressive}, AggressiveComplete: {isAggressiveComplete}, Simulated: {isSimulatedRun} for {collectionKey}", LogType.Verbose);
 
@@ -490,7 +462,7 @@ namespace OnlineMongoMigrationProcessor
 
         protected async Task CleanupAggressiveCSAsync(MigrationUnit mu)
         {
-            if (!CurrentlyActiveJob.AggresiveChangeStream || !mu.RestoreComplete || CurrentlyActiveJob.IsSimulatedRun)
+            if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || !mu.RestoreComplete || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
             {
                 return;
             }
@@ -512,7 +484,7 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, CurrentlyActiveJob.Id ?? string.Empty);
+                var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty);
 
                 _log.WriteLine($"Processing aggressive change stream cleanup for {mu.DatabaseName}.{mu.CollectionName}");
 
@@ -543,7 +515,7 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"Aggressive change stream cleanup completed for {mu.DatabaseName}.{mu.CollectionName}: No documents to delete");
                 }
                 // Save the updated state
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
             }
             catch (Exception ex)
             {
@@ -559,7 +531,7 @@ namespace OnlineMongoMigrationProcessor
 
         public async Task CleanupAggressiveCSAllCollectionsAsync()
         {
-            if (!CurrentlyActiveJob.AggresiveChangeStream || CurrentlyActiveJob.IsSimulatedRun)
+            if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
             {
                 return;
             }
@@ -582,9 +554,9 @@ namespace OnlineMongoMigrationProcessor
                 int processedCount = 0;
                 int skippedCount = 0;
 
-                foreach (var mub in CurrentlyActiveJob.MigrationUnitBasics)
+                foreach (var mub in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
                 {
-                    var migrationUnit = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, mub.Id);
+                    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mub.Id);
                     if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
                     {
                         if (!migrationUnit.AggressiveCacheDeleted)
@@ -603,7 +575,7 @@ namespace OnlineMongoMigrationProcessor
                 // Final cleanup of any remaining temp collections
                 try
                 {
-                    var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, CurrentlyActiveJob.Id ?? string.Empty);
+                    var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty);
                     await aggressiveHelper.CleanupTempDatabaseAsync();
                 }
                 catch (Exception ex)

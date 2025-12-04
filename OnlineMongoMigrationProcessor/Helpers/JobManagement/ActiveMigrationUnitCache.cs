@@ -9,12 +9,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     public class ActiveMigrationUnitsCache
     {
-        public MigrationJob CurrentlyActiveJob
-        {
-            get => MigrationJobContext.CurrentlyActiveJob;
-        }
-
-
+       
         private List<MigrationUnit> _migrationUnits;
         public ActiveMigrationUnitsCache()
         {
@@ -31,7 +26,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
             if (mu == null)
             {
-                mu = MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, migrationUnitId);
+                mu = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, migrationUnitId);
 
                 if (mu != null)
                     _migrationUnits.Add(mu);
@@ -40,6 +35,17 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             return mu;
         }
 
+
+        public  bool UpdateMigrationUnit(MigrationUnit migrationUnit)
+        {
+            var index = _migrationUnits.FindIndex(mu => mu.Id == migrationUnit.Id);
+            if (index != -1)
+            {
+                _migrationUnits[index] = migrationUnit;
+                return true;
+            }
+            return false;
+        }
 
         public void RemoveMigrationUnit(string migrationUnitId)
         {

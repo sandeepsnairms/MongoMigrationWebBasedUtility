@@ -98,20 +98,20 @@ namespace OnlineMongoMigrationProcessor
             return acquired;
         }
 
-        public DumpRestoreProcessor(Log log,  ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
-            : base(log, muCache, sourceClient, config)
+        public DumpRestoreProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
+            : base(log,  sourceClient, config)
         {
             // Calculate optimal concurrency
             int maxDumpWorkers, maxRestoreWorkers;
-            if (CurrentlyActiveJob.EnableParallelProcessing)
+            if (MigrationJobContext.CurrentlyActiveJob.EnableParallelProcessing)
             {
                 maxDumpWorkers = CalculateOptimalConcurrency(
-                    CurrentlyActiveJob.MaxParallelDumpProcesses,
+                    MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses,
                     isDump: true
                 );
                 
                 maxRestoreWorkers = CalculateOptimalConcurrency(
-                    CurrentlyActiveJob.MaxParallelRestoreProcesses,
+                    MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses,
                     isDump: false
                 );
             }
@@ -125,18 +125,18 @@ namespace OnlineMongoMigrationProcessor
             _dumpPool = new WorkerPoolManager(_log, "Dump", maxDumpWorkers);
             _restorePool = new WorkerPoolManager(_log, "Restore", maxRestoreWorkers);
             
-            // Store initial values in CurrentlyActiveJob for UI monitoring
-            CurrentlyActiveJob.CurrentDumpWorkers = maxDumpWorkers;
-            CurrentlyActiveJob.CurrentRestoreWorkers = maxRestoreWorkers;
+            // Store initial values in MigrationJobContext.CurrentlyActiveJob for UI monitoring
+            MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = maxDumpWorkers;
+            MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = maxRestoreWorkers;
             
             
-            if (!CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
+            if (!MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
             {
-                CurrentlyActiveJob.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
+                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
             }
             else
             {
-                CurrentlyActiveJob.CurrentInsertionWorkers = CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
+                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
             }
             
             _log.WriteLine($"Parallel processing: Dump workers={maxDumpWorkers}, Restore workers={maxRestoreWorkers}");
@@ -154,8 +154,8 @@ namespace OnlineMongoMigrationProcessor
             
             if (difference == 0) return;
             
-            CurrentlyActiveJob.CurrentDumpWorkers = newCount;
-            CurrentlyActiveJob.MaxParallelDumpProcesses = newCount; // Update config too
+            MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = newCount;
+            MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses = newCount; // Update config too
             
             // Spawn new worker tasks if capacity increased and processing is active
             if (difference > 0 && _currentCollection != null && !_dumpQueue.IsEmpty)
@@ -173,8 +173,8 @@ namespace OnlineMongoMigrationProcessor
                                 workerId,
                                 _currentCollection!,
                                 _currentFolder!,
-                                MigrationJobContext.SourceConnectionString[CurrentlyActiveJob.Id],
-                                MigrationJobContext.TargetConnectionString[CurrentlyActiveJob.Id],
+                                MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
+                                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
                                 _currentMigrationUnit!.DatabaseName,
                                 _currentMigrationUnit!.CollectionName
                             );
@@ -184,7 +184,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -198,9 +198,9 @@ namespace OnlineMongoMigrationProcessor
             int difference = _restorePool!.AdjustPoolSize(newCount);
             
             if (difference == 0) return;
-            
-            CurrentlyActiveJob.CurrentRestoreWorkers = newCount;
-            CurrentlyActiveJob.MaxParallelRestoreProcesses = newCount; // Update config too
+
+            MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = newCount;
+            MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses = newCount; // Update config too
             
             // Spawn new worker tasks if capacity increased and processing is active
             if (difference > 0 && _currentFolder != null && !_restoreQueue.IsEmpty)
@@ -218,7 +218,7 @@ namespace OnlineMongoMigrationProcessor
                                 workerId,
                                 _restoreQueue,
                                 _currentFolder!,
-                                MigrationJobContext.TargetConnectionString[CurrentlyActiveJob.Id],
+                                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
                                 _currentMigrationUnit!.DatabaseName,
                                 _currentMigrationUnit!.CollectionName
                             );
@@ -229,7 +229,7 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
 
-            MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -240,13 +240,13 @@ namespace OnlineMongoMigrationProcessor
             if (newCount < 1) newCount = 1;
             if (newCount > 16) newCount = 16; // Safety limit
             
-            CurrentlyActiveJob.CurrentInsertionWorkers = newCount;
-            CurrentlyActiveJob.MaxInsertionWorkersPerCollection = newCount;
+            MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = newCount;
+            MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection = newCount;
             
             _log.WriteLine($"Set insertion workers per collection to {newCount}. Will apply to new restore operations.");
             
             
-            MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         private int CalculateOptimalConcurrency(int? configOverride, bool isDump)
@@ -341,7 +341,7 @@ namespace OnlineMongoMigrationProcessor
             if ((DateTime.UtcNow - _lastSave).TotalSeconds > SAVE_DEBOUNCE_SECONDS)
             {
                 //_jobList.Save();
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 _lastSave = DateTime.UtcNow;
             }
         }
@@ -398,7 +398,7 @@ namespace OnlineMongoMigrationProcessor
                 MigrationJobContext.ActiveRestoreProcessIds.Clear();
 
                 //_jobList.Save();
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 _log.WriteLine("All active processes terminated");
             }
         }
@@ -688,7 +688,6 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpComplete = false;
 
                     MigrationJobContext.SaveMigrationUnit(mu, true);
-                    MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
           
                     return new RestoreResult
                     {
@@ -724,7 +723,7 @@ namespace OnlineMongoMigrationProcessor
                         }
 
                         MigrationJobContext.SaveMigrationUnit(mu, true);
-                        MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+
 
                         _controlledPauseRequested=true;
 
@@ -1109,7 +1108,7 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log,_muCache);
+                var processExecutor = new ProcessExecutor(_log);
 
                 var task = Task.Run(() => processExecutor.Execute(
                     mu, 
@@ -1182,7 +1181,7 @@ namespace OnlineMongoMigrationProcessor
             _cts.Token.ThrowIfCancellationRequested();
 
             // Handle simulation mode - simulate successful restore immediately
-            if (CurrentlyActiveJob.IsSimulatedRun)
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
             {
                 // Simulate successful restore
                 mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = mu.MigrationChunks[chunkIndex].DumpQueryDocCount;
@@ -1195,7 +1194,7 @@ namespace OnlineMongoMigrationProcessor
                 
                 _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
 
-                MigrationJobContext.SaveMigrationUnit(mu,false);
+                MigrationJobContext.SaveMigrationUnit(mu,true);
 
                 // Small delay to simulate processing time (50ms per chunk)
                 try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
@@ -1207,10 +1206,10 @@ namespace OnlineMongoMigrationProcessor
             string args = $" --uri=\"{targetConnectionString}\" --gzip --archive";// {Path.Combine(folder, $"{chunkIndex}.bson")}";
 
             // If first mu, drop collection, else append. Also No drop in AppendMode
-            if (chunkIndex == 0 && !CurrentlyActiveJob.AppendMode)
+            if (chunkIndex == 0 && !MigrationJobContext.CurrentlyActiveJob.AppendMode)
             {
                 args = $"{args} --drop";
-                if (CurrentlyActiveJob.SkipIndexes)
+                if (MigrationJobContext.CurrentlyActiveJob.SkipIndexes)
                 {
                     args = $"{args} --noIndexRestore"; // No index to create for all chunks.
                 }
@@ -1227,15 +1226,15 @@ namespace OnlineMongoMigrationProcessor
             // Determine insertion workers based on configuration or auto-calculate
             int insertionWorkers = 1; // Default
             
-            if (CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
+            if (MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
             {
                 // Use configured value
-                insertionWorkers = CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
+                insertionWorkers = MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
             }
             else
             {
                 // Use the calculated default from constructor
-                insertionWorkers = CurrentlyActiveJob.CurrentInsertionWorkers;
+                insertionWorkers = MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers;
             }
             
             _log.WriteLine($"Restore will use {insertionWorkers} insertion worker(s) for {dbName}.{colName}[{chunkIndex}] ({docCount} docs)");
@@ -1248,15 +1247,15 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log,_muCache);
+                var processExecutor = new ProcessExecutor(_log);
                 var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
 
                 if (!File.Exists(dumpFilePath)) //data integrity check,force controlled pause if dump file missing
                 {
                     _log.WriteLine($"Restore file for {dbName}.{colName}[{chunkIndex}] not found at {dumpFilePath}, Controlled pause requested.", LogType.Error);
                     mu.DumpComplete = false;
-                    MigrationJobContext.SaveMigrationUnit(mu, false);
-                    MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
+
                     _controlledPauseRequested = true;
                     return Task.FromResult(TaskResult.Canceled);
                 }
@@ -1285,7 +1284,7 @@ namespace OnlineMongoMigrationProcessor
 
                     if (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount > 0)
                     {
-                        if (_targetClient == null && !CurrentlyActiveJob.IsSimulatedRun)
+                        if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                             _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
                         try
@@ -1375,8 +1374,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 _controlledPauseRequested = false;
                 ProcessRunning = true;
-                mu = _muCache.GetMigrationUnit(migrationUnitId);
-                mu.ParentJob = CurrentlyActiveJob;
+                mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
+                mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
                 // Initialize processor context (parity with CopyProcessor)
                 ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
@@ -1400,16 +1399,19 @@ namespace OnlineMongoMigrationProcessor
             if (!mu.BulkCopyStartedOn.HasValue || mu.BulkCopyStartedOn == DateTime.MinValue)
                 mu.BulkCopyStartedOn = DateTime.UtcNow;
 
+            bool isDirty = false;
             //check if dump complete but restore not complete  yet all chunks are downloaded
             if (mu.DumpComplete && !mu.RestoreComplete && mu.MigrationChunks.All(c => c.IsDownloaded == true))
             {
                 _log.WriteLine($"{dbName}.{colName} dump already complete, but chunks are still being processed. Will reprocess the chunks.", LogType.Warning);
                 mu.DumpComplete = false;
+                isDirty = true;
             }
 
             //check to make sure chunk files are present, else mark chunk as not downloaded
             if (mu.DumpComplete && !mu.RestoreComplete)
-            {                 
+            {
+                
                 for (int i=0;i< mu.MigrationChunks.Count;i++)
                 {
                     string chunkFilePath = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"), $"{i}.bson");
@@ -1417,9 +1419,16 @@ namespace OnlineMongoMigrationProcessor
                     {
                         _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}, marking chunk as not downloaded.", LogType.Warning);
                         mu.MigrationChunks[i].IsDownloaded = false;
+                        mu.DumpComplete = false;
+                        isDirty = true;
                     }
-                }
-                mu.DumpComplete = false;
+                }              
+                
+            }
+
+            if (isDirty)
+            {
+                MigrationJobContext.SaveMigrationUnit(mu, true);
             }
 
             // check if  dump complete and process chunks as needed
@@ -1493,8 +1502,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.DumpGap = Helper.GetMigrationUnitDocCount(mu) - downloadCount;
                     mu.DumpPercent = 100;
                     mu.DumpComplete = true;
-                                        
-                    MigrationJobContext.SaveMigrationUnit(mu,true);
+
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
 
                     // BulkCopyEndedOn will be set after restore completes, not here
 
@@ -1542,27 +1551,32 @@ namespace OnlineMongoMigrationProcessor
             }
 
             ProcessRunning=true;
-            var mu = _muCache.GetMigrationUnit(migrationUnitId);
-            mu.ParentJob = CurrentlyActiveJob;
+            var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
+            mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
             string dbName = mu.DatabaseName;
             string colName = mu.CollectionName;
-            string jobId = CurrentlyActiveJob.Id ?? string.Empty;
+            string jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty;
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
             string folder = GetDumpFolder(jobId, dbName, colName);
 
-            _log.WriteLine($"Processing {dbName}.{colName} from upload queue");
+            _log.WriteLine($"Processing {key} from upload queue");
  
             try
             {
                 ProcessRestoreLoop(mu, folder, targetConnectionString, dbName, colName);
 
-                if ((mu.RestoreComplete && mu.DumpComplete) || (mu.DumpComplete && CurrentlyActiveJob.IsSimulatedRun))
+                _log.WriteLine($"ProcessRestoreLoop exited for {key}", LogType.Verbose);
+
+                if ((mu.RestoreComplete && mu.DumpComplete) || (mu.DumpComplete && MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun))
                 {
+                    _log.WriteLine($"FinalizeUpload invoked for {key}", LogType.Verbose);
+
                     FinalizeUpload(mu.Id, key, folder, targetConnectionString, jobId);
                 }
             }
             finally
             {
+                _log.WriteLine($"Release Upload lock for {key}", LogType.Verbose);
                 // Always release the upload lock if we acquired it
                 try { _uploadLock.Release(); } catch { }
             }
@@ -1577,7 +1591,7 @@ namespace OnlineMongoMigrationProcessor
         private void ProcessRestoreLoop(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
         {
             // Handle simulation mode - use parallel restore infrastructure for consistency
-            if (CurrentlyActiveJob.IsSimulatedRun && !mu.RestoreComplete && mu.DumpComplete)
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && !mu.RestoreComplete && mu.DumpComplete)
             {
                 _log.WriteLine($"Simulation mode: Simulating parallel restore for {dbName}.{colName} with {_restorePool!.MaxWorkers} workers");
                 
@@ -1620,7 +1634,8 @@ namespace OnlineMongoMigrationProcessor
 
 
                 MigrationJobContext.SaveMigrationUnit(mu,true);
-                _muCache.RemoveMigrationUnit(mu.Id);
+
+                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
                 _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
                 return;
             }
@@ -1630,8 +1645,7 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
                 mu.DumpComplete = false;
                 MigrationJobContext.SaveMigrationUnit(mu, true);
-                _muCache.RemoveMigrationUnit(mu.Id);
-                MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob); // Persist state
+                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
 
                 _controlledPauseRequested = true;
                 _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}. Controlled pause requested. Please resume job.",LogType.Error);
@@ -1672,8 +1686,8 @@ namespace OnlineMongoMigrationProcessor
                         }
 
                         MigrationJobContext.SaveMigrationUnit(mu,true);
-                        _muCache.RemoveMigrationUnit(mu.Id);
-                        MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob); // Persist state
+                        MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
+
                     }
                     else
                     {
@@ -1712,8 +1726,8 @@ namespace OnlineMongoMigrationProcessor
 
         private bool ShouldContinueUploadLoop(MigrationUnit mu, string folder)
         { 
-            _log.WriteLine($"Checking if restore should continue for {mu.DatabaseName}.{mu.CollectionName}: RestoreComplete={mu.RestoreComplete}, DumpFolderExists={Directory.Exists(folder)}, CancellationRequested={_cts.Token.IsCancellationRequested}, IsSimulatedRun={CurrentlyActiveJob.IsSimulatedRun}", LogType.Verbose);
-            return !mu.RestoreComplete && Directory.Exists(folder) && !_cts.Token.IsCancellationRequested && !CurrentlyActiveJob.IsSimulatedRun;
+            _log.WriteLine($"Checking if restore should continue for {mu.DatabaseName}.{mu.CollectionName}: RestoreComplete={mu.RestoreComplete}, DumpFolderExists={Directory.Exists(folder)}, CancellationRequested={_cts.Token.IsCancellationRequested}, IsSimulatedRun={MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun}", LogType.Verbose);
+            return !mu.RestoreComplete && Directory.Exists(folder) && !_cts.Token.IsCancellationRequested && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun;
         }
 
         // Performs a single pass over all chunks, restoring any downloaded-but-not-uploaded ones
@@ -1757,6 +1771,7 @@ namespace OnlineMongoMigrationProcessor
         private void FinalizeUpload(string migrationunitId, string key, string folder, string targetConnectionString, string jobId)
         {
             
+            _log.WriteLine($"Folder cleanup for {key} started", LogType.Verbose);
 
             // Best-effort cleanup of local dump folder
             try
@@ -1769,8 +1784,12 @@ namespace OnlineMongoMigrationProcessor
             if (_controlledPauseRequested)
                 return;
 
+            _log.WriteLine($"AddCollectionToChangeStreamQueue for {key} invoked", LogType.Verbose);
+
             // Start change stream immediately if configured
             AddCollectionToChangeStreamQueue(migrationunitId, targetConnectionString);
+
+            _log.WriteLine($"Removing {key} from _migrationUnitsPendingUpload queue", LogType.Verbose);
 
             // Remove from upload queue
             _migrationUnitsPendingUpload.Remove(migrationunitId);
@@ -1781,29 +1800,33 @@ namespace OnlineMongoMigrationProcessor
                 if (_controlledPauseRequested)
                     return;
 
+                _log.WriteLine($"Upload invoked for {_migrationUnitsPendingUpload[0]}.", LogType.Verbose);
+
                 Upload(_migrationUnitsPendingUpload[0], targetConnectionString, true);
                 return;
             }
 
-            
+            _log.WriteLine($"No uploads are pending.", LogType.Verbose);
 
             // Handle offline completion and post-upload CS logic
             if (!_cts.Token.IsCancellationRequested)
             {                
-                if (!Helper.IsOnline(CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
+                if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
                 {
                     // Don't mark as completed if this is a controlled pause
                     if (!_controlledPauseRequested)
                     {
-                        _log.WriteLine($"Job {CurrentlyActiveJob.Id} Completed");
-                        CurrentlyActiveJob.IsCompleted = true;
-                        MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+                        _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} Completed");
+                        MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
+                        MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                     }                        
                         
                     StopProcessing();
                 }
                 else
                 {
+                    _log.WriteLine($"Invoke RunChangeStreamProcessorForAllCollections.", LogType.Verbose);
+
                     RunChangeStreamProcessorForAllCollections(targetConnectionString);
                 }                
             }

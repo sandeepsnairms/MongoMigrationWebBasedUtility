@@ -109,7 +109,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 // Filter based on minimum log level - only log if the message type is at or below the minimum level
                 // Lower numeric values = more severe (Error=0, Info=1, Debug=2, Verbose=3)
-                if (_currentId==string.Empty ||( CurrentlyActiveJob != null && logType > CurrentlyActiveJob.MinimumLogLevel))
+                if (_currentId==string.Empty ||( CurrentlyActiveJob != null && logType > CurrentlyActiveJob.LogLevel))
                 {
                     return; // Skip this log entry
                 }

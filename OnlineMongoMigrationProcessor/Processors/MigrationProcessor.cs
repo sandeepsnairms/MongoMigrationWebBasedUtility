@@ -11,15 +11,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 {
     public abstract class MigrationProcessor
     {
-        //protected JobList _jobList;
-        //protected MigrationJob CurrentlyActiveJob;
-
-        public MigrationJob CurrentlyActiveJob
-        {
-            get => MigrationJobContext.CurrentlyActiveJob;
-        }
-        // Fix: Make _sourceClient, _sourceCollection, _targetCollection fields and MongoToolsFolder property nullable to resolve CS8618
-
+     
         protected MongoClient? _sourceClient;
         protected MongoClient? _targetClient;
         protected IMongoCollection<BsonDocument>? _sourceCollection;
@@ -29,7 +21,6 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
         protected bool _postUploadCSProcessing = false;
         protected bool _controlledPauseRequested = false;
-        protected ActiveMigrationUnitsCache _muCache;
         protected Log _log;
 
         public bool ProcessRunning { get; set; }
@@ -47,10 +38,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
         }
 
-        protected MigrationProcessor(Log log, ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
+        protected MigrationProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
         {
             _log = log;
-            _muCache = muCache;
             _sourceClient = sourceClient;
             _targetClient = null;
             _config = config;
@@ -60,12 +50,12 @@ namespace OnlineMongoMigrationProcessor.Processors
         public void StopProcessing(bool updateStatus = true)
         {
 
-            if (CurrentlyActiveJob != null)
+            if (MigrationJobContext.CurrentlyActiveJob != null)
             {
-                CurrentlyActiveJob.IsStarted = false;
+                MigrationJobContext.CurrentlyActiveJob.IsStarted = false;
             }
 
-            MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
 
             if (updateStatus)
                 ProcessRunning = false;
@@ -98,7 +88,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 Item = mu,
                 SourceConnectionString = sourceConnectionString,
                 TargetConnectionString = targetConnectionString,
-                JobId = CurrentlyActiveJob?.Id ?? string.Empty,
+                JobId = MigrationJobContext.CurrentlyActiveJob?.Id ?? string.Empty,
                 DatabaseName = databaseName,
                 CollectionName = collectionName,
                 Database = database!,
@@ -112,24 +102,24 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         protected bool CheckChangeStreamAlreadyProcessingAsync(ProcessorContext ctx)
         {
-            if(CurrentlyActiveJob.AggresiveChangeStream)
+            if(MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive)
                 return false; // Skip processing if aggressive change stream resume is enabled
 
 
-            if (_postUploadCSProcessing && Helper.IsOnline(CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
+            if (_postUploadCSProcessing && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
                 return true; // Skip processing if post-upload CS processing is already in progress
 
-            if (Helper.IsOnline(CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(CurrentlyActiveJob) && !_postUploadCSProcessing)
+            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) && !_postUploadCSProcessing)
             {
                 _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
-                if (_targetClient == null && !CurrentlyActiveJob.IsSimulatedRun)
+                if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                     _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
                 // Ensure _sourceClient is not null before using it
                 if (_changeStreamProcessor == null && _sourceClient != null)
 #pragma warning disable CS8604 // Possible null reference argument.
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, _muCache, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, MigrationJobContext.MigrationUnitsCache, _config);
 #pragma warning restore CS8604 // Possible null reference argument.
 
                 if (_changeStreamProcessor != null)
@@ -145,15 +135,17 @@ namespace OnlineMongoMigrationProcessor.Processors
         public void AddCollectionToChangeStreamQueue(string migrationUnitId, string targetConnectionString)
         {
 
-            if (Helper.IsOnline(CurrentlyActiveJob) && !_cts.Token.IsCancellationRequested && !CurrentlyActiveJob.CSStartsAfterAllUploads )
+            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && !_cts.Token.IsCancellationRequested && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate )
             {
                 if (_targetClient == null)
                     _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
                 // Ensure _sourceClient is not null before using it
                 if (_changeStreamProcessor == null && _sourceClient != null)
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _muCache, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, MigrationJobContext.MigrationUnitsCache, _config);
 
+
+                _log.WriteLine($"Adding MU:{migrationUnitId} to Change Stream processing queue", LogType.Verbose);
                 _changeStreamProcessor?.AddCollectionsToProcess(migrationUnitId, _cts);
             }
         }
@@ -161,10 +153,13 @@ namespace OnlineMongoMigrationProcessor.Processors
         public void RunChangeStreamProcessorForAllCollections(string targetConnectionString)
         {
 
-            if (Helper.IsOnline(CurrentlyActiveJob))
+            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
             {
-                if(CurrentlyActiveJob.CSStartsAfterAllUploads && (Helper.IsOfflineJobCompleted(CurrentlyActiveJob) || CurrentlyActiveJob.AggresiveChangeStream) && !_postUploadCSProcessing && !CurrentlyActiveJob.IsSimulatedRun)
+                _log.WriteLine($"Checking ChangeStreamMode:{MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode}, _postUploadCSProcessing:{_postUploadCSProcessing}, Offline Completed:{Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob)}", LogType.Verbose);
+                if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Delayed && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) && !_postUploadCSProcessing && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 {
+                    _log.WriteLine("Running Change Stream Processor for all collections.", LogType.Verbose);
+
                     _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                     if (_targetClient == null)
@@ -172,66 +167,85 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     // Ensure _sourceClient is not null before using it
                     if (_changeStreamProcessor == null && _sourceClient != null)
-                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, _muCache, _config);
+                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, MigrationJobContext.MigrationUnitsCache, _config);
 
                     var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
                 }
-                if (CurrentlyActiveJob.AggresiveChangeStream && (Helper.IsOfflineJobCompleted(CurrentlyActiveJob) || CurrentlyActiveJob.IsSimulatedRun))
+                else
                 {
+                       _log.WriteLine("Skipping Change Stream Processor for all collections as conditions not met.", LogType.Verbose);  
+                }
+                
+                if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && (Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun))
+                {
+                    _log.WriteLine("Running aggressive change stream cleanup for all collections.", LogType.Verbose);
                     // Process cleanup for all collection
                     _ = _changeStreamProcessor?.CleanupAggressiveCSAllCollectionsAsync();
                 }
+
             }      
 
         }
 
 
         protected Task PostCopyChangeStreamProcessor(ProcessorContext ctx, string migratioUnitId)
-        {
-            var mu= MigrationJobContext.GetMigrationUnit(CurrentlyActiveJob.Id, migratioUnitId);
+        {          
+
+            var mu= MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, migratioUnitId);
+            if (MigrationJobContext.CurrentlyActiveJob == null || Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+            {
+                _log.WriteLine($"CurrentlyActiveJob is null or Offline for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
+                return Task.CompletedTask;
+            }
+
+            _log.WriteLine($"PostCopyChangeStreamProcessor called for {mu.DatabaseName},{mu.CollectionName}, RestoreComplete:{mu.RestoreComplete} DumpComplete:{mu.DumpComplete} ", LogType.Verbose);
+
             if (mu.RestoreComplete && mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
                 try
-                {
+                {                   
+
                     // For aggressive change stream, process cleanup when collection is complete
-                    if (CurrentlyActiveJob.AggresiveChangeStream && Helper.IsOnline(CurrentlyActiveJob) && mu.RestoreComplete)
+                    if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && mu.RestoreComplete)
                     {
+                        _log.WriteLine($"PostCopyChangeStreamProcessor adding MU:{migratioUnitId} to aggressive CS cleanup queue", LogType.Verbose);
                         AddCollectionToChangeStreamQueue(migratioUnitId, ctx.TargetConnectionString);
                     }
 
-                    if (Helper.IsOnline(CurrentlyActiveJob) && !_cts.Token.IsCancellationRequested && !CurrentlyActiveJob.CSStartsAfterAllUploads && !CurrentlyActiveJob.AggresiveChangeStream)
+                    _log.WriteLine($"PostCopyChangeStreamProcessor checking immediate CS for MU:{migratioUnitId}", LogType.Verbose);
+                    if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && !_cts.Token.IsCancellationRequested && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
                     {
+                        _log.WriteLine($"PostCopyChangeStreamProcessor adding MU:{migratioUnitId} to immediate CS processing queue", LogType.Verbose);
                         AddCollectionToChangeStreamQueue(migratioUnitId, ctx.TargetConnectionString);
                     }
 
                     if (!_cts.Token.IsCancellationRequested)
                     {
-                        //var migrationJob = _jobList.GetMigrationJob(ctx.JobId);
 
                         // Check if the job is completed (all collections processed)
-                        if (CurrentlyActiveJob != null && Helper.IsOfflineJobCompleted(CurrentlyActiveJob))
-                        {
+                        //if (Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
+                        //{
+                            _log.WriteLine("Run RunChangeStreamProcessorForAllCollections", LogType.Verbose);
                             // For aggressive change stream jobs, run final cleanup for all collections
                             RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
 
-                            if (!Helper.IsOnline(CurrentlyActiveJob))
+                            // Don't mark as completed if this is a controlled pause
+                            if (!_controlledPauseRequested)
                             {
-                                // Don't mark as completed if this is a controlled pause
-                                if (!_controlledPauseRequested)
-                                {
-                                    _log.WriteLine($"{CurrentlyActiveJob.Id} completed.");
-                                    CurrentlyActiveJob.IsCompleted = true;
-                                    MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob);
-                                }                                
+                                _log.WriteLine($"{MigrationJobContext.CurrentlyActiveJob.Id} completed.");
+                                MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
+                                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                            }                                
                                 
-                                StopProcessing(true);
-                            }
-                        }
-                        else if (!_postUploadCSProcessing && Helper.IsOnline(CurrentlyActiveJob))
-                        {
-                            // If CSStartsAfterAllUploads is true and the offline job is completed, run post-upload change stream processing
-                            RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
-                        }
+                            StopProcessing(true);
+                            
+                        //}
+                        //else if (!_postUploadCSProcessing)
+                        //{
+                        //    _log.WriteLine("Process delayed change stream for uploaded collections...", LogType.Verbose);
+                        //    // If CSDelayedMode is true and the offline job is completed, run post-upload change stream processing
+                        //    RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
+                        //}
                     }
                 }
                 catch (Exception ex)

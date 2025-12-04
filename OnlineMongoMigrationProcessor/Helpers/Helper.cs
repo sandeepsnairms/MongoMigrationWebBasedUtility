@@ -372,12 +372,7 @@ namespace OnlineMongoMigrationProcessor
             if (job == null || !Helper.IsOnline(job))
                 return "N/A";
 
-            if (job.AggresiveChangeStream)
-                return "Aggressive";
-            else if (job.CSStartsAfterAllUploads)
-                return "Delayed";
-            else
-                return "Immediate";
+            return job.ChangeStreamMode.ToString();
         }
 
        

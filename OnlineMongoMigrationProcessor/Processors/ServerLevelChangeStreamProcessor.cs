@@ -40,11 +40,11 @@ namespace OnlineMongoMigrationProcessor
             long loops = 0;
             bool oplogSuccess = true;
 
-            bool isVCore = (_syncBack ? CurrentlyActiveJob.TargetEndpoint : CurrentlyActiveJob.SourceEndpoint)
+            bool isVCore = (_syncBack ? MigrationJobContext.CurrentlyActiveJob.TargetEndpoint : MigrationJobContext.CurrentlyActiveJob.SourceEndpoint)
                .Contains("mongocluster.cosmos.azure.com", StringComparison.OrdinalIgnoreCase);
 
             // RUOptimizedCopy jobs should not use server-level change streams
-            if (CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
+            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
             {
                 _log.WriteLine($"{_syncBackPrefix}RUOptimizedCopy jobs do not support server-level change streams. This processor should not be used for such jobs.", LogType.Error);
                 return;
@@ -53,7 +53,7 @@ namespace OnlineMongoMigrationProcessor
 
             //temp override to monitor all collections.
             bool found = _migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out var dummyMu);
-            if (_migrationUnitsToProcess.Count == 1 && CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && found && dummyMu != null)
+            if (_migrationUnitsToProcess.Count == 1 && MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && found && dummyMu != null)
             {
                 _monitorAllCollections = true;
                 _log.WriteLine($"{_syncBackPrefix}Special mode: Starting server-level change stream processing for all collections.", LogType.Warning);
@@ -134,7 +134,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if (!_syncBack)
                 {
-                    version = CurrentlyActiveJob.SourceServerVersion;
+                    version = MigrationJobContext.CurrentlyActiveJob.SourceServerVersion;
                 }
                 else
                 {
@@ -143,7 +143,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Handle initial document replay for server-level streams
                 bool initialReplayCompleted = GetInitialDocumentReplayedStatus();
-                if (!initialReplayCompleted && !CurrentlyActiveJob.IsSimulatedRun && !CurrentlyActiveJob.AggresiveChangeStream)
+                if (!initialReplayCompleted && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive)
                 {
                     if (!AutoReplayFirstChangeInResumeToken())
                     {
@@ -158,12 +158,12 @@ namespace OnlineMongoMigrationProcessor
                         return;
                     }
                     SetInitialDocumentReplayedStatus(true);
-                    MigrationJobContext.SaveMigrationJob(CurrentlyActiveJob); ;
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); ;
                 }
 
 
 
-                if (timeStamp > DateTime.MinValue && resumeToken == null && !(CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
+                if (timeStamp > DateTime.MinValue && resumeToken == null && !(MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                 {
                     var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
                     options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
@@ -195,7 +195,7 @@ namespace OnlineMongoMigrationProcessor
                     accumulatedChangesInColl[id] = new AccumulatedChangesTracker(id);
                 }
 
-                if (CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
+                if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
@@ -306,8 +306,8 @@ namespace OnlineMongoMigrationProcessor
                         return (true, counter); // Skip changes for collections not in our job
                     }
 
-                    migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
-                    migrationUnit.ParentJob = CurrentlyActiveJob;
+                    migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
+                    migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                     // Check user filter condition               
                     var userFilterDoc = MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
 
@@ -321,11 +321,11 @@ namespace OnlineMongoMigrationProcessor
                 counter++;
 
                 DateTime timeStamp = DateTime.MinValue;
-                if (!CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.ClusterTime != null)
+                if (!MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.ClusterTime != null)
                 {
                     timeStamp = MongoHelper.BsonTimestampToUtcDateTime(change.ClusterTime);
                 }
-                else if (!CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.WallTime != null)
+                else if (!MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.WallTime != null)
                 {
                     timeStamp = change.WallTime.Value;
                 }
@@ -339,8 +339,8 @@ namespace OnlineMongoMigrationProcessor
                 if (_monitorAllCollections)
                 {
                     //_migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
-                    migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId("DUMMY", "DUMMY"));
-                    migrationUnit.ParentJob = CurrentlyActiveJob;
+                    migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(Helper.GenerateMigrationUnitId("DUMMY", "DUMMY"));
+                    migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                     if (!accumulatedChangesInColl.ContainsKey(collectionKey))
                     {
                         accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker(collectionKey);
@@ -349,7 +349,7 @@ namespace OnlineMongoMigrationProcessor
 
 
                 // Process the change
-                PreProcessChangeEvent(change, targetCollection, collectionKey, accumulatedChangesInColl[collectionKey], CurrentlyActiveJob.IsSimulatedRun, migrationUnit);
+                PreProcessChangeEvent(change, targetCollection, collectionKey, accumulatedChangesInColl[collectionKey], MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun, migrationUnit);
 
                 migrationUnit.CSUpdatesInLastBatch++;
 
@@ -380,8 +380,8 @@ namespace OnlineMongoMigrationProcessor
                 {
 
                     var muId = Helper.GenerateMigrationUnitId(collectionKey);
-                    var mu = _muCache.GetMigrationUnit(muId);
-                    mu.ParentJob = CurrentlyActiveJob;
+                    var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(muId);
+                    mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                     if (mu != null)
                     {
                         var targetCollection = GetTargetCollection(migrationUnit.DatabaseName, migrationUnit.CollectionName);
@@ -390,8 +390,8 @@ namespace OnlineMongoMigrationProcessor
                         {
                             //since we want the chnages to  be reported to this dummy collection.
                             muId = Helper.GenerateMigrationUnitId("DUMMY.DUMMY");
-                            migrationUnit = _muCache.GetMigrationUnit(muId);
-                            migrationUnit.ParentJob = CurrentlyActiveJob;
+                            migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(muId);
+                            migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                         }
 
                         try
@@ -411,12 +411,12 @@ namespace OnlineMongoMigrationProcessor
                                 if (!_syncBack)
                                 {
                                     migrationUnit.CursorUtcTimestamp = docs.LatestTimestamp;
-                                    CurrentlyActiveJob.CursorUtcTimestamp = docs.LatestTimestamp;
+                                    MigrationJobContext.CurrentlyActiveJob.CursorUtcTimestamp = docs.LatestTimestamp;
                                 }
                                 else
                                 {
                                     migrationUnit.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
-                                    CurrentlyActiveJob.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
+                                    MigrationJobContext.CurrentlyActiveJob.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
                                 }
                                 _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write", LogType.Debug);
                             }
@@ -484,7 +484,7 @@ namespace OnlineMongoMigrationProcessor
                 sourceDb = _sourceClient.GetDatabase(databaseName);
                 sourceCollection = sourceDb.GetCollection<BsonDocument>(collectionName);
 
-                if (!CurrentlyActiveJob.IsSimulatedRun)
+                if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 {
                     targetDb = _targetClient.GetDatabase(databaseName);
                     targetCollection = targetDb.GetCollection<BsonDocument>(collectionName);
@@ -508,8 +508,8 @@ namespace OnlineMongoMigrationProcessor
 
             try
             {
-                var migrationUnit = _muCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
-                migrationUnit.ParentJob = CurrentlyActiveJob;
+                var migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(Helper.GenerateMigrationUnitId(databaseName, collectionName));
+                migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                 IncrementEventCounter(migrationUnit, operationType);
 
                 switch (operationType)
@@ -633,24 +633,24 @@ namespace OnlineMongoMigrationProcessor
         private DateTime GetCursorUtcTimestamp()
         {
             if (!_syncBack)
-                return CurrentlyActiveJob.SyncBackCursorUtcTimestamp;
+                return MigrationJobContext.CurrentlyActiveJob.SyncBackCursorUtcTimestamp;
             else
-                return CurrentlyActiveJob.CursorUtcTimestamp;
+                return MigrationJobContext.CurrentlyActiveJob.CursorUtcTimestamp;
         }
 
         private DateTime GetChangeStreamStartedOn()
         {
             if (!_syncBack)
             {
-                if (CurrentlyActiveJob.ChangeStreamStartedOn.HasValue)
-                    return CurrentlyActiveJob.ChangeStreamStartedOn.Value;
+                if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamStartedOn.HasValue)
+                    return MigrationJobContext.CurrentlyActiveJob.ChangeStreamStartedOn.Value;
                 else
                     return DateTime.MinValue;
             }
             else
             {
-                if (CurrentlyActiveJob.SyncBackChangeStreamStartedOn.HasValue)
-                    return CurrentlyActiveJob.SyncBackChangeStreamStartedOn.Value;
+                if (MigrationJobContext.CurrentlyActiveJob.SyncBackChangeStreamStartedOn.HasValue)
+                    return MigrationJobContext.CurrentlyActiveJob.SyncBackChangeStreamStartedOn.Value;
                 else
                     return DateTime.MinValue;
 
@@ -661,11 +661,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                return CurrentlyActiveJob.ResumeToken ?? string.Empty;
+                return MigrationJobContext.CurrentlyActiveJob.ResumeToken ?? string.Empty;
             }
             else
             {
-                return CurrentlyActiveJob.SyncBackResumeToken ?? string.Empty;
+                return MigrationJobContext.CurrentlyActiveJob.SyncBackResumeToken ?? string.Empty;
             }
         }
 
@@ -673,11 +673,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                return CurrentlyActiveJob.InitialDocumenReplayed;
+                return MigrationJobContext.CurrentlyActiveJob.InitialDocumenReplayed;
             }
             else
             {
-                return CurrentlyActiveJob.SyncBackInitialDocumenReplayed;
+                return MigrationJobContext.CurrentlyActiveJob.SyncBackInitialDocumenReplayed;
             }
         }
 
@@ -685,11 +685,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                CurrentlyActiveJob.InitialDocumenReplayed = value;
+                MigrationJobContext.CurrentlyActiveJob.InitialDocumenReplayed = value;
             }
             else
             {
-                CurrentlyActiveJob.SyncBackInitialDocumenReplayed = value;
+                MigrationJobContext.CurrentlyActiveJob.SyncBackInitialDocumenReplayed = value;
             }
         }
 
@@ -697,11 +697,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                return CurrentlyActiveJob.ResumeTokenOperation;
+                return MigrationJobContext.CurrentlyActiveJob.ResumeTokenOperation;
             }
             else
             {
-                return CurrentlyActiveJob.SyncBackResumeTokenOperation;
+                return MigrationJobContext.CurrentlyActiveJob.SyncBackResumeTokenOperation;
             }
         }
 
@@ -709,11 +709,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                return CurrentlyActiveJob.ResumeDocumentId ?? string.Empty;
+                return MigrationJobContext.CurrentlyActiveJob.ResumeDocumentId ?? string.Empty;
             }
             else
             {
-                return CurrentlyActiveJob.SyncBackResumeDocumentId ?? string.Empty;
+                return MigrationJobContext. CurrentlyActiveJob.SyncBackResumeDocumentId ?? string.Empty;
             }
         }
 
@@ -721,11 +721,11 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                return CurrentlyActiveJob.ResumeCollectionKey ?? string.Empty;
+                return MigrationJobContext.CurrentlyActiveJob.ResumeCollectionKey ?? string.Empty;
             }
             else
             {
-                return CurrentlyActiveJob.SyncBackResumeCollectionKey ?? string.Empty;
+                return MigrationJobContext.CurrentlyActiveJob.SyncBackResumeCollectionKey ?? string.Empty;
             }
         }
 
@@ -733,25 +733,25 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!_syncBack)
             {
-                CurrentlyActiveJob.ResumeToken = resumeToken;
-                if (string.IsNullOrEmpty(CurrentlyActiveJob.OriginalResumeToken))
+                MigrationJobContext.CurrentlyActiveJob.ResumeToken = resumeToken;
+                if (string.IsNullOrEmpty(MigrationJobContext.CurrentlyActiveJob.OriginalResumeToken))
                 {
-                    CurrentlyActiveJob.OriginalResumeToken = resumeToken;
+                    MigrationJobContext.CurrentlyActiveJob.OriginalResumeToken = resumeToken;
                 }
-                CurrentlyActiveJob.ResumeTokenOperation = operationType;
-                CurrentlyActiveJob.ResumeDocumentId = documentId;
-                CurrentlyActiveJob.ResumeCollectionKey = collectionKey;
+                MigrationJobContext.CurrentlyActiveJob.ResumeTokenOperation = operationType;
+                MigrationJobContext.CurrentlyActiveJob.ResumeDocumentId = documentId;
+                MigrationJobContext.CurrentlyActiveJob.ResumeCollectionKey = collectionKey;
             }
             else
             {
-                CurrentlyActiveJob.SyncBackResumeToken = resumeToken;
-                if (string.IsNullOrEmpty(CurrentlyActiveJob.SyncBackOriginalResumeToken))
+                MigrationJobContext.CurrentlyActiveJob.SyncBackResumeToken = resumeToken;
+                if (string.IsNullOrEmpty(MigrationJobContext.CurrentlyActiveJob.SyncBackOriginalResumeToken))
                 {
-                    CurrentlyActiveJob.SyncBackOriginalResumeToken = resumeToken;
+                    MigrationJobContext.CurrentlyActiveJob.SyncBackOriginalResumeToken = resumeToken;
                 }
-                CurrentlyActiveJob.SyncBackResumeTokenOperation = operationType;
-                CurrentlyActiveJob.SyncBackResumeDocumentId = documentId;
-                CurrentlyActiveJob.SyncBackResumeCollectionKey = collectionKey;
+                MigrationJobContext.CurrentlyActiveJob.SyncBackResumeTokenOperation = operationType;
+                MigrationJobContext.CurrentlyActiveJob.SyncBackResumeDocumentId = documentId;
+                MigrationJobContext.CurrentlyActiveJob.SyncBackResumeCollectionKey = collectionKey;
             }
         }
 

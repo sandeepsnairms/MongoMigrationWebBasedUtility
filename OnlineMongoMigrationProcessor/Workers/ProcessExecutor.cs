@@ -23,13 +23,12 @@ namespace OnlineMongoMigrationProcessor.Workers
         private static readonly Dictionary<string, System.Timers.Timer> _percentageTimers = new Dictionary<string, System.Timers.Timer>();
         private static readonly object _timerLock = new object();
         private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-        private ActiveMigrationUnitsCache _muCache;
+
         private Func<bool>? _isControlledPauseRequested;
         
-        public ProcessExecutor(Log log, ActiveMigrationUnitsCache muCache)
+        public ProcessExecutor(Log log)
         {
             _log = log;
-            _muCache = muCache;
 		}
 
         /// <summary>
@@ -287,7 +286,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (mu.RestorePercent >= 99.99)
                     {
                         mu.RestoreComplete = true;
-                        _muCache.RemoveMigrationUnit(mu.Id);
+                        MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
                     }
                 }
                 else

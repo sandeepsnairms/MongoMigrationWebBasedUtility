@@ -14,8 +14,8 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-        public CopyProcessor(Log log,ActiveMigrationUnitsCache muCache, MongoClient sourceClient, MigrationSettings config)
-            : base(log,  muCache, sourceClient, config)
+        public CopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
+            : base(log, sourceClient, config)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -55,25 +55,7 @@ namespace OnlineMongoMigrationProcessor
         }
        
 
-        //private void checkCounts(IMongoCollection<BsonDocument> collection, MigrationChunk c, BsonDocument UserFilter)
-        //{
-        //    long docCount = 0;
-        //    foreach (var seg in c.Segments!)
-        //    {
-        //            // Generate query and get document count
-        //            var filter = MongoHelper.GenerateQueryFilter(seg.Gte, seg.Lt, c.DataType, UserFilter, false);
-
-        //            docCount += MongoHelper.GetDocumentCount(collection, filter, new BsonDocument());//filter already has user filter.
-        //    }
-
-        //    Console.WriteLine($"Sum of Count for segments {c.Id} is {docCount}");
-
-        //    var filter2 = MongoHelper.GenerateQueryFilter(c.Gte, c.Lt, c.DataType, UserFilter, false);
-
-        //    var docCount2 = MongoHelper.GetDocumentCount(collection, filter2, new BsonDocument());//filter already has user filter.
-
-        //    Console.WriteLine($"Count for chunk {c.Id} is {docCount2}");
-        //}
+        
         private async Task <TaskResult> ProcessChunkAsync(MigrationUnit mu, int chunkIndex, ProcessorContext ctx, double initialPercent, double contributionFactor)
         {
             long docCount;
@@ -113,12 +95,12 @@ namespace OnlineMongoMigrationProcessor
             //checkCounts(ctx.Collection, mu.MigrationChunks[chunkIndex], MongoHelper.GetFilterDoc(mu.UserFilter));
 
 
-            if (_targetClient == null && !CurrentlyActiveJob.IsSimulatedRun)
+            if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
             var documentCopier = new DocumentCopyWorker();
             documentCopier.Initialize(_log, _targetClient!, ctx.Collection, ctx.DatabaseName, ctx.CollectionName, _config.MongoCopyPageSize);
-            var result = await documentCopier.CopyDocumentsAsync(mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, CurrentlyActiveJob.IsSimulatedRun);
+            var result = await documentCopier.CopyDocumentsAsync(mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun);
 
             if (result == TaskResult.Success)
             {
@@ -148,8 +130,8 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-            var mu=_muCache.GetMigrationUnit(migrationUnitId);
-            mu.ParentJob= CurrentlyActiveJob;
+            var mu=MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
+            mu.ParentJob= MigrationJobContext.CurrentlyActiveJob;
             ProcessRunning = true;
             ProcessorContext ctx;
 
@@ -231,7 +213,7 @@ namespace OnlineMongoMigrationProcessor
 
                     MigrationJobContext.SaveMigrationUnit(mu,true);
 
-                    _muCache.RemoveMigrationUnit(mu.Id);
+                    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
                 }
                 else
                 {

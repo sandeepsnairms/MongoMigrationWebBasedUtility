@@ -71,15 +71,46 @@ namespace OnlineMongoMigrationProcessor
         public bool SyncBackEnabled { get; set; }
         public bool ProcessingSyncBack { get; set; }
         public bool RunComparison { get; set; }
-        public bool AggresiveChangeStream { get; set; }
-        public bool CSStartsAfterAllUploads { get; set; }
+        
+        public ChangeStreamMode ChangeStreamMode { get; set; } = ChangeStreamMode.Immediate;
+        
+        // Legacy properties for backward compatibility - will be removed in future versions
+        // These will only be deserialized if present in JSON, but never serialized
+        [JsonProperty("AggresiveChangeStream", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        private bool? _aggresiveChangeStreamLegacy
+        {
+            get => null; // Never serialize this
+            set
+            {
+                // Handle deserialization of legacy AggresiveChangeStream property
+                if (value.HasValue && value.Value)
+                {
+                    ChangeStreamMode = ChangeStreamMode.Aggressive;
+                }
+            }
+        }
+        
+        [JsonProperty("CSDelayedMode", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        private bool? _csDelayedModeLegacy
+        {
+            get => null; // Never serialize this
+            set
+            {
+                // Handle deserialization of legacy CSDelayedMode property
+                if (value.HasValue && value.Value)
+                {
+                    ChangeStreamMode = ChangeStreamMode.Delayed;
+                }
+            }
+        }
+        
         public bool CSPostProcessingStarted { get; set; }
         public ChangeStreamLevel ChangeStreamLevel { get; set; }
         
         /// <summary>
         /// Minimum log level to write to logs. Default is Info (Error=0, Info=1, Debug=2, Verbose=3)
         /// </summary>
-        public LogType MinimumLogLevel { get; set; } = LogType.Info;
+        public LogType LogLevel { get; set; } = LogType.Info;
         
         /// <summary>
         /// UI auto-refresh enabled state. Default is true. Not persisted - transient UI state only.
