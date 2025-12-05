@@ -8,82 +8,134 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     /// <summary>
     /// Manages a pool of workers with dynamic scaling capabilities.
-    /// Handles semaphore-based concurrency control and worker lifecycle.
+    /// Uses simple counter-based concurrency control for reliability.
     /// </summary>
     internal class WorkerPoolManager
     {
         private readonly Log _log;
         private readonly string _poolName;
+        private readonly object _lock = new object();
         private int _maxWorkers;
-        private SemaphoreSlim? _semaphore;
-        private CancellationTokenSource? _blockerCts;
+        private int _activeWorkers = 0;
         
-        public int MaxWorkers => _maxWorkers;
-        public int CurrentAvailable => _semaphore?.CurrentCount ?? 0;
-        public int CurrentInUse => _maxWorkers - CurrentAvailable;
+        public int MaxWorkers 
+        { 
+            get { lock (_lock) { return _maxWorkers; } }
+        }
+        
+        public int CurrentActive 
+        { 
+            get { lock (_lock) { return _activeWorkers; } }
+        }
+        
+        public int CurrentAvailable 
+        { 
+            get { lock (_lock) { return Math.Max(0, _maxWorkers - _activeWorkers); } }
+        }
+        
+        public int CurrentInUse 
+        { 
+            get { lock (_lock) { return _activeWorkers; } }
+        }
 
         public WorkerPoolManager(Log log, string poolName, int initialMaxWorkers)
         {
             _log = log ?? throw new ArgumentNullException(nameof(log));
             _poolName = poolName ?? throw new ArgumentNullException(nameof(poolName));
             _maxWorkers = Math.Max(1, initialMaxWorkers);
-            _semaphore = new SemaphoreSlim(_maxWorkers, _maxWorkers);
         }
 
         /// <summary>
         /// Adjusts the worker pool size. Returns the difference (positive = increased, negative = decreased).
         /// </summary>
         /// <param name="newCount">New maximum worker count (will be clamped to 1-16)</param>
-        /// <returns>Number of workers added (positive) or slots to block (negative)</returns>
+        /// <returns>Number of workers added (positive) or removed (negative)</returns>
         public int AdjustPoolSize(int newCount)
         {
             // Safety limits
             if (newCount < 1) newCount = 1;
             if (newCount > 16) newCount = 16;
             
-            int oldCount = _maxWorkers;
-            int difference = newCount - oldCount;
-            
-            if (difference == 0) return 0;
-            
-            _maxWorkers = newCount;
-            
-            if (difference > 0)
+            lock (_lock)
             {
-                IncreaseCapacity(oldCount, newCount, difference);
+                int oldCount = _maxWorkers;
+                int difference = newCount - oldCount;
+                
+                if (difference == 0) return 0;
+                
+                _maxWorkers = newCount;
+                
+                string poolType = _poolName.StartsWith("Dump") ? "Dump" : "Restore";
+                
+                if (difference > 0)
+                {
+                    _log.WriteLine($"{poolType} worker pool capacity increased: {oldCount} → {newCount} (currently {_activeWorkers} workers active)", LogType.Debug);
+                }
+                else
+                {
+                    _log.WriteLine($"{poolType} worker pool capacity reduced: {oldCount} → {newCount} (currently {_activeWorkers} workers active, will naturally decrease)", LogType.Debug);
+                }
+                
+                return difference;
             }
-            else
-            {
-                DecreaseCapacity(newCount, difference);
-            }
-            
-            return difference;
         }
 
         /// <summary>
-        /// Acquires a semaphore slot asynchronously.
+        /// Tries to acquire a worker slot. Returns true if successful, false if pool is at capacity.
         /// </summary>
-        public Task WaitAsync(CancellationToken cancellationToken)
+        public bool TryAcquire()
         {
-            return _semaphore!.WaitAsync(cancellationToken);
-        }
-
-        /// <summary>
-        /// Releases a semaphore slot.
-        /// </summary>
-        /// <returns>True if released successfully, false if semaphore was already at max</returns>
-        public bool TryRelease()
-        {
-            try
+            lock (_lock)
             {
-                _semaphore?.Release();
-                return true;
-            }
-            catch (SemaphoreFullException)
-            {
-                _log.WriteLine($"{_poolName} semaphore already at max capacity, skipping release", LogType.Debug);
+                if (_activeWorkers < _maxWorkers)
+                {
+                    _activeWorkers++;
+                    return true;
+                }
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Releases a worker slot.
+        /// </summary>
+        public void Release()
+        {
+            lock (_lock)
+            {
+                if (_activeWorkers > 0)
+                {
+                    _activeWorkers--;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits asynchronously until a worker slot becomes available or cancellation is requested.
+        /// </summary>
+        public async Task WaitAsync(CancellationToken cancellationToken)
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (TryAcquire())
+                {
+                    return;
+                }
+                
+                // Wait a bit before checking again
+                await Task.Delay(50, cancellationToken);
+            }
+            
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        /// <summary>
+        /// Releases a worker slot. For compatibility with existing code.
+        /// </summary>
+        public bool TryRelease()
+        {
+            Release();
+            return true;
         }
 
         /// <summary>
@@ -91,75 +143,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public void Dispose()
         {
-            _blockerCts?.Cancel();
-            _blockerCts?.Dispose();
-            _blockerCts = null;
-            
-            _semaphore?.Dispose();
-            _semaphore = null;
-        }
-
-        private void IncreaseCapacity(int oldCount, int newCount, int difference)
-        {
-            // Cancel any existing blocker task
-            _blockerCts?.Cancel();
-            _blockerCts?.Dispose();
-            _blockerCts = null;
-            
-            // Calculate current usage with OLD max count
-            int currentCount = _semaphore?.CurrentCount ?? 0;
-            int inUse = oldCount - currentCount;
-            
-            // Dispose old semaphore
-            _semaphore?.Dispose();
-            
-            // Create new semaphore with higher max capacity
-            // Available slots = newCount - inUse
-            _semaphore = new SemaphoreSlim(newCount - inUse, newCount);
-            
-            _log.WriteLine($"{_poolName}: Increased from {oldCount} to {newCount} (+{difference}). " +
-                          $"Semaphore: max={newCount}, available={newCount - inUse}, in-use={inUse}");
-        }
-
-        private void DecreaseCapacity(int newCount, int difference)
-        {
-            // Cancel any previous blocker task
-            _blockerCts?.Cancel();
-            _blockerCts?.Dispose();
-            _blockerCts = new CancellationTokenSource();
-            
-            var cts = _blockerCts;
-            int slotsToBlock = Math.Abs(difference);
-            
-            // Spawn background task to consume semaphore slots
-            Task.Run(async () =>
-            {
-                int acquiredCount = 0;
-                try
-                {
-                    for (int i = 0; i < slotsToBlock; i++)
-                    {
-                        await _semaphore!.WaitAsync(cts.Token);
-                        acquiredCount++;
-                        _log.WriteLine($"{_poolName}: Consumed slot {acquiredCount}/{slotsToBlock} to enforce limit");
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // Release any slots acquired before cancellation
-                    for (int i = 0; i < acquiredCount; i++)
-                    {
-                        try { _semaphore?.Release(); } catch { }
-                    }
-                    _log.WriteLine($"{_poolName}: Blocker cancelled (limit increased), released {acquiredCount} slots");
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"{_poolName}: Blocker error: {ex.Message}", LogType.Error);
-                }
-            }, cts.Token);
-            
-            _log.WriteLine($"{_poolName}: Decreased to {newCount} ({difference}). Active workers will finish current tasks.");
+            // Nothing to dispose with counter-based approach
         }
     }
 }

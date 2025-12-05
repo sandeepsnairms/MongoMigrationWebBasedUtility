@@ -32,9 +32,10 @@ namespace OnlineMongoMigrationProcessor
 
         private OrderedUniqueList<string> _migrationUnitsPendingUpload = new OrderedUniqueList<string>();
 
-        // Parallel processing infrastructure
+        // Worker pool references (shared across all processors via coordinator)
         private WorkerPoolManager? _dumpPool;
         private WorkerPoolManager? _restorePool;
+        private readonly string _jobId;
         
         // Thread-safe locks
         private readonly object _pidLock = new object();
@@ -48,21 +49,21 @@ namespace OnlineMongoMigrationProcessor
         private readonly ConcurrentQueue<ChunkWorkItem> _dumpQueue = new();
         private readonly ConcurrentQueue<ChunkWorkItem> _restoreQueue = new();
         
-        // Active worker tracking
-        private readonly List<Task<TaskResult>> _activeDumpWorkers = new();
-        private readonly List<Task<TaskResult>> _activeRestoreWorkers = new();
-        private readonly object _workerLock = new object();
-        
         // Worker context for dynamic spawning (shared between dump and restore)
         private IMongoCollection<BsonDocument>? _currentCollection;
         private string? _currentFolder;
         private MigrationUnit? _currentMigrationUnit;  // Contains DatabaseName and CollectionName
+        private string? _currentSourceConnectionString;
+        private string? _currentTargetConnectionString;
+        private string? _currentDbName;
+        private string? _currentColName;
         private int _nextDumpWorkerId = 1;
         private int _nextRestoreWorkerId = 1;
         
-        // Progress tracking
-        private DateTime _lastSave = DateTime.MinValue;
-        private const int SAVE_DEBOUNCE_SECONDS = 2;
+        // Worker task tracking for dynamic spawning
+        private List<Task<TaskResult>>? _activeDumpWorkerTasks;
+        private List<Task<TaskResult>>? _activeRestoreWorkerTasks;
+        private readonly object _workerTaskLock = new object();
         
         // Work item class for chunk processing
         private class ChunkWorkItem : IComparable<ChunkWorkItem>
@@ -101,19 +102,24 @@ namespace OnlineMongoMigrationProcessor
         public DumpRestoreProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
             : base(log,  sourceClient, config)
         {
+            _jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? throw new InvalidOperationException("Job ID cannot be null");
+            
             // Calculate optimal concurrency
             int maxDumpWorkers, maxRestoreWorkers;
             if (MigrationJobContext.CurrentlyActiveJob.EnableParallelProcessing)
             {
-                maxDumpWorkers = CalculateOptimalConcurrency(
+                maxDumpWorkers = WorkerCountHelper.CalculateOptimalConcurrency(
                     MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses,
                     isDump: true
                 );
                 
-                maxRestoreWorkers = CalculateOptimalConcurrency(
+                maxRestoreWorkers = WorkerCountHelper.CalculateOptimalConcurrency(
                     MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses,
                     isDump: false
                 );
+                
+                _log.WriteLine($"Calculated dump concurrency: {maxDumpWorkers}");
+                _log.WriteLine($"Calculated restore concurrency: {maxRestoreWorkers}");
             }
             else
             {
@@ -121,9 +127,9 @@ namespace OnlineMongoMigrationProcessor
                 maxRestoreWorkers = 1;
             }
             
-            // Initialize worker pools
-            _dumpPool = new WorkerPoolManager(_log, "Dump", maxDumpWorkers);
-            _restorePool = new WorkerPoolManager(_log, "Restore", maxRestoreWorkers);
+            // Get or create shared worker pools from coordinator
+            _dumpPool = WorkerPoolCoordinator.GetOrCreateDumpPool(_jobId, _log, maxDumpWorkers);
+            _restorePool = WorkerPoolCoordinator.GetOrCreateRestorePool(_jobId, _log, maxRestoreWorkers);
             
             // Store initial values in MigrationJobContext.CurrentlyActiveJob for UI monitoring
             MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = maxDumpWorkers;
@@ -132,11 +138,13 @@ namespace OnlineMongoMigrationProcessor
             
             if (!MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
             {
-                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = Math.Min(Environment.ProcessorCount / 2, 8);
+                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = WorkerCountHelper.CalculateDefaultInsertionWorkers();
             }
             else
             {
-                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
+                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = WorkerCountHelper.ValidateWorkerCount(
+                    MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value
+                );
             }
             
             _log.WriteLine($"Parallel processing: Dump workers={maxDumpWorkers}, Restore workers={maxRestoreWorkers}");
@@ -147,44 +155,78 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustDumpWorkers(int newCount)
         {
-            if (newCount < 1) newCount = 1;
-            if (newCount > 16) newCount = 16; // Safety limit
+            int workersToSpawn = WorkerPoolCoordinator.AdjustDumpWorkers(_jobId, newCount, _log);
             
-            int difference = _dumpPool!.AdjustPoolSize(newCount);
-            
-            if (difference == 0) return;
-            
-            MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = newCount;
-            MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses = newCount; // Update config too
-            
-            // Spawn new worker tasks if capacity increased and processing is active
-            if (difference > 0 && _currentCollection != null && !_dumpQueue.IsEmpty)
+            if (workersToSpawn <= 0)
+                return;
+                
+            // Check if there's an active collection being processed
+            if (_currentCollection == null || _currentMigrationUnit == null)
             {
-                lock (_workerLock)
+                _log.WriteLine($"New dump workers will be utilized when the next collection starts");
+                return;
+            }
+            
+            // Check if there's work in the queue
+            if (_dumpQueue.Count == 0)
+            {
+                _log.WriteLine($"No chunks in dump queue - new workers will be utilized when more work becomes available");
+                return;
+            }
+            
+            // Spawn new workers immediately
+            lock (_workerTaskLock)
+            {
+                if (_activeDumpWorkerTasks == null)
                 {
-                    _log.WriteLine($"Spawning {difference} additional dump workers to process queue");
+                    _log.WriteLine($"Worker task list not initialized - new workers will start with next collection");
+                    return;
+                }
+                
+                int workersToSpawnNow = Math.Min(workersToSpawn, _dumpQueue.Count);
+                string collectionKey = $"{_currentDbName}.{_currentColName}";
+                
+                _log.WriteLine($"Spawning {workersToSpawnNow} new dump worker(s) immediately for {collectionKey}");
+                
+                for (int i = 0; i < workersToSpawnNow; i++)
+                {
+                    int workerId = _nextDumpWorkerId++;
                     
-                    for (int i = 0; i < difference; i++)
+                    // Register worker with coordinator
+                    WorkerPoolCoordinator.RegisterDumpWorker(_jobId, collectionKey, workerId, _log);
+                    
+                    // Capture locals for closure
+                    var collection = _currentCollection;
+                    var folder = _currentFolder!;
+                    var sourceConn = _currentSourceConnectionString!;
+                    var targetConn = _currentTargetConnectionString!;
+                    var dbName = _currentDbName!;
+                    var colName = _currentColName!;
+                    
+                    var workerTask = Task.Run(async () =>
                     {
-                        int workerId = _nextDumpWorkerId++;
-                        var workerTask = Task.Run(async () =>
+                        try
                         {
                             return await DumpWorkerAsync(
                                 workerId,
-                                _currentCollection!,
-                                _currentFolder!,
-                                MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
-                                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
-                                _currentMigrationUnit!.DatabaseName,
-                                _currentMigrationUnit!.CollectionName
+                                collection,
+                                folder,
+                                sourceConn,
+                                targetConn,
+                                dbName,
+                                colName
                             );
-                        }, _cts.Token);
-                        
-                        _activeDumpWorkers.Add(workerTask);
-                    }
+                        }
+                        finally
+                        {
+                            // Mark worker as completed in coordinator
+                            WorkerPoolCoordinator.MarkDumpWorkerCompleted(_jobId, collectionKey, workerId, _log);
+                        }
+                    }, _cts.Token);
+                    
+                    _activeDumpWorkerTasks.Add(workerTask);
                 }
             }
-            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -192,44 +234,75 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustRestoreWorkers(int newCount)
         {
-            if (newCount < 1) newCount = 1;
-            if (newCount > 16) newCount = 16; // Safety limit
+            int workersToSpawn = WorkerPoolCoordinator.AdjustRestoreWorkers(_jobId, newCount, _log);
             
-            int difference = _restorePool!.AdjustPoolSize(newCount);
-            
-            if (difference == 0) return;
-
-            MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = newCount;
-            MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses = newCount; // Update config too
-            
-            // Spawn new worker tasks if capacity increased and processing is active
-            if (difference > 0 && _currentFolder != null && !_restoreQueue.IsEmpty)
+            if (workersToSpawn <= 0)
+                return;
+                
+            // Check if there's an active collection being processed
+            if (_currentFolder == null || _currentMigrationUnit == null)
             {
-                lock (_workerLock)
+                _log.WriteLine($"New restore workers will be utilized when the next collection starts");
+                return;
+            }
+            
+            // Check if there's work in the queue
+            if (_restoreQueue.Count == 0)
+            {
+                _log.WriteLine($"No chunks in restore queue - new workers will be utilized when more work becomes available");
+                return;
+            }
+            
+            // Spawn new workers immediately
+            lock (_workerTaskLock)
+            {
+                if (_activeRestoreWorkerTasks == null)
                 {
-                    _log.WriteLine($"Spawning {difference} additional restore workers to process queue");
+                    _log.WriteLine($"Worker task list not initialized - new workers will start with next collection");
+                    return;
+                }
+                
+                int workersToSpawnNow = Math.Min(workersToSpawn, _restoreQueue.Count);
+                string collectionKey = $"{_currentDbName}.{_currentColName}";
+                
+                _log.WriteLine($"Spawning {workersToSpawnNow} new restore worker(s) immediately for {collectionKey}");
+                
+                for (int i = 0; i < workersToSpawnNow; i++)
+                {
+                    int workerId = _nextRestoreWorkerId++;
                     
-                    for (int i = 0; i < difference; i++)
+                    // Register worker with coordinator
+                    WorkerPoolCoordinator.RegisterRestoreWorker(_jobId, collectionKey, workerId, _log);
+                    
+                    // Capture locals for closure
+                    var folder = _currentFolder!;
+                    var targetConn = _currentTargetConnectionString!;
+                    var dbName = _currentDbName!;
+                    var colName = _currentColName!;
+                    
+                    var workerTask = Task.Run(async () =>
                     {
-                        int workerId = _nextRestoreWorkerId++;
-                        var workerTask = Task.Run(async () =>
+                        try
                         {
                             return await RestoreWorkerAsync(
                                 workerId,
                                 _restoreQueue,
-                                _currentFolder!,
-                                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id],
-                                _currentMigrationUnit!.DatabaseName,
-                                _currentMigrationUnit!.CollectionName
+                                folder,
+                                targetConn,
+                                dbName,
+                                colName
                             );
-                        }, _cts.Token);
-                        
-                        _activeRestoreWorkers.Add(workerTask);
-                    }
+                        }
+                        finally
+                        {
+                            // Mark worker as completed in coordinator
+                            WorkerPoolCoordinator.MarkRestoreWorkerCompleted(_jobId, collectionKey, workerId, _log);
+                        }
+                    }, _cts.Token);
+                    
+                    _activeRestoreWorkerTasks.Add(workerTask);
                 }
             }
-
-            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -237,41 +310,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustInsertionWorkers(int newCount)
         {
-            if (newCount < 1) newCount = 1;
-            if (newCount > 16) newCount = 16; // Safety limit
-            
-            MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers = newCount;
-            MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection = newCount;
-            
-            _log.WriteLine($"Set insertion workers per collection to {newCount}. Will apply to new restore operations.");
-            
-            
-            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-        }
-
-        private int CalculateOptimalConcurrency(int? configOverride, bool isDump)
-        {
-            //return 1;
-            // User override takes precedence
-            if (configOverride.HasValue && configOverride.Value > 0)
-            {
-                _log.WriteLine($"Using configured {(isDump ? "dump" : "restore")} concurrency: {configOverride.Value}");
-                return configOverride.Value;
-            }
-            
-            // Base calculation: 1 instance per 2.5 cores
-            int baseConcurrency = Math.Max(1, (int)(Environment.ProcessorCount / 2.5));
-            
-            // Memory safety check (500MB per process) - simplified, assume 8GB if we can't check
-            int memorySafeConcurrency = baseConcurrency; // Simplified for now
-            
-            // Final calculation
-            int finalConcurrency = Math.Min(baseConcurrency, memorySafeConcurrency);
-            
-            _log.WriteLine($"Calculated {(isDump ? "dump" : "restore")} concurrency: " +
-                          $"cores={baseConcurrency}, final={finalConcurrency}");
-            
-            return finalConcurrency;
+            WorkerCountHelper.AdjustInsertionWorkers(newCount, _log);
         }
 
         #region Thread-Safe PID Tracking
@@ -284,7 +323,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     MigrationJobContext.ActiveDumpProcessIds.Add(pid);
                     _log.WriteLine($"Registered dump process: PID {pid} (total active: {MigrationJobContext.ActiveDumpProcessIds.Count})");
-                    SaveJobListDebounced();
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 }
             }
         }
@@ -296,7 +335,7 @@ namespace OnlineMongoMigrationProcessor
                 if (MigrationJobContext.ActiveDumpProcessIds.Remove(pid))
                 {
                     _log.WriteLine($"Unregistered dump process: PID {pid} (total active: {MigrationJobContext.ActiveDumpProcessIds.Count})");
-                    SaveJobListDebounced();
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 }
             }
         }
@@ -309,7 +348,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     MigrationJobContext.ActiveRestoreProcessIds.Add(pid);
                     _log.WriteLine($"Registered restore process: PID {pid} (total active: {MigrationJobContext.ActiveRestoreProcessIds.Count})");
-                    SaveJobListDebounced();
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 }
             }
         }
@@ -321,7 +360,7 @@ namespace OnlineMongoMigrationProcessor
                 if (MigrationJobContext.ActiveRestoreProcessIds.Remove(pid))
                 {
                     _log.WriteLine($"Unregistered restore process: PID {pid} (total active: {MigrationJobContext.ActiveRestoreProcessIds.Count})");
-                    SaveJobListDebounced();
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 }
             }
         }
@@ -331,18 +370,7 @@ namespace OnlineMongoMigrationProcessor
             lock (_chunkUpdateLock)
             {
                 updateAction();
-                SaveJobListDebounced();
-            }
-        }
-
-        private void SaveJobListDebounced()
-        {
-            // Already in a lock when called
-            if ((DateTime.UtcNow - _lastSave).TotalSeconds > SAVE_DEBOUNCE_SECONDS)
-            {
-                //_jobList.Save();
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                _lastSave = DateTime.UtcNow;
             }
         }
 
@@ -443,6 +471,10 @@ namespace OnlineMongoMigrationProcessor
             _currentCollection = collection;
             _currentFolder = folder;
             _currentMigrationUnit = mu;
+            _currentSourceConnectionString = sourceConnectionString;
+            _currentTargetConnectionString = targetConnectionString;
+            _currentDbName = dbName;
+            _currentColName = colName;
             _nextDumpWorkerId = 1;
             
             // Enqueue all chunks
@@ -451,15 +483,25 @@ namespace OnlineMongoMigrationProcessor
                 _dumpQueue.Enqueue(chunk);
             }
             
-            // Start worker tasks
-            Task<TaskResult>[] workerTaskArray;
-            lock (_workerLock)
+            // Start worker tasks (make accessible for dynamic spawning)
+            lock (_workerTaskLock)
             {
-                _activeDumpWorkers.Clear();
-                for (int i = 0; i < Math.Min(_dumpPool.MaxWorkers, sortedChunks.Count); i++)
+                _activeDumpWorkerTasks = new();
+            }
+            
+            List<Task<TaskResult>> workerTasks = _activeDumpWorkerTasks;
+            string collectionKey = $"{dbName}.{colName}";
+            
+            for (int i = 0; i < Math.Min(_dumpPool!.MaxWorkers, sortedChunks.Count); i++)
+            {
+                int workerId = _nextDumpWorkerId++;
+                
+                // Register worker with coordinator
+                WorkerPoolCoordinator.RegisterDumpWorker(_jobId, collectionKey, workerId, _log);
+                
+                var workerTask = Task.Run(async () =>
                 {
-                    int workerId = _nextDumpWorkerId++;
-                    var workerTask = Task.Run(async () =>
+                    try
                     {
                         return await DumpWorkerAsync(
                             workerId, 
@@ -470,18 +512,30 @@ namespace OnlineMongoMigrationProcessor
                             dbName, 
                             colName
                         );
-                    }, _cts.Token);
-                    
-                    _activeDumpWorkers.Add(workerTask);
-                }
-                workerTaskArray = _activeDumpWorkers.ToArray();
+                    }
+                    finally
+                    {
+                        // Mark worker as completed in coordinator
+                        WorkerPoolCoordinator.MarkDumpWorkerCompleted(_jobId, collectionKey, workerId, _log);
+                    }
+                }, _cts.Token);
+                
+                workerTasks.Add(workerTask);
             }
             
             // Wait for all workers to complete
-            var results = await Task.WhenAll(workerTaskArray);
+            var results = await Task.WhenAll(workerTasks);
             
             // Clear context
             _currentCollection = null;
+            _currentSourceConnectionString = null;
+            _currentTargetConnectionString = null;
+            _currentDbName = null;
+            _currentColName = null;
+            lock (_workerTaskLock)
+            {
+                _activeDumpWorkerTasks = null;
+            }
             
             // Check for controlled pause - workers have finished, now stop
             if (MigrationJobContext.ControlledPauseRequested)
@@ -525,7 +579,7 @@ namespace OnlineMongoMigrationProcessor
             string dbName,
             string colName)
         {
-            _log.WriteLine($"Dump worker {workerId} started");
+            _log.WriteLine($"Dump worker {workerId} started", LogType.Debug);
             
             while (true)
             {
@@ -560,12 +614,12 @@ namespace OnlineMongoMigrationProcessor
                     // Check again after dequeue in case pause was requested
                     if (MigrationJobContext.ControlledPauseRequested)
                     {
-                        _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning at chunk {workItem.ChunkIndex}", LogType.Debug);
-                        break;
-                    }
+                    _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning at chunk {workItem.ChunkIndex}", LogType.Debug);
+                    break;
+                }
 
-                    _log.WriteLine($"Worker {workerId} processing chunk {workItem.ChunkIndex}", LogType.Debug);
-
+                    _log.WriteLine($"Worker {workerId} dumping chunk {workItem.ChunkIndex}");
+                    
                     double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
                     double contributionFactor = 1.0 / workItem.MigrationUnit.MigrationChunks.Count;
                     
@@ -634,7 +688,7 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
             
-            _log.WriteLine($"Dump worker {workerId} completed");
+            _log.WriteLine($"Dump worker {workerId} completed", LogType.Debug);
             
             // Check if controlled pause completed
             if (MigrationJobContext.ControlledPauseRequested && _dumpQueue.IsEmpty)
@@ -666,83 +720,22 @@ namespace OnlineMongoMigrationProcessor
                 _cts.Token.ThrowIfCancellationRequested();
 
                 // Build work queue (ordered by chunk index)
-                var sortedChunks = mu.MigrationChunks
-                    .Select((chunk, index) => new ChunkWorkItem
-                    {
-                        ChunkIndex = index,
-                        MigrationUnit = mu,
-                        Chunk = chunk,
-                        QueuedAt = DateTime.UtcNow
-                    })
-                    .Where(item => item.Chunk.IsUploaded != true && item.Chunk.IsDownloaded == true)
-                    .OrderBy(item => item.ChunkIndex)
-                    .ToList();
+                var sortedChunks = BuildRestoreWorkQueue(mu);
 
                 // Check if all chunks are already uploaded (not just that there are no pending chunks)
                 bool allChunksUploaded = mu.MigrationChunks.All(c => c.IsUploaded == true);
 
-                // Check if mu.DumpComplete == true but some chunks have IsDownloaded = false
-                if(mu.DumpComplete && mu.MigrationChunks.Any(c => c.IsDownloaded != true))
+                // Validate dump completion integrity
+                var validationResult = ValidateDumpCompletion(mu);
+                if (validationResult != null)
                 {
-                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has incomplete chunks. Reverting its download status and triggering a controlled pause. Resume the job to resolve.", LogType.Warning);
-                    mu.DumpComplete = false;
-
-                    MigrationJobContext.SaveMigrationUnit(mu, true);
-          
-                    return new RestoreResult
-                    {
-                        Result = TaskResult.Canceled,
-                        RestoredChunks = restoredChunks,
-                        RestoredDocs = restoredDocs
-                    };
+                    return validationResult;
                 }
 
-
+                // Handle already completed restore scenario
                 if (!sortedChunks.Any() && allChunksUploaded)
                 {
-                    _log.WriteLine($"{mu.MigrationChunks.Count} chunks in {dbName}.{colName}");
-
-                    // Count already restored chunks
-                    long dumpedDocs = 0;
-                    foreach (var chunk in mu.MigrationChunks.Where(c => c.IsUploaded == true))
-                    {
-                        restoredChunks++;
-                        restoredDocs += chunk.RestoredSuccessDocCount;
-                        dumpedDocs += chunk.DumpQueryDocCount;
-                    }
-
-                    _log.WriteLine($"{restoredChunks} chunks restored for {mu.DatabaseName}.{mu.CollectionName}, Restored documents: {restoredDocs}", LogType.Verbose);
-
-                    if (restoredDocs < dumpedDocs)
-                    {
-                        _log.WriteLine($"Only {restoredDocs} out of {dumpedDocs} documents restored. Resetting chunk states for all chunks for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Warning);
-                        foreach (var chunk in mu.MigrationChunks)
-                        {
-                            chunk.IsUploaded = false;
-                            chunk.RestoredSuccessDocCount = 0;
-                        }
-
-                        MigrationJobContext.SaveMigrationUnit(mu, true);
-
-
-                        MigrationJobContext.ControlledPauseRequested=true;
-
-                        // Return 0 to trigger retry since we reset the chunks
-                        return new RestoreResult
-                        {
-                            Result = TaskResult.Canceled,
-                            RestoredChunks = 0,
-                            RestoredDocs = 0
-                        };
-                    }
-
-                    // Return the actual count of restored chunks, not 0
-                    return new RestoreResult
-                    {
-                        Result = TaskResult.Success,
-                        RestoredChunks = restoredChunks,
-                        RestoredDocs = restoredDocs
-                    };
+                    return HandleCompletedRestore(mu, dbName, colName, ref restoredChunks, ref restoredDocs);
                 }
                 
                 // If no chunks are ready for restore yet (still being downloaded), return early
@@ -762,6 +755,9 @@ namespace OnlineMongoMigrationProcessor
                 // Store context for dynamic worker spawning
                 _currentFolder = folder;
                 _currentMigrationUnit = mu;
+                _currentTargetConnectionString = targetConnectionString;
+                _currentDbName = dbName;
+                _currentColName = colName;
                 _nextRestoreWorkerId = 1;
 
                 // Clear chunk errors before starting
@@ -773,15 +769,25 @@ namespace OnlineMongoMigrationProcessor
                     _restoreQueue.Enqueue(chunk);
                 }
 
-                // Start worker tasks
-                Task<TaskResult>[] workerTaskArray;
-                lock (_workerLock)
+                // Start worker tasks (make accessible for dynamic spawning)
+                lock (_workerTaskLock)
                 {
-                    _activeRestoreWorkers.Clear();
-                    for (int i = 0; i < Math.Min(_restorePool.MaxWorkers, sortedChunks.Count); i++)
+                    _activeRestoreWorkerTasks = new();
+                }
+                
+                List<Task<TaskResult>> workerTasks = _activeRestoreWorkerTasks;
+                string collectionKey = $"{dbName}.{colName}";
+                
+                for (int i = 0; i < Math.Min(_restorePool!.MaxWorkers, sortedChunks.Count); i++)
+                {
+                    int workerId = _nextRestoreWorkerId++;
+                    
+                    // Register worker with coordinator
+                    WorkerPoolCoordinator.RegisterRestoreWorker(_jobId, collectionKey, workerId, _log);
+                    
+                    var workerTask = Task.Run(async () =>
                     {
-                        int workerId = _nextRestoreWorkerId++;
-                        var workerTask = Task.Run(async () =>
+                        try
                         {
                             return await RestoreWorkerAsync(
                                 workerId,
@@ -791,18 +797,29 @@ namespace OnlineMongoMigrationProcessor
                                 dbName,
                                 colName
                             );
-                        }, _cts.Token);
+                        }
+                        finally
+                        {
+                            // Mark worker as completed in coordinator
+                            WorkerPoolCoordinator.MarkRestoreWorkerCompleted(_jobId, collectionKey, workerId, _log);
+                        }
+                    }, _cts.Token);
 
-                        _activeRestoreWorkers.Add(workerTask);
-                    }
-                    workerTaskArray = _activeRestoreWorkers.ToArray();
+                    workerTasks.Add(workerTask);
                 }
 
                 // Wait for all workers to complete
-                var results = await Task.WhenAll(workerTaskArray);
+                var results = await Task.WhenAll(workerTasks);
 
                 // Clear context
                 _currentFolder = null;
+                _currentTargetConnectionString = null;
+                _currentDbName = null;
+                _currentColName = null;
+                lock (_workerTaskLock)
+                {
+                    _activeRestoreWorkerTasks = null;
+                }
 
                 // Check for controlled pause - workers have finished, now stop
                 if (MigrationJobContext.ControlledPauseRequested)
@@ -1038,65 +1055,13 @@ namespace OnlineMongoMigrationProcessor
             // Build base args per attempt
             string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";//  --out {Path.Combine(folder,$"{chunkIndex}.bson")}";
 
-            // Disk space/backpressure check (retain existing behavior)
-            bool continueDownloads;
-            double pendingUploadsGB = 0;
-            double freeSpaceGB = 0;
-            while (true)
+            // Disk space/backpressure check
+            if (!CheckDiskSpaceForDump(mu, folder, targetConnectionString, dbName, colName))
             {
-                // Check for controlled pause
-                if (MigrationJobContext.ControlledPauseRequested)
-                {
-                    _log.WriteLine("Controlled pause detected - exiting dump");
-                    return Task.FromResult(TaskResult.Canceled);
-                }
-                
-                continueDownloads = Helper.CanProceedWithDownloads(folder, _config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB);
-                if (!continueDownloads)
-                {
-                    _log.WriteLine($"{dbName}.{colName} added to upload queue");
-                    //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                    _migrationUnitsPendingUpload.Add(mu.Id);
-                    _ = Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
-
-                    _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobList are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobList. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
-
-                    try { Task.Delay(TimeSpan.FromMinutes(5), _cts.Token).Wait(_cts.Token); }
-                    catch (OperationCanceledException) { return Task.FromResult(TaskResult.Canceled); }
-                }
-                else break;
+                return Task.FromResult(TaskResult.Canceled);
             }
 
-            long docCount = 0;
-            if (mu.MigrationChunks.Count > 1)
-            {
-                var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[chunkIndex].Gte!, mu.MigrationChunks[chunkIndex].Lt!, mu.MigrationChunks[chunkIndex].DataType);
-                var gte = bounds.gte;
-                var lt = bounds.lt;
-
-                _log.WriteLine($"{dbName}.{colName}-Chunk [{chunkIndex}] generating query");
-
-                BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
-                string query = MongoHelper.GenerateQueryString(gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu);
-                docCount = MongoHelper.GetDocumentCount(collection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu.DataTypeFor_Id.HasValue);
-                mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
-                _log.WriteLine($"Count for {dbName}.{colName}[{chunkIndex}] is {docCount}");
-
-                string extendedQuery= MongoQueryConverter.ConvertMondumpFilter(query, gte, lt, mu.MigrationChunks[chunkIndex].DataType);
-                args = $"{args} --query=\"{extendedQuery}\"";
-            }
-            else if (mu.MigrationChunks.Count == 1 && !string.IsNullOrEmpty(mu.UserFilter))
-            {
-                BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
-                docCount = MongoHelper.GetActualDocumentCount(collection, mu);
-                string query = MongoHelper.GenerateQueryString(userFilterDoc);
-                args = $"{args} --query=\"{query}\"";
-            }
-            else
-            {
-                docCount = Helper.GetMigrationUnitDocCount(mu);
-                mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
-            }
+            long docCount = BuildDumpQuery(mu, chunkIndex, collection, dbName, colName, ref args);
 
             // Ensure previous dump file (if any) is removed before fresh dump
             var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
@@ -1180,26 +1145,11 @@ namespace OnlineMongoMigrationProcessor
 
             _cts.Token.ThrowIfCancellationRequested();
 
-            // Handle simulation mode - simulate successful restore immediately
-            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+            // Check and handle simulation mode if enabled
+            var simulationResult = SimulateRestoreChunk(mu, chunkIndex, initialPercent, contributionFactor);
+            if (simulationResult != null)
             {
-                // Simulate successful restore
-                mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = mu.MigrationChunks[chunkIndex].DumpQueryDocCount;
-                mu.MigrationChunks[chunkIndex].RestoredFailedDocCount = 0;
-                mu.MigrationChunks[chunkIndex].IsUploaded = true;
-                
-                // Update progress
-                double progress = initialPercent + (contributionFactor * 100);
-                mu.RestorePercent = Math.Min(progress, 100);
-                
-                _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
-
-                MigrationJobContext.SaveMigrationUnit(mu,true);
-
-                // Small delay to simulate processing time (50ms per chunk)
-                try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
-                
-                return Task.FromResult(TaskResult.Success);
+                return simulationResult;
             }
 
             // Build args per attempt
@@ -1223,20 +1173,8 @@ namespace OnlineMongoMigrationProcessor
                 ? mu.MigrationChunks[chunkIndex].DumpQueryDocCount
                 : Helper.GetMigrationUnitDocCount(mu);
 
-            // Determine insertion workers based on configuration or auto-calculate
-            int insertionWorkers = 1; // Default
-            
-            if (MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
-            {
-                // Use configured value
-                insertionWorkers = MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.Value;
-            }
-            else
-            {
-                // Use the calculated default from constructor
-                insertionWorkers = MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers;
-            }
-            
+            // Determine insertion workers and add to args if needed
+            int insertionWorkers = GetInsertionWorkersCount();
             _log.WriteLine($"Restore will use {insertionWorkers} insertion worker(s) for {dbName}.{colName}[{chunkIndex}] ({docCount} docs)");
             
             if (insertionWorkers > 1)
@@ -1250,16 +1188,11 @@ namespace OnlineMongoMigrationProcessor
                 var processExecutor = new ProcessExecutor(_log);
                 var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
 
-                if (!File.Exists(dumpFilePath)) //data integrity check,force controlled pause if dump file missing
+                // Validate dump file exists before restore
+                var validationResult = ValidateDumpFileExists(mu, chunkIndex, dumpFilePath);
+                if (validationResult != null)
                 {
-                    _log.WriteLine($"Chunk file missing for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] during restore. Triggering controlled pause. Resume job to continue.", LogType.Warning);
-                    mu.MigrationChunks[chunkIndex].IsDownloaded = false;
-                    mu.DumpComplete = false;
-
-                    MigrationJobContext.SaveMigrationUnit(mu, true);
-
-                    MigrationJobContext.ControlledPauseRequested = true;
-                    return Task.FromResult(TaskResult.Canceled);
+                    return validationResult;
                 }
 
                 var task = Task.Run(() => processExecutor.Execute(
@@ -1282,70 +1215,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if (result)
                 {
-                    bool skipFinalize = false;
-
-                    if (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount > 0)
-                    {
-                        if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
-                            _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
-
-                        try
-                        {
-                            var targetDb = _targetClient!.GetDatabase(mu.DatabaseName);
-                            var targetCollection = targetDb.GetCollection<BsonDocument>(mu.CollectionName);
-
-                            var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[chunkIndex].Gte!, mu.MigrationChunks[chunkIndex].Lt!, mu.MigrationChunks[chunkIndex].DataType);
-                            var gte = bounds.gte;
-                            var lt = bounds.lt;
-
-                            // get count in target collection
-                            mu.MigrationChunks[chunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(targetCollection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
-
-                            // checking if source and target doc counts are same or more
-                            if (mu.MigrationChunks[chunkIndex].DocCountInTarget >= mu.MigrationChunks[chunkIndex].DumpQueryDocCount)
-                            {
-                                _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] No documents missing, count in Target: {mu.MigrationChunks[chunkIndex].DocCountInTarget}");
-                                mu.MigrationChunks[chunkIndex].SkippedAsDuplicateCount = mu.MigrationChunks[chunkIndex].RestoredFailedDocCount;
-                                mu.MigrationChunks[chunkIndex].RestoredFailedDocCount = 0;
-                            }
-                            else
-                            {
-                                // since count is mismatched, we will reprocess the chunk
-                                skipFinalize = true;
-                                _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] Documents missing, Chunk will be reprocessed", LogType.Error);
-                            }
-
-                            MigrationJobContext.SaveMigrationUnit(mu,false);
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] encountered error while counting documents on target. Chunk will be reprocessed. Details: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-                            skipFinalize = true;
-                        }
-                    }
-                    //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
-                    mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = docCount - (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount + mu.MigrationChunks[chunkIndex].SkippedAsDuplicateCount);
-                    _log.WriteLine($"{dbName}.{colName}[{chunkIndex}] uploader processing completed");
-
-                    if (!skipFinalize)
-                    {
-                        mu.MigrationChunks[chunkIndex].IsUploaded = true;
-                        MigrationJobContext.SaveMigrationUnit(mu,false);
-
-                        try
-                        {
-                            File.Delete($"{Path.Combine(folder, $"{chunkIndex}.bson")}");
-                        }
-                        catch
-                        {
-                            // Ignore file delete errors
-                        }
-                        return Task.FromResult(TaskResult.Success);
-                    }
-                    else
-                    {
-                        return Task.FromResult(TaskResult.Retry);
-                    }
+                    return HandleRestoreChunkSuccess(mu, chunkIndex, folder, targetConnectionString, dbName, colName, docCount);
                 }
                 else
                 {
@@ -1367,107 +1237,35 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-            string jobId;
-            string dbName;
-            string colName;
-            ProcessorContext ctx;
-            MigrationUnit mu;
-            try
+            var initResult = InitializeStartProcess(migrationUnitId, sourceConnectionString, targetConnectionString);
+            if (initResult.Result != TaskResult.Success)
             {
-                MigrationJobContext.ControlledPauseRequested = false;
-                ProcessRunning = true;
-                mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
-                mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
-
-                // Initialize processor context (parity with CopyProcessor)
-                ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
-
-                jobId = ctx.JobId;
-                dbName = ctx.DatabaseName;
-                colName = ctx.CollectionName;
+                return initResult.Result;
             }
-            catch (Exception ex)
-            {
-                _log.WriteLine($"Error starting process for migration unit {migrationUnitId},Ex: {Helper.RedactPii(ex.ToString())}", LogType.Error);
-                return TaskResult.Retry;
-            }
+            
+            var mu = initResult.MigrationUnit!;
+            var ctx = initResult.Context!;
+            string jobId = ctx.JobId;
+            string dbName = ctx.DatabaseName;
+            string colName = ctx.CollectionName;
 
             
             // when resuming a CurrentlyActiveJob, check if post-upload change stream processing is already in progress
             if (CheckChangeStreamAlreadyProcessingAsync(ctx))
                 return TaskResult.Success;
 
-            // starting the regular dump and restore process
-            if (!mu.BulkCopyStartedOn.HasValue || mu.BulkCopyStartedOn == DateTime.MinValue)
-                mu.BulkCopyStartedOn = DateTime.UtcNow;
 
-            bool isDirty = false;
-            //check if dump complete but restore not complete  yet all chunks are downloaded
-            if (mu.DumpComplete && !mu.RestoreComplete && mu.MigrationChunks.All(c => c.IsDownloaded == true))
-            {
-                _log.WriteLine($"{dbName}.{colName} dump complete, but chunks pending. Reprocessing.", LogType.Warning);
-                mu.DumpComplete = false;
-                isDirty = true;
-            }
+            //invoke upload for chunks that are already dumped
+            _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
 
-            //check to make sure chunk files are present, else mark chunk as not downloaded
-            if (mu.DumpComplete && !mu.RestoreComplete)
-            {
-                
-                for (int i=0;i< mu.MigrationChunks.Count;i++)
-                {
-                    string chunkFilePath = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"), $"{i}.bson");
-                    if (!File.Exists(chunkFilePath))
-                    {
-                        _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}. Marking as not downloaded; will reprocess.", LogType.Warning);
-                        mu.MigrationChunks[i].IsDownloaded = false;
-                        mu.DumpComplete = false;
-                        isDirty = true;
-                    }
-                }              
-                
-            }
 
-            if (isDirty)
-            {
-                MigrationJobContext.SaveMigrationUnit(mu, true);
-            }
+            // Validate and prepare dump process
+            PrepareDumpProcess(mu, jobId, dbName, colName);
 
             // check if  dump complete and process chunks as needed
             if (!mu.DumpComplete && !_cts.Token.IsCancellationRequested)
             {
-                
-                if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
-                {
-                    System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);
-                }
-
-                // mongodump output folder 
-                string folder = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
-
-                Directory.CreateDirectory(folder);
-
-                _log.WriteLine($"{dbName}.{colName} download started");
-
-                mu.EstimatedDocCount = ctx.Collection.EstimatedDocumentCount();
-
-                // Start the actual document count operation in the background without awaiting
-                Task<long>? actualCountTask = null;
-                if (mu.ActualDocCount == 0) // Only start if we don't already have the count
-                {
-                    actualCountTask = Task.Run(() => MongoHelper.GetActualDocumentCount(ctx.Collection, mu), _cts.Token);
-
-                    // Optional: Fire-and-forget completion handler to update the count when ready
-                    _ = actualCountTask.ContinueWith(task =>
-                    {
-                        if (task.IsCompletedSuccessfully)
-                        {
-                            mu.ActualDocCount = task.Result;
-                            MigrationJobContext.SaveMigrationUnit(mu,false);
-                            _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
-                        }
-                    }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
-                }
+                string folder = InitializeDumpFolder(mu, ctx, jobId, dbName, colName);
 
                 long downloadCount = 0;
 
@@ -1498,16 +1296,7 @@ namespace OnlineMongoMigrationProcessor
 
                 if (!_cts.Token.IsCancellationRequested)
                 {
-                    mu.SourceCountDuringCopy = mu.MigrationChunks.Sum(chunk => chunk.DumpQueryDocCount);
-                    downloadCount = mu.SourceCountDuringCopy; // recompute from chunks to avoid incremental tracking
-
-                    mu.DumpGap = Helper.GetMigrationUnitDocCount(mu) - downloadCount;
-                    mu.DumpPercent = 100;
-                    mu.DumpComplete = true;
-
-                    MigrationJobContext.SaveMigrationUnit(mu, true);
-
-                    // BulkCopyEndedOn will be set after restore completes, not here
+                    FinalizeDumpCompletion(mu, ref downloadCount);
 
                     // Only trigger restore if not paused
                     if (!MigrationJobContext.ControlledPauseRequested)
@@ -1592,124 +1381,145 @@ namespace OnlineMongoMigrationProcessor
         // Core restore loop: iterates until all chunks are restored or cancellation/simulation stops it
         private void ProcessRestoreLoop(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
         {
-            // Handle simulation mode - use parallel restore infrastructure for consistency
-            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && !mu.RestoreComplete && mu.DumpComplete)
+            // Handle simulation mode
+            if (ProcessSimulationModeRestore(mu, folder, targetConnectionString, dbName, colName))
             {
-                _log.WriteLine($"Simulation mode: Simulating parallel restore for {dbName}.{colName} with {_restorePool!.MaxWorkers} workers");
-                
-                // Calculate initial progress based on already restored chunks
-                int alreadyRestored = mu.MigrationChunks.Count(c => c.IsUploaded == true);
-                if (alreadyRestored > 0)
-                {
-                    mu.RestorePercent = ((double)alreadyRestored / mu.MigrationChunks.Count) * 100;
-                    _log.WriteLine($"Simulation mode: Starting from {alreadyRestored}/{mu.MigrationChunks.Count} chunks already restored ({mu.RestorePercent:F2}%)");
-                }
-                else
-                {
-                    mu.RestorePercent = 0;
-                }
-                
-                // Use the parallel restore infrastructure even in simulation mode
-                var result = ParallelRestoreChunksAsync(
-                    mu,
-                    folder,///////
-                    targetConnectionString,
-                    dbName,
-                    colName
-                ).GetAwaiter().GetResult();
-                
-                // Mark as complete
-                mu.RestorePercent = 100;
-                mu.RestoreComplete = true;
-                mu.RestoreGap = 0; // Assume perfect simulation
-                
-
-                _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - {result.RestoredChunks} chunks, {result.RestoredDocs} docs");
-                
-                if (mu.DumpComplete && mu.RestoreComplete)
-                {
-                    if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
-                    {
-                        mu.BulkCopyEndedOn = DateTime.UtcNow;
-                    }
-                }
-
-
-                MigrationJobContext.SaveMigrationUnit(mu,true);
-
-                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
-                _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
-                return;
+                return; // Simulation completed
             }
 
-            //if (mu.DumpComplete && !mu.RestoreComplete && !Directory.Exists(folder)) //data missing issue, forcing controlled pause
-            //{
-            //    _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
-            //    mu.DumpComplete = false;
-            //    MigrationJobContext.SaveMigrationUnit(mu, true);
-            //    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
-
-            //    MigrationJobContext.ControlledPauseRequested = true;
-            //    _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}. Controlled pause requested. Please resume job.",LogType.Error);
-            //    return;
-            //}
-
+            // Process regular restore loop
             while (ShouldContinueUploadLoop(mu, folder))
             {
-                // Check for controlled pause at start of loop iteration
-                if (MigrationJobContext.ControlledPauseRequested)
+                if (CheckAndHandleControlledPause(dbName, colName))
                 {
-                    _log.WriteLine($"Controlled pause detected in restore loop for {dbName}.{colName} - exiting",LogType.Debug);
                     return;
                 }
                 
-                // MongoRestore
                 if (!mu.RestoreComplete && !_cts.Token.IsCancellationRequested && Helper.IsMigrationUnitValid(mu))
                 {
-                                        
-                    int restoredChunks;
-                    long restoredDocs;
-                    RestoreAllPendingChunksOnce(mu, folder, targetConnectionString, dbName, colName, out restoredChunks, out restoredDocs);
-
-                    if (restoredChunks == mu.MigrationChunks.Count && !_cts.Token.IsCancellationRequested)
+                    if (!ProcessRestoreIteration(mu, folder, targetConnectionString, dbName, colName))
                     {
-
-                        mu.RestoreGap = Helper.GetMigrationUnitDocCount(mu) - restoredDocs;
-                        mu.RestorePercent = 100;
-                        mu.RestoreComplete = true;
-                        
-                        // Set BulkCopyEndedOn only after both dump and restore are complete
-                        if (mu.DumpComplete && mu.RestoreComplete)
-                        {
-                            if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
-                            {
-                                mu.BulkCopyEndedOn = DateTime.UtcNow;
-                            }                            
-                        }
-
-                        MigrationJobContext.SaveMigrationUnit(mu,true);
-                        MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
-
-                    }
-                    else
-                    {
-                        // If there are no pending chunks to restore, exit the loop instead of sleeping
-                        if (!HasPendingChunks(mu))
-                        {
-                            return;
-                        }
-
-                        try
-                        {
-                            _log.WriteLine($"Restore loop for {dbName}.{colName} sleeping for 10 seconds before next pass...");
-                            Task.Delay(10000, _cts.Token).Wait(_cts.Token);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            return; // Exit if cancellation was requested during delay
-                        }
+                        return; // Exit if iteration indicated completion or error
                     }
                 }
+            }
+        }
+
+        private bool ProcessSimulationModeRestore(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
+        {
+            if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun || mu.RestoreComplete || !mu.DumpComplete)
+            {
+                return false; // Not simulation mode or already complete
+            }
+            
+            _log.WriteLine($"Simulation mode: Simulating parallel restore for {dbName}.{colName} with {_restorePool!.MaxWorkers} workers");
+            
+            // Calculate initial progress based on already restored chunks
+            int alreadyRestored = mu.MigrationChunks.Count(c => c.IsUploaded == true);
+            if (alreadyRestored > 0)
+            {
+                mu.RestorePercent = ((double)alreadyRestored / mu.MigrationChunks.Count) * 100;
+                _log.WriteLine($"Simulation mode: Starting from {alreadyRestored}/{mu.MigrationChunks.Count} chunks already restored ({mu.RestorePercent:F2}%)");
+            }
+            else
+            {
+                mu.RestorePercent = 0;
+            }
+            
+            // Use the parallel restore infrastructure even in simulation mode
+            var result = ParallelRestoreChunksAsync(
+                mu,
+                folder,
+                targetConnectionString,
+                dbName,
+                colName
+            ).GetAwaiter().GetResult();
+            
+            // Mark as complete
+            mu.RestorePercent = 100;
+            mu.RestoreComplete = true;
+            mu.RestoreGap = 0; // Assume perfect simulation
+
+            _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - {result.RestoredChunks} chunks, {result.RestoredDocs} docs");
+            
+            if (mu.DumpComplete && mu.RestoreComplete)
+            {
+                if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
+                {
+                    mu.BulkCopyEndedOn = DateTime.UtcNow;
+                }
+            }
+
+            MigrationJobContext.SaveMigrationUnit(mu, true);
+            MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
+            _log.WriteLine($"Simulation mode: Restore completed for {dbName}.{colName} - Final RestorePercent={mu.RestorePercent}%");
+            
+            return true; // Simulation handled
+        }
+
+        private bool CheckAndHandleControlledPause(string dbName, string colName)
+        {
+            if (MigrationJobContext.ControlledPauseRequested)
+            {
+                _log.WriteLine($"Controlled pause detected in restore loop for {dbName}.{colName} - exiting", LogType.Debug);
+                return true;
+            }
+            return false;
+        }
+
+        private bool ProcessRestoreIteration(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
+        {
+            int restoredChunks;
+            long restoredDocs;
+            RestoreAllPendingChunksOnce(mu, folder, targetConnectionString, dbName, colName, out restoredChunks, out restoredDocs);
+
+            if (restoredChunks == mu.MigrationChunks.Count && !_cts.Token.IsCancellationRequested)
+            {
+                FinalizeRestoreCompletion(mu, restoredDocs);
+                return false; // Indicate completion
+            }
+            else
+            {
+                return HandleIncompleteRestore(mu, dbName, colName);
+            }
+        }
+
+        private void FinalizeRestoreCompletion(MigrationUnit mu, long restoredDocs)
+        {
+            mu.RestoreGap = Helper.GetMigrationUnitDocCount(mu) - restoredDocs;
+            mu.RestorePercent = 100;
+            mu.RestoreComplete = true;
+            
+            // Set BulkCopyEndedOn only after both dump and restore are complete
+            if (mu.DumpComplete && mu.RestoreComplete)
+            {
+                if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
+                {
+                    mu.BulkCopyEndedOn = DateTime.UtcNow;
+                }
+            }
+
+            MigrationJobContext.SaveMigrationUnit(mu, true);
+            MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
+        }
+
+        private bool HandleIncompleteRestore(MigrationUnit mu, string dbName, string colName)
+        {
+            // If there are no pending chunks to restore, exit the loop instead of sleeping
+            if (!HasPendingChunks(mu))
+            {
+                return false; // Exit iteration
+            }
+
+            try
+            {
+                _log.WriteLine($"Restore loop for {dbName}.{colName} sleeping for 10 seconds before next pass...");
+                Task.Delay(10000, _cts.Token).Wait(_cts.Token);
+                return true; // Continue iteration
+            }
+            catch (OperationCanceledException)
+            {
+                return false; // Exit if cancellation was requested during delay
             }
         }
 
@@ -1881,5 +1691,445 @@ namespace OnlineMongoMigrationProcessor
             
             _log.WriteLine("DumpRestoreProcessor stopped");
         }
+
+        #region Helper Methods for StartProcess
+
+        private class StartProcessInitResult
+        {
+            public TaskResult Result { get; set; }
+            public MigrationUnit? MigrationUnit { get; set; }
+            public ProcessorContext? Context { get; set; }
+        }
+
+        private StartProcessInitResult InitializeStartProcess(string migrationUnitId, string sourceConnectionString, string targetConnectionString)
+        {
+            try
+            {
+                MigrationJobContext.ControlledPauseRequested = false;
+                ProcessRunning = true;
+                var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
+                mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
+
+                // Initialize processor context (parity with CopyProcessor)
+                var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
+
+                return new StartProcessInitResult
+                {
+                    Result = TaskResult.Success,
+                    MigrationUnit = mu,
+                    Context = ctx
+                };
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error starting process for migration unit {migrationUnitId},Ex: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                return new StartProcessInitResult
+                {
+                    Result = TaskResult.Retry
+                };
+            }
+        }
+
+        private void PrepareDumpProcess(MigrationUnit mu, string jobId, string dbName, string colName)
+        {
+            // starting the regular dump and restore process
+            if (!mu.BulkCopyStartedOn.HasValue || mu.BulkCopyStartedOn == DateTime.MinValue)
+                mu.BulkCopyStartedOn = DateTime.UtcNow;
+
+            bool isDirty = false;
+            
+            // check if dump complete but restore not complete yet all chunks are downloaded
+            if (mu.DumpComplete && !mu.RestoreComplete && mu.MigrationChunks.All(c => c.IsDownloaded == true))
+            {
+                _log.WriteLine($"{dbName}.{colName} dump complete, but chunks pending. Reprocessing.", LogType.Warning);
+                mu.DumpComplete = false;
+                isDirty = true;
+            }
+
+            // check to make sure chunk files are present, else mark chunk as not downloaded
+            if (mu.DumpComplete && !mu.RestoreComplete)
+            {
+                for (int i = 0; i < mu.MigrationChunks.Count; i++)
+                {
+                    string chunkFilePath = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"), $"{i}.bson");
+                    if (!File.Exists(chunkFilePath))
+                    {
+                        _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}. Marking as not downloaded; will reprocess.", LogType.Warning);
+                        mu.MigrationChunks[i].IsDownloaded = false;
+                        mu.DumpComplete = false;
+                        isDirty = true;
+                    }
+                }
+            }
+
+            if (isDirty)
+            {
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+            }
+        }
+
+        private string InitializeDumpFolder(MigrationUnit mu, ProcessorContext ctx, string jobId, string dbName, string colName)
+        {
+            if (!System.IO.Directory.Exists(_mongoDumpOutputFolder))
+            {
+                System.IO.Directory.CreateDirectory(_mongoDumpOutputFolder);
+            }
+
+            // mongodump output folder 
+            string folder = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"));
+
+            Directory.CreateDirectory(folder);
+
+            _log.WriteLine($"{dbName}.{colName} download started");
+
+            mu.EstimatedDocCount = ctx.Collection.EstimatedDocumentCount();
+
+            // Start the actual document count operation in the background without awaiting
+            Task<long>? actualCountTask = null;
+            if (mu.ActualDocCount == 0) // Only start if we don't already have the count
+            {
+                actualCountTask = Task.Run(() => MongoHelper.GetActualDocumentCount(ctx.Collection, mu), _cts.Token);
+
+                // Optional: Fire-and-forget completion handler to update the count when ready
+                _ = actualCountTask.ContinueWith(task =>
+                {
+                    if (task.IsCompletedSuccessfully)
+                    {
+                        mu.ActualDocCount = task.Result;
+                        MigrationJobContext.SaveMigrationUnit(mu, false);
+                        _log.WriteLine($"{dbName}.{colName} actual document count: {task.Result}");
+                    }
+                }, _cts.Token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
+            }
+
+            return folder;
+        }
+
+        private void FinalizeDumpCompletion(MigrationUnit mu, ref long downloadCount)
+        {
+            mu.SourceCountDuringCopy = mu.MigrationChunks.Sum(chunk => chunk.DumpQueryDocCount);
+            downloadCount = mu.SourceCountDuringCopy; // recompute from chunks to avoid incremental tracking
+
+            mu.DumpGap = Helper.GetMigrationUnitDocCount(mu) - downloadCount;
+            mu.DumpPercent = 100;
+            mu.DumpComplete = true;
+
+            MigrationJobContext.SaveMigrationUnit(mu, true);
+
+            // BulkCopyEndedOn will be set after restore completes, not here
+        }
+
+        #endregion
+
+        #region Helper Methods for Dump
+
+        private bool CheckDiskSpaceForDump(MigrationUnit mu, string folder, string targetConnectionString, string dbName, string colName)
+        {
+            bool continueDownloads;
+            double pendingUploadsGB = 0;
+            double freeSpaceGB = 0;
+            
+            while (true)
+            {
+                // Check for controlled pause
+                if (MigrationJobContext.ControlledPauseRequested)
+                {
+                    _log.WriteLine("Controlled pause detected - exiting dump");
+                    return false;
+                }
+                
+                continueDownloads = Helper.CanProceedWithDownloads(folder, _config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB);
+                if (!continueDownloads)
+                {
+                    _log.WriteLine($"{dbName}.{colName} added to upload queue");
+                    _migrationUnitsPendingUpload.Add(mu.Id);
+                    _ = Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
+
+                    _log.WriteLine($"Disk space is running low, with only {freeSpaceGB}GB available. Pending jobList are using {pendingUploadsGB}GB of space. Free up disk space by deleting unwanted jobList. Alternatively, you can scale up tp Premium App Service plan, which will reset the WebApp. New downloads will resume in 5 minutes...", LogType.Error);
+
+                    try { Task.Delay(TimeSpan.FromMinutes(5), _cts.Token).Wait(_cts.Token); }
+                    catch (OperationCanceledException) { return false; }
+                }
+                else break;
+            }
+            
+            return true;
+        }
+
+        private long BuildDumpQuery(MigrationUnit mu, int chunkIndex, IMongoCollection<BsonDocument> collection, 
+            string dbName, string colName, ref string args)
+        {
+            long docCount = 0;
+            
+            if (mu.MigrationChunks.Count > 1)
+            {
+                docCount = BuildMultiChunkDumpQuery(mu, chunkIndex, collection, dbName, colName, ref args);
+            }
+            else if (mu.MigrationChunks.Count == 1 && !string.IsNullOrEmpty(mu.UserFilter))
+            {
+                docCount = BuildSingleChunkWithFilterDumpQuery(mu, collection, ref args);
+            }
+            else
+            {
+                docCount = Helper.GetMigrationUnitDocCount(mu);
+                mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
+            }
+            
+            return docCount;
+        }
+
+        private long BuildMultiChunkDumpQuery(MigrationUnit mu, int chunkIndex, IMongoCollection<BsonDocument> collection,
+            string dbName, string colName, ref string args)
+        {
+            var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[chunkIndex].Gte!, mu.MigrationChunks[chunkIndex].Lt!, mu.MigrationChunks[chunkIndex].DataType);
+            var gte = bounds.gte;
+            var lt = bounds.lt;
+
+            _log.WriteLine($"{dbName}.{colName}-Chunk [{chunkIndex}] generating query");
+
+            BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
+            string query = MongoHelper.GenerateQueryString(gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu);
+            long docCount = MongoHelper.GetDocumentCount(collection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, userFilterDoc, mu.DataTypeFor_Id.HasValue);
+            mu.MigrationChunks[chunkIndex].DumpQueryDocCount = docCount;
+            _log.WriteLine($"Count for {dbName}.{colName}[{chunkIndex}] is {docCount}");
+
+            string extendedQuery = MongoQueryConverter.ConvertMondumpFilter(query, gte, lt, mu.MigrationChunks[chunkIndex].DataType);
+            args = $"{args} --query=\"{extendedQuery}\"";
+            
+            return docCount;
+        }
+
+        private long BuildSingleChunkWithFilterDumpQuery(MigrationUnit mu, IMongoCollection<BsonDocument> collection, ref string args)
+        {
+            BsonDocument? userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
+            long docCount = MongoHelper.GetActualDocumentCount(collection, mu);
+            string query = MongoHelper.GenerateQueryString(userFilterDoc);
+            args = $"{args} --query=\"{query}\"";
+            
+            return docCount;
+        }
+
+        #endregion
+
+        #region Helper Methods for Restore
+
+        private List<ChunkWorkItem> BuildRestoreWorkQueue(MigrationUnit mu)
+        {
+            return mu.MigrationChunks
+                .Select((chunk, index) => new ChunkWorkItem
+                {
+                    ChunkIndex = index,
+                    MigrationUnit = mu,
+                    Chunk = chunk,
+                    QueuedAt = DateTime.UtcNow
+                })
+                .Where(item => item.Chunk.IsUploaded != true && item.Chunk.IsDownloaded == true)
+                .OrderBy(item => item.ChunkIndex)
+                .ToList();
+        }
+
+        private RestoreResult? ValidateDumpCompletion(MigrationUnit mu)
+        {
+            // Check if mu.DumpComplete == true but some chunks have IsDownloaded = false
+            if (mu.DumpComplete && mu.MigrationChunks.Any(c => c.IsDownloaded != true))
+            {
+                _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has incomplete chunks. Reverting its download status and triggering a controlled pause. Resume the job to resolve.", LogType.Warning);
+                mu.DumpComplete = false;
+
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                return new RestoreResult
+                {
+                    Result = TaskResult.Canceled,
+                    RestoredChunks = 0,
+                    RestoredDocs = 0
+                };
+            }
+
+            return null;
+        }
+
+        private RestoreResult HandleCompletedRestore(MigrationUnit mu, string dbName, string colName, ref int restoredChunks, ref long restoredDocs)
+        {
+            _log.WriteLine($"{mu.MigrationChunks.Count} chunks in {dbName}.{colName}");
+
+            // Count already restored chunks
+            long dumpedDocs = 0;
+            foreach (var chunk in mu.MigrationChunks.Where(c => c.IsUploaded == true))
+            {
+                restoredChunks++;
+                restoredDocs += chunk.RestoredSuccessDocCount;
+                dumpedDocs += chunk.DumpQueryDocCount;
+            }
+
+            _log.WriteLine($"{restoredChunks} chunks restored for {mu.DatabaseName}.{mu.CollectionName}, Restored documents: {restoredDocs}", LogType.Verbose);
+
+            if (restoredDocs < dumpedDocs)
+            {
+                _log.WriteLine($"Only {restoredDocs} out of {dumpedDocs} documents restored. Resetting chunk states for all chunks for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Warning);
+                foreach (var chunk in mu.MigrationChunks)
+                {
+                    chunk.IsUploaded = false;
+                    chunk.RestoredSuccessDocCount = 0;
+                }
+
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                MigrationJobContext.ControlledPauseRequested = true;
+
+                // Return 0 to trigger retry since we reset the chunks
+                return new RestoreResult
+                {
+                    Result = TaskResult.Canceled,
+                    RestoredChunks = 0,
+                    RestoredDocs = 0
+                };
+            }
+
+            // Return the actual count of restored chunks, not 0
+            return new RestoreResult
+            {
+                Result = TaskResult.Success,
+                RestoredChunks = restoredChunks,
+                RestoredDocs = restoredDocs
+            };
+        }
+
+        private Task<TaskResult> HandleRestoreChunkSuccess(MigrationUnit mu, int chunkIndex, string folder, 
+            string targetConnectionString, string dbName, string colName, long docCount)
+        {
+            bool skipFinalize = false;
+
+            if (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount > 0)
+            {
+                skipFinalize = ValidateRestoredChunkDocumentCount(mu, chunkIndex, targetConnectionString, dbName, colName);
+            }
+            
+            // mongorestore doesn't report on doc count sometimes. hence we need to calculate based on targetCount percent
+            mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = docCount - (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount + mu.MigrationChunks[chunkIndex].SkippedAsDuplicateCount);
+            _log.WriteLine($"{dbName}.{colName}[{chunkIndex}] uploader processing completed");
+
+            if (!skipFinalize)
+            {
+                return FinalizeRestoreChunk(mu, chunkIndex, folder);
+            }
+            else
+            {
+                return Task.FromResult(TaskResult.Retry);
+            }
+        }
+
+        private bool ValidateRestoredChunkDocumentCount(MigrationUnit mu, int chunkIndex, 
+            string targetConnectionString, string dbName, string colName)
+        {
+            if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+                _targetClient = MongoClientFactory.Create(_log, targetConnectionString);
+
+            try
+            {
+                var targetDb = _targetClient!.GetDatabase(mu.DatabaseName);
+                var targetCollection = targetDb.GetCollection<BsonDocument>(mu.CollectionName);
+
+                var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[chunkIndex].Gte!, mu.MigrationChunks[chunkIndex].Lt!, mu.MigrationChunks[chunkIndex].DataType);
+                var gte = bounds.gte;
+                var lt = bounds.lt;
+
+                // get count in target collection
+                mu.MigrationChunks[chunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(targetCollection, gte, lt, mu.MigrationChunks[chunkIndex].DataType, MongoHelper.ConvertUserFilterToBSONDocument(mu.UserFilter!), mu.DataTypeFor_Id.HasValue);
+
+                // checking if source and target doc counts are same or more
+                if (mu.MigrationChunks[chunkIndex].DocCountInTarget >= mu.MigrationChunks[chunkIndex].DumpQueryDocCount)
+                {
+                    _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] No documents missing, count in Target: {mu.MigrationChunks[chunkIndex].DocCountInTarget}");
+                    mu.MigrationChunks[chunkIndex].SkippedAsDuplicateCount = mu.MigrationChunks[chunkIndex].RestoredFailedDocCount;
+                    mu.MigrationChunks[chunkIndex].RestoredFailedDocCount = 0;
+                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    return false; // Don't skip finalize
+                }
+                else
+                {
+                    // since count is mismatched, we will reprocess the chunk
+                    _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] Documents missing, Chunk will be reprocessed", LogType.Error);
+                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    return true; // Skip finalize
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Restore for {dbName}.{colName}[{chunkIndex}] encountered error while counting documents on target. Chunk will be reprocessed. Details: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                return true; // Skip finalize
+            }
+        }
+
+        private Task<TaskResult> FinalizeRestoreChunk(MigrationUnit mu, int chunkIndex, string folder)
+        {
+            mu.MigrationChunks[chunkIndex].IsUploaded = true;
+            MigrationJobContext.SaveMigrationUnit(mu, false);
+
+            try
+            {
+                File.Delete($"{Path.Combine(folder, $"{chunkIndex}.bson")}");
+            }
+            catch
+            {
+                // Ignore file delete errors
+            }
+            return Task.FromResult(TaskResult.Success);
+        }
+
+        private Task<TaskResult>? SimulateRestoreChunk(MigrationUnit mu, int chunkIndex, double initialPercent, double contributionFactor)
+        {
+            // Check if simulation mode is enabled
+            if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+            {
+                return null; // Not in simulation mode, proceed with normal restore
+            }
+            
+            // Simulate successful restore
+            mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = mu.MigrationChunks[chunkIndex].DumpQueryDocCount;
+            mu.MigrationChunks[chunkIndex].RestoredFailedDocCount = 0;
+            mu.MigrationChunks[chunkIndex].IsUploaded = true;
+            
+            // Update progress
+            double progress = initialPercent + (contributionFactor * 100);
+            mu.RestorePercent = Math.Min(progress, 100);
+            
+            _log.WriteLine($"Simulation mode: Chunk {chunkIndex} restore simulated - {mu.RestorePercent:F2}% complete (RestorePercent={mu.RestorePercent})");
+
+            MigrationJobContext.SaveMigrationUnit(mu, true);
+
+            // Small delay to simulate processing time (50ms per chunk)
+            try { Task.Delay(50, _cts.Token).Wait(_cts.Token); } catch { }
+            
+            return Task.FromResult(TaskResult.Success);
+        }
+
+        private int GetInsertionWorkersCount()
+        {
+            return WorkerCountHelper.GetInsertionWorkersCount(
+                MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection,
+                MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers
+            );
+        }
+
+        private Task<TaskResult>? ValidateDumpFileExists(MigrationUnit mu, int chunkIndex, string dumpFilePath)
+        {
+            // Data integrity check - force controlled pause if dump file missing
+            if (!File.Exists(dumpFilePath))
+            {
+                _log.WriteLine($"Chunk file missing for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] during restore. Triggering controlled pause. Resume job to continue.", LogType.Warning);
+                mu.MigrationChunks[chunkIndex].IsDownloaded = false;
+                mu.DumpComplete = false;
+
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                MigrationJobContext.ControlledPauseRequested = true;
+                return Task.FromResult(TaskResult.Canceled);
+            }
+            
+            return null; // File exists, validation passed
+        }
+
+        #endregion
     }
 }

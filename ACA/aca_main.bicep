@@ -108,7 +108,7 @@ resource containerAppEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' 
         name: workloadProfileName
         workloadProfileType: workloadProfileType
         minimumCount: 1
-        maximumCount: 3
+        maximumCount: 1
       }
     ]
   }

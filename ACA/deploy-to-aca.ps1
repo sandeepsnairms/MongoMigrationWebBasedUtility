@@ -162,6 +162,123 @@ Remove-Variable connString, secureConnString -ErrorAction Ignore
 
 Write-Host "`n=== Deployment Complete ===" -ForegroundColor Cyan
 
+# Step 5: Verify the new image becomes active
+Write-Host "`nStep 5: Verifying new image deployment..." -ForegroundColor Yellow
+$ErrorActionPreference = 'Continue'
+
+# Get the expected replica count from scaling configuration
+$scaleConfig = az containerapp show `
+    --name $ContainerAppName `
+    --resource-group $ResourceGroupName `
+    --query "properties.template.scale" `
+    --output json `
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' } | ConvertFrom-Json
+
+$expectedReplicaCount = 1
+if ($scaleConfig.minReplicas) {
+    $expectedReplicaCount = $scaleConfig.minReplicas
+}
+
+Write-Host "Expected replica count: $expectedReplicaCount (minReplicas: $($scaleConfig.minReplicas), maxReplicas: $($scaleConfig.maxReplicas))" -ForegroundColor Cyan
+
+# Get the deployed image name
+$imageName = "$AcrName.azurecr.io/$($AcrRepository):$($ImageTag)"
+
+# Wait for the new container to become ready
+Write-Host "`nWaiting for container to become active and healthy..." -ForegroundColor Yellow
+$maxAttempts = 60  # 10 minutes (60 * 10 seconds)
+$attemptCount = 0
+$isReady = $false
+
+while ($attemptCount -lt $maxAttempts -and -not $isReady) {
+    $attemptCount++
+    Write-Host "Checking deployment status (attempt $attemptCount/$maxAttempts)..." -ForegroundColor Gray
+    
+    # Get the active revision
+    $activeRevision = az containerapp revision list `
+        --name $ContainerAppName `
+        --resource-group $ResourceGroupName `
+        --query "[?properties.active==``true``].name" `
+        --output tsv `
+        2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
+    
+    if ($activeRevision -and $LASTEXITCODE -eq 0) {
+        # Get comprehensive revision details
+        $revisionOutput = az containerapp revision show `
+            --name $ContainerAppName `
+            --resource-group $ResourceGroupName `
+            --revision $activeRevision `
+            --output json `
+            2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' -and $_ -notmatch 'ERROR' }
+        
+        if ($LASTEXITCODE -eq 0 -and $revisionOutput) {
+            try {
+                $revisionInfo = $revisionOutput | ConvertFrom-Json
+                
+                $runningState = $revisionInfo.properties.runningState
+                $provisioningState = $revisionInfo.properties.provisioningState
+                $healthState = $revisionInfo.properties.healthState
+                $activeReplicaCount = $revisionInfo.properties.replicas
+                
+                # Check if the new image is actually running
+                $currentImage = $revisionInfo.properties.template.containers[0].image
+                
+                Write-Host "  Running State: $runningState | Provisioning: $provisioningState | Health: $healthState | Replicas: $activeReplicaCount" -ForegroundColor Gray
+                Write-Host "  Current Image: $currentImage" -ForegroundColor Gray
+                
+                # Verify all conditions are met
+                $imageMatches = $currentImage -eq $imageName
+                $statesOk = ($runningState -eq "Running") -and ($provisioningState -eq "Provisioned") -and ($healthState -eq "Healthy")
+                $correctReplicaCount = $activeReplicaCount -eq $expectedReplicaCount
+                
+                if ($imageMatches -and $statesOk -and $correctReplicaCount) {
+                    $isReady = $true
+                    Write-Host "`nContainer is fully active and healthy!" -ForegroundColor Green
+                    Write-Host "  Running state: $runningState" -ForegroundColor Green
+                    Write-Host "  Provisioning state: $provisioningState" -ForegroundColor Green
+                    Write-Host "  Health state: $healthState" -ForegroundColor Green
+                    Write-Host "  Active replicas: $activeReplicaCount (expected: $expectedReplicaCount)" -ForegroundColor Green
+                    Write-Host "  Image verified: $currentImage" -ForegroundColor Green
+                } else {
+                    if (-not $imageMatches) {
+                        Write-Host "  Waiting for image to be deployed..." -ForegroundColor Yellow
+                    }
+                    if (-not $statesOk) {
+                        Write-Host "  Waiting for container to reach healthy state..." -ForegroundColor Yellow
+                    }
+                    if (-not $correctReplicaCount) {
+                        if ($activeReplicaCount -gt $expectedReplicaCount) {
+                            Write-Host "  Waiting for replicas to stabilize ($activeReplicaCount -> $expectedReplicaCount)..." -ForegroundColor Yellow
+                        } else {
+                            Write-Host "  Waiting for replicas to start ($activeReplicaCount -> $expectedReplicaCount)..." -ForegroundColor Yellow
+                        }
+                    }
+                    Write-Host "  Checking again in 10 seconds..." -ForegroundColor Gray
+                    Start-Sleep -Seconds 10
+                }
+            }
+            catch {
+                Write-Host "  Error parsing revision info. Retrying in 10 seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 10
+            }
+        } else {
+            Write-Host "  Revision info not available yet. Waiting..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 10
+        }
+    } else {
+        Write-Host "  Waiting for active revision..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
+    }
+}
+
+if (-not $isReady) {
+    Write-Host "`nWarning: Container did not become fully active within expected time." -ForegroundColor Yellow
+    Write-Host "The deployment may still be in progress. Please check the Azure Portal for more details." -ForegroundColor Yellow
+}
+
+$ErrorActionPreference = 'Stop'
+Write-Host ""
+
 # Retrieve and display the application URL
 Write-Host "Retrieving application URL..." -ForegroundColor Yellow
 $ErrorActionPreference = 'Continue'
