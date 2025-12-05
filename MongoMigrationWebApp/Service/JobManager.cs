@@ -289,7 +289,7 @@ namespace MongoMigrationWebApp.Service
         /// </summary>
         public bool IsControlledPauseRequested()
         {
-            return MigrationWorker?.ControlledPauseRequested ?? false;
+            return MigrationJobContext.ControlledPauseRequested;
         }
 
         public Task CancelMigration(string id)

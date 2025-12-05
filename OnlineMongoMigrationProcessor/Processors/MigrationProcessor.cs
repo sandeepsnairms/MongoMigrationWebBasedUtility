@@ -19,8 +19,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected MigrationSettings _config;
         protected CancellationTokenSource _cts;
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
-        protected bool _postUploadCSProcessing = false;
-        protected bool _controlledPauseRequested = false;
+        protected bool _postUploadCSProcessing = false;        
         protected Log _log;
 
         public bool ProcessRunning { get; set; }
@@ -72,7 +71,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         /// </summary>
         public virtual void InitiateControlledPause()
         {
-            _controlledPauseRequested = true;
+            MigrationJobContext.ControlledPauseRequested = true;
             _log.WriteLine("Controlled pause initiated in MigrationProcessor");
         }
 
@@ -230,7 +229,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                             RunChangeStreamProcessorForAllCollections(ctx.TargetConnectionString);
 
                             // Don't mark as completed if this is a controlled pause
-                            if (!_controlledPauseRequested)
+                            if (!MigrationJobContext.ControlledPauseRequested)
                             {
                                 _log.WriteLine($"{MigrationJobContext.CurrentlyActiveJob.Id} completed.");
                                 MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;

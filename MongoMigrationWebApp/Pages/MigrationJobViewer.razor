@@ -516,8 +516,24 @@ else if (@_showLogBackupFile)
     [Parameter]
     public string JobId { get; set; } = string.Empty;
 
+    private MigrationJob _migrationJob;
+
     [Parameter]
-    public MigrationJob? MigrationJob { get; set; }
+    // MigrationJob property that checks for active job context
+    public MigrationJob? MigrationJob
+    {   get
+        {
+            if (_migrationJob != null && _migrationJob.Id == MigrationJobContext.ActiveMigrationJobId)
+                return MigrationJobContext.CurrentlyActiveJob;
+            else
+                return _migrationJob;
+        }
+        set
+        {
+            if (value != null)
+                _migrationJob = value;
+        }
+    }
 
     private LogBucket? LogBucket { get; set; }
     private List<LogObject> VerboseMessages { get; set; } = new();

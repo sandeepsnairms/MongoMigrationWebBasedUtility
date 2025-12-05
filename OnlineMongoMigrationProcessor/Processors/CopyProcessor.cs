@@ -149,7 +149,7 @@ namespace OnlineMongoMigrationProcessor
                 for (int i = 0; i < mu.MigrationChunks.Count; i++)
                 {
                     // Check for controlled pause before starting new chunk
-                    if (_controlledPauseRequested)
+                    if (MigrationJobContext.ControlledPauseRequested)
                     {
                         _log.WriteLine($"Controlled pause: Stopping before chunk {i}, {mu.MigrationChunks.Count - i} chunks not started");
                         break;
@@ -185,7 +185,7 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 // Check if controlled pause completed
-                if (_controlledPauseRequested && mu.DumpComplete)
+                if (MigrationJobContext.ControlledPauseRequested && mu.DumpComplete)
                 {
                     _log.WriteLine("Controlled pause completed for CopyProcessor");
                     StopProcessing();

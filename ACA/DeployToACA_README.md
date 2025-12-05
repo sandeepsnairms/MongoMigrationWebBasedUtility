@@ -54,19 +54,33 @@ For a streamlined deployment experience, use the provided PowerShell script:
 # Navigate to the repository directory
 cd c:\Work\GitHub\repos\MongoMigrationWebBasedUtility
 
-# Run the deployment script with default 8 vCores and 32GB RAM
+# Minimal deployment (auto-generates ACR, Storage, StateStoreAppID, and AcrRepository)
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "MongoMigrationRGTest" `
+  -ContainerAppName "mongomigration" `
+  -Location "eastus"
+
+# Full deployment with custom names and existing resources
 .\deploy-to-aca.ps1 `
   -ResourceGroupName "MongoMigrationRGTest" `
   -ContainerAppName "mongomigration" `
   -AcrName "mongomigrationacr" `
+  -AcrRepository "myapp" `
+  -StorageAccountName "mongomigstg" `
   -StateStoreAppID "aca_server1" `
   -Location "eastus" `
   -ImageTag "latest"
 ```
 
+**Using Existing Azure Resources:**
+- If ACR exists, the script uses it; otherwise creates a new one
+- If Storage Account exists, the script uses it; otherwise creates a new one
+- If the specified image:tag exists in ACR, the script skips building and uses it directly
+- Auto-generated names use the format: `<ContainerAppName><suffix>` (e.g., `mongomigrationacr`, `mongomigrationstg`)
+
 The script will:
 1. Deploy infrastructure using Bicep (ACR, Container Apps Environment, Storage Account)
-2. Build and push Docker image to ACR
+2. Check if image exists in ACR; if not, build and push Docker image
 3. Securely prompt for DocumentDB connection string
 4. Deploy Container App with final configuration and environment variables
 5. Display the application URL with a clickable launch link
@@ -76,16 +90,28 @@ The script will:
 After initial deployment, use the update script for faster deployments:
 
 ```powershell
-# Update application code without changing infrastructure or secrets
+# Minimal update (uses same ACR and repository as initial deployment)
+.\update-aca-app.ps1 `
+  -ResourceGroupName "MongoMigrationRGProd" `
+  -ContainerAppName "mongomigration-prod" `
+  -AcrName "mongomigprod1234"
+
+# Update with custom repository and tag
 .\update-aca-app.ps1 `
   -ResourceGroupName "MongoMigrationRGProd" `
   -ContainerAppName "mongomigration-prod" `
   -AcrName "mongomigprod1234" `
+  -AcrRepository "customrepo" `
   -ImageTag "v1.1"
 ```
 
+**Using Existing Images:**
+- If the specified image:tag exists in ACR, the script uses it directly without rebuilding
+- This saves time when deploying the same image across multiple environments
+- AcrRepository defaults to ContainerAppName if not specified
+
 The update script:
-1. Builds and pushes new Docker image to ACR
+1. Checks if image exists in ACR; if not, builds and pushes new Docker image
 2. Updates Container App with new image
 3. Preserves all environment variables and secrets
 4. Displays the application URL with a clickable launch link
@@ -172,20 +198,22 @@ Remove-Variable connString, secureConnString
 ### Required Parameters
 
 | Parameter | Description | Example |
-|-----------|-------------|---------|
+|-----------|-------------|---------|------
 | `ResourceGroupName` | Name of the Azure resource group | `MongoMigrationRG` |
 | `ContainerAppName` | Name of the Container App | `mongomigration` |
-| `AcrName` | Name of the Azure Container Registry (must be globally unique, alphanumeric only) | `mongomigrationacr001` |
-| `StateStoreAppID` | Application identifier for state storage | `aca_server1` |
 | `Location` | Azure region (must support Container Apps) | `eastus` |
 
 ### Optional Parameters
 
-| Parameter | Type | Default | Range | Description |
-|-----------|------|---------|-------|-------------|
-| `VCores` | int | `8` | 1-32 | Number of vCores for the container |
-| `MemoryGB` | int | `32` | 2-64 | Memory in GB for the container |
-| `ImageTag` | string | `latest` | - | Docker image tag to deploy |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `AcrName` | string | `<ContainerAppName>acr` | Name of the Azure Container Registry (must be globally unique, alphanumeric only). Uses existing ACR if found, otherwise creates new. |
+| `AcrRepository` | string | `<ContainerAppName>` | Repository name within ACR for storing images. Allows multiple apps to share the same ACR. |
+| `StorageAccountName` | string | `<ContainerAppName>stg` | Name of the Storage Account. Uses existing account if found, otherwise creates new. |
+| `StateStoreAppID` | string | `<ContainerAppName>` | Application identifier for state storage in DocumentDB. |
+| `ImageTag` | string | `latest` | Docker image tag to deploy. Script checks if image exists before building. |
+| `VCores` | int | `8` (range: 1-32) | Number of vCores for the container. |
+| `MemoryGB` | int | `32` (range: 2-64) | Memory in GB for the container. |
 
 ## Resource Configurations
 
@@ -224,7 +252,7 @@ Azure Container Apps with Dedicated Plan provides configurable high-performance 
 - ✅ Configurable high CPU and memory (up to 32 vCores, 64GB)
 - ✅ Persistent storage that survives deployments
 - ✅ Enterprise networking with VNet integration
-- ✅ Built-in ingress controller with HTTPS
+- ✅ Built-in ingress controller with automatic HTTPS/TLS (HTTP also supported)
 - ✅ Managed identity for secure resource access
 
 **Note**: Auto-scaling is not supported. The application runs with a fixed single replica to ensure data consistency during migration operations.
@@ -234,11 +262,21 @@ Azure Container Apps with Dedicated Plan provides configurable high-performance 
 ### Development Setup (Small Workload)
 
 ```powershell
-# Deploy with reduced resources for development and testing
+# Minimal deployment - auto-generates ACR, Storage, and StateStore names
+.\deploy-to-aca.ps1 `
+  -ResourceGroupName "rg-mongomig-dev" `
+  -ContainerAppName "mongomigration-dev" `
+  -Location "eastus" `
+  -VCores 4 `
+  -MemoryGB 16 `
+  -ImageTag "dev"
+
+# Or with custom names to use existing resources
 .\deploy-to-aca.ps1 `
   -ResourceGroupName "rg-mongomig-dev" `
   -ContainerAppName "mongomigration-dev" `
   -AcrName "mongomigdevacr" `
+  -StorageAccountName "mongomigdevstg" `
   -StateStoreAppID "dev-migration-01" `
   -Location "eastus" `
   -VCores 4 `
@@ -249,16 +287,24 @@ Azure Container Apps with Dedicated Plan provides configurable high-performance 
 ### High-Performance Migration Setup (Large Workload)
 
 ```powershell
-# Deploy with maximum resources for large migrations
+# Deploy with maximum resources - reuse existing ACR and storage
 .\deploy-to-aca.ps1 `
   -ResourceGroupName "rg-mongomig-perf" `
   -ContainerAppName "mongomigration-perf" `
-  -AcrName "mongomigperfacr" `
+  -AcrName "sharedproductionacr" `
+  -AcrRepository "mongomig-perf" `
+  -StorageAccountName "sharedprodstg" `
   -StateStoreAppID "perf-migration-01" `
   -Location "eastus" `
   -VCores 32 `
   -MemoryGB 64 `
-  -ImageTag "latest"
+  -ImageTag "v1.0"
+
+# Script will:
+# - Use existing ACR "sharedproductionacr" (no creation needed)
+# - Store image in "mongomig-perf" repository within the ACR
+# - Use existing storage account "sharedprodstg" (no creation needed)
+# - Check if image v1.0 exists; if yes, skip build and deploy directly
 ```
 
 ## Network Security (Optional)
@@ -493,24 +539,34 @@ az deployment group show `
 For updating only the application image without resetting environment variables or secrets, use the dedicated update script:
 
 ```powershell
-# Update application with new code changes
+# Update using existing image (no rebuild if image exists)
 .\update-aca-app.ps1 `
   -ResourceGroupName "MongoMigrationRGTest" `
   -ContainerAppName "mongomigration" `
   -AcrName "mongomigrationacr" `
   -ImageTag "v1.1"
+
+# Update with custom repository
+.\update-aca-app.ps1 `
+  -ResourceGroupName "MongoMigrationRGTest" `
+  -ContainerAppName "mongomigration" `
+  -AcrName "sharedacr" `
+  -AcrRepository "myapp" `
+  -ImageTag "v1.1"
 ```
 
 The update script will:
-1. Build and push the new Docker image to ACR
-2. Update the Container App with the new image
-3. Preserve all existing environment variables and secrets
-4. Display the application URL with a clickable launch link
+1. Check if image exists in ACR; if yes, skip build and use existing image
+2. If image doesn't exist, build and push the new Docker image to ACR
+3. Update the Container App with the new image
+4. Preserve all existing environment variables and secrets
+5. Display the application URL with a clickable launch link
 
 **Advantages of using the update script:**
 - ✅ Faster deployment (skips infrastructure provisioning)
 - ✅ No need to re-enter connection strings or secrets
 - ✅ Environment variables remain unchanged
+- ✅ Intelligent image reuse - skips rebuild if image already exists
 - ✅ Simpler command with fewer parameters required
 
 ### Update with Full Redeployment
@@ -643,7 +699,7 @@ az storage file list `
 - ✅ **Secure Environment Variables** - Connection strings stored as secrets
 - ✅ **VNet Integration** - Private networking with optional public ingress
 - ✅ **ACR Integration** - Secure image pull using managed identity
-- ✅ **HTTPS by Default** - Built-in TLS termination
+- ✅ **HTTPS Support** - Automatic TLS certificate provisioning (both HTTP and HTTPS enabled by default)
 
 ## Additional Resources
 

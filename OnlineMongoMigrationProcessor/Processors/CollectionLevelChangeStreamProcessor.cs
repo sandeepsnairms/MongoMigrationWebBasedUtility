@@ -481,6 +481,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         mu.CursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
                         mu.ResumeToken = accumulatedChangesInColl.LatestResumeToken;
+                        MigrationJobContext.SaveMigrationUnit(mu,true);
                     }
                     else
                     {
@@ -496,6 +497,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         mu.SyncBackCursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
                         mu.SyncBackResumeToken = accumulatedChangesInColl.LatestResumeToken;
+                        MigrationJobContext.SaveMigrationUnit(mu,true);
                     }
                     else
                     {
@@ -631,9 +633,10 @@ namespace OnlineMongoMigrationProcessor
                 // TimeoutException is already handled in inner catch block
                 // Re-throw to allow Task.Run wrapper to track consecutive timeouts
                 throw;
-            }            catch (OperationCanceledException ex)
+            }
+            catch (OperationCanceledException ex)
             {
-                _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in WatchCollection for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Info);
+                _log.WriteLine($"{_syncBackPrefix}OperationCanceledException in WatchCollection for {sourceCollection!.CollectionNamespace}: {ex.Message}", LogType.Debug);
             }
             catch (Exception ex)
             {
@@ -687,21 +690,21 @@ namespace OnlineMongoMigrationProcessor
         {
             return await Task.Run(() =>
             {
-                _log.WriteLine($"[DEBUG] Starting Watch() for {collectionKey}...", LogType.Debug);
+                _log.WriteLine($"Starting Watch() for {collectionKey}...", LogType.Debug);
                 try
                 {
                     var cursor = sourceCollection.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
-                    _log.WriteLine($"[DEBUG] Successfully created Watch cursor for {collectionKey}.", LogType.Debug);
+                    _log.WriteLine($"Successfully created Watch cursor for {collectionKey}.", LogType.Debug);
                     return cursor;
                 }
-                catch (OperationCanceledException)
+                catch(Exception ex) when (ex is OperationCanceledException || ex is TimeoutException)
                 {
-                    _log.WriteLine($"[DEBUG] Watch() cancelled for {collectionKey}.", LogType.Debug);
+                    _log.WriteLine($"Watch() cancelled for {collectionKey}.", LogType.Debug);
                     throw;
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"[ERROR] Exception in Watch() for {collectionKey}: {ex}", LogType.Error);
+                    _log.WriteLine($"Exception in Watch() for {collectionKey}: {ex}", LogType.Error);
                     throw;
                 }
             }, cancellationToken);

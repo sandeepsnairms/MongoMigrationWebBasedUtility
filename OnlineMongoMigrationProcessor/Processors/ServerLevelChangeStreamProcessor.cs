@@ -418,6 +418,8 @@ namespace OnlineMongoMigrationProcessor
                                     migrationUnit.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
                                     MigrationJobContext.CurrentlyActiveJob.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
                                 }
+                                MigrationJobContext.SaveMigrationUnit(migrationUnit,true);
+
                                 _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write", LogType.Debug);
                             }
                         }

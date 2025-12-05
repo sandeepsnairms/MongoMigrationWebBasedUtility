@@ -26,6 +26,8 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static string ActiveMigrationJobId { get; set; }
 
+        public static bool ControlledPauseRequested { get; set; } = false;
+
         private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
         private static readonly Dictionary<string, string> _targetConnectionStrings = new();
 

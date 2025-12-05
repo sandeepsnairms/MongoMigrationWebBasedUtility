@@ -484,7 +484,7 @@ namespace OnlineMongoMigrationProcessor
             _currentCollection = null;
             
             // Check for controlled pause - workers have finished, now stop
-            if (_controlledPauseRequested)
+            if (MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine("Controlled pause - dump workers completed, stopping processor", LogType.Debug);
                 StopProcessing(updateStatus: true);
@@ -530,7 +530,7 @@ namespace OnlineMongoMigrationProcessor
             while (true)
             {
                 // Check for controlled pause first
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
                     _log.WriteLine($"Dump worker {workerId}: Controlled pause active - exiting", LogType.Debug);
                     break;
@@ -558,7 +558,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     
                     // Check again after dequeue in case pause was requested
-                    if (_controlledPauseRequested)
+                    if (MigrationJobContext.ControlledPauseRequested)
                     {
                         _log.WriteLine($"Dump worker {workerId}: Controlled pause active - returning at chunk {workItem.ChunkIndex}", LogType.Debug);
                         break;
@@ -637,7 +637,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"Dump worker {workerId} completed");
             
             // Check if controlled pause completed
-            if (_controlledPauseRequested && _dumpQueue.IsEmpty)
+            if (MigrationJobContext.ControlledPauseRequested && _dumpQueue.IsEmpty)
             {
                 _log.WriteLine("All dump chunks completed during controlled pause");
             }
@@ -684,7 +684,7 @@ namespace OnlineMongoMigrationProcessor
                 // Check if mu.DumpComplete == true but some chunks have IsDownloaded = false
                 if(mu.DumpComplete && mu.MigrationChunks.Any(c => c.IsDownloaded != true))
                 {
-                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} marked as downloaded but has chunks not yet downloaded. Resetting it as not downloaded and requesting controlled pause.", LogType.Warning);
+                    _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} has incomplete chunks. Reverting its download status and triggering a controlled pause. Resume the job to resolve.", LogType.Warning);
                     mu.DumpComplete = false;
 
                     MigrationJobContext.SaveMigrationUnit(mu, true);
@@ -725,7 +725,7 @@ namespace OnlineMongoMigrationProcessor
                         MigrationJobContext.SaveMigrationUnit(mu, true);
 
 
-                        _controlledPauseRequested=true;
+                        MigrationJobContext.ControlledPauseRequested=true;
 
                         // Return 0 to trigger retry since we reset the chunks
                         return new RestoreResult
@@ -805,7 +805,7 @@ namespace OnlineMongoMigrationProcessor
                 _currentFolder = null;
 
                 // Check for controlled pause - workers have finished, now stop
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
                     _log.WriteLine("Controlled pause - restore workers completed, stopping processor");
                     StopProcessing(updateStatus: true);
@@ -891,7 +891,7 @@ namespace OnlineMongoMigrationProcessor
             while (true)
             {
                 // Check for controlled pause first
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
                     _log.WriteLine($"Restore worker {workerId}: Controlled pause active - exiting");
                     break;
@@ -919,7 +919,7 @@ namespace OnlineMongoMigrationProcessor
                     }
                     
                     // Check again after dequeue in case pause was requested
-                    if (_controlledPauseRequested)
+                    if (MigrationJobContext.ControlledPauseRequested)
                     {
                         // Put the work item back for later
                         //restoreQueue.Enqueue(workItem);
@@ -999,7 +999,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"Restore worker {workerId} completed");
             
             // Check if controlled pause completed
-            if (_controlledPauseRequested && restoreQueue.IsEmpty)
+            if (MigrationJobContext.ControlledPauseRequested && restoreQueue.IsEmpty)
             {
                 _log.WriteLine("All restore chunks completed during controlled pause");
             }
@@ -1045,7 +1045,7 @@ namespace OnlineMongoMigrationProcessor
             while (true)
             {
                 // Check for controlled pause
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
                     _log.WriteLine("Controlled pause detected - exiting dump");
                     return Task.FromResult(TaskResult.Canceled);
@@ -1123,7 +1123,7 @@ namespace OnlineMongoMigrationProcessor
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterDumpProcess(pid),
                     onProcessEnded: (pid) => UnregisterDumpProcess(pid),
-                    isControlledPauseRequested: () => _controlledPauseRequested
+                    isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
                 ), _cts.Token);
                 task.Wait(_cts.Token);
                 bool result = task.Result;
@@ -1252,11 +1252,13 @@ namespace OnlineMongoMigrationProcessor
 
                 if (!File.Exists(dumpFilePath)) //data integrity check,force controlled pause if dump file missing
                 {
-                    _log.WriteLine($"Restore file for {dbName}.{colName}[{chunkIndex}] not found at {dumpFilePath}, Controlled pause requested.", LogType.Error);
+                    _log.WriteLine($"Chunk file missing for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] during restore. Triggering controlled pause. Resume job to continue.", LogType.Warning);
+                    mu.MigrationChunks[chunkIndex].IsDownloaded = false;
                     mu.DumpComplete = false;
+
                     MigrationJobContext.SaveMigrationUnit(mu, true);
 
-                    _controlledPauseRequested = true;
+                    MigrationJobContext.ControlledPauseRequested = true;
                     return Task.FromResult(TaskResult.Canceled);
                 }
 
@@ -1273,7 +1275,7 @@ namespace OnlineMongoMigrationProcessor
                     _cts.Token,
                     onProcessStarted: (pid) => RegisterRestoreProcess(pid),
                     onProcessEnded: (pid) => UnregisterRestoreProcess(pid),
-                    isControlledPauseRequested: () => _controlledPauseRequested
+                    isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
                 ), _cts.Token);
                 task.Wait(_cts.Token);
                 bool result = task.Result;                             
@@ -1372,7 +1374,7 @@ namespace OnlineMongoMigrationProcessor
             MigrationUnit mu;
             try
             {
-                _controlledPauseRequested = false;
+                MigrationJobContext.ControlledPauseRequested = false;
                 ProcessRunning = true;
                 mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
                 mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
@@ -1403,7 +1405,7 @@ namespace OnlineMongoMigrationProcessor
             //check if dump complete but restore not complete  yet all chunks are downloaded
             if (mu.DumpComplete && !mu.RestoreComplete && mu.MigrationChunks.All(c => c.IsDownloaded == true))
             {
-                _log.WriteLine($"{dbName}.{colName} dump already complete, but chunks are still being processed. Will reprocess the chunks.", LogType.Warning);
+                _log.WriteLine($"{dbName}.{colName} dump complete, but chunks pending. Reprocessing.", LogType.Warning);
                 mu.DumpComplete = false;
                 isDirty = true;
             }
@@ -1417,7 +1419,7 @@ namespace OnlineMongoMigrationProcessor
                     string chunkFilePath = Path.Combine(_mongoDumpOutputFolder, jobId, Helper.SafeFileName($"{dbName}.{colName}"), $"{i}.bson");
                     if (!File.Exists(chunkFilePath))
                     {
-                        _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}, marking chunk as not downloaded.", LogType.Warning);
+                        _log.WriteLine($"Chunk file missing for {dbName}.{colName}[{i}] at {chunkFilePath}. Marking as not downloaded; will reprocess.", LogType.Warning);
                         mu.MigrationChunks[i].IsDownloaded = false;
                         mu.DumpComplete = false;
                         isDirty = true;
@@ -1508,7 +1510,7 @@ namespace OnlineMongoMigrationProcessor
                     // BulkCopyEndedOn will be set after restore completes, not here
 
                     // Only trigger restore if not paused
-                    if (!_controlledPauseRequested)
+                    if (!MigrationJobContext.ControlledPauseRequested)
                     {
                         _log.WriteLine($"{dbName}.{colName} dump complete, adding  to restore queue.");
   
@@ -1543,7 +1545,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Don't restart processing if controlled pause was requested
-            if (_controlledPauseRequested)
+            if (MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine($"Upload skipped for {migrationUnitId} - controlled pause is active",LogType.Debug);
                 try { _uploadLock.Release(); } catch { }
@@ -1640,22 +1642,22 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
-            if (mu.DumpComplete && !mu.RestoreComplete && !Directory.Exists(folder)) //data missing issue, forcing controlled pause
-            {
-                _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
-                mu.DumpComplete = false;
-                MigrationJobContext.SaveMigrationUnit(mu, true);
-                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
+            //if (mu.DumpComplete && !mu.RestoreComplete && !Directory.Exists(folder)) //data missing issue, forcing controlled pause
+            //{
+            //    _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
+            //    mu.DumpComplete = false;
+            //    MigrationJobContext.SaveMigrationUnit(mu, true);
+            //    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
 
-                _controlledPauseRequested = true;
-                _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}. Controlled pause requested. Please resume job.",LogType.Error);
-                return;
-            }
+            //    MigrationJobContext.ControlledPauseRequested = true;
+            //    _log.WriteLine($"Dump folder not found for {mu.DatabaseName}.{mu.CollectionName}. Controlled pause requested. Please resume job.",LogType.Error);
+            //    return;
+            //}
 
             while (ShouldContinueUploadLoop(mu, folder))
             {
                 // Check for controlled pause at start of loop iteration
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
                     _log.WriteLine($"Controlled pause detected in restore loop for {dbName}.{colName} - exiting",LogType.Debug);
                     return;
@@ -1781,7 +1783,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch { }
 
-            if (_controlledPauseRequested)
+            if (MigrationJobContext.ControlledPauseRequested)
                 return;
 
             _log.WriteLine($"AddCollectionToChangeStreamQueue for {key} invoked", LogType.Verbose);
@@ -1797,7 +1799,7 @@ namespace OnlineMongoMigrationProcessor
             // Process next pending upload if any
             if (_migrationUnitsPendingUpload.Count>0)
             {
-                if (_controlledPauseRequested)
+                if (MigrationJobContext.ControlledPauseRequested)
                     return;
 
                 _log.WriteLine($"Upload invoked for {_migrationUnitsPendingUpload[0]}.", LogType.Verbose);
@@ -1814,7 +1816,7 @@ namespace OnlineMongoMigrationProcessor
                 if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
                 {
                     // Don't mark as completed if this is a controlled pause
-                    if (!_controlledPauseRequested)
+                    if (!MigrationJobContext.ControlledPauseRequested)
                     {
                         _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} Completed");
                         MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
@@ -1848,7 +1850,7 @@ namespace OnlineMongoMigrationProcessor
             
             // For controlled pause, don't kill processes - they should have completed naturally
             // Only kill if not a controlled pause (i.e., hard cancellation)
-            if (!_controlledPauseRequested)
+            if (!MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine("Hard stop - killing active processes");
                 KillAllActiveProcesses();

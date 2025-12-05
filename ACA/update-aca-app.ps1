@@ -12,43 +12,68 @@ param(
     [string]$AcrName,
     
     [Parameter(Mandatory=$false)]
+    [string]$AcrRepository = "",
+    
+    [Parameter(Mandatory=$false)]
     [string]$ImageTag = "latest"
 )
 
 $ErrorActionPreference = "Stop"
 
+# Generate ACR repository name if not provided
+if ([string]::IsNullOrEmpty($AcrRepository)) {
+    $AcrRepository = $ContainerAppName
+    Write-Host "Using ContainerAppName as ACR repository: $AcrRepository" -ForegroundColor Cyan
+}
+
 Write-Host "`n=== Azure Container App - Image Update ===" -ForegroundColor Cyan
 Write-Host "Resource Group: $ResourceGroupName" -ForegroundColor White
 Write-Host "Container App: $ContainerAppName" -ForegroundColor White
 Write-Host "ACR: $AcrName" -ForegroundColor White
+Write-Host "ACR Repository: $AcrRepository" -ForegroundColor White
 Write-Host "Image Tag: $ImageTag" -ForegroundColor White
 Write-Host ""
 
 # Step 1: Build and push new image to ACR
-Write-Host "Step 1: Building and pushing Docker image to ACR..." -ForegroundColor Yellow
-Write-Host "Note: Warnings about packing source code and excluding .git files are normal and expected." -ForegroundColor Gray
+Write-Host "Step 1: Checking if Docker image exists in ACR..." -ForegroundColor Yellow
 
+# Check if the image exists in ACR
 $ErrorActionPreference = 'Continue'
-az acr build `
-    --registry $AcrName `
-    --resource-group $ResourceGroupName `
-    --image "$($ContainerAppName):$($ImageTag)" `
-    --file ../MongoMigrationWebApp/Dockerfile `
-    ..
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "`nError: Failed to build and push Docker image" -ForegroundColor Red
-    exit 1
-}
+$imageExists = az acr repository show-tags `
+    --name $AcrName `
+    --repository $AcrRepository `
+    --query "contains(@, '$ImageTag')" `
+    --output tsv 2>$null
 $ErrorActionPreference = 'Stop'
 
-Write-Host "`nDocker image built and pushed successfully." -ForegroundColor Green
+if ($imageExists -eq 'true') {
+    Write-Host "Image '${AcrRepository}:${ImageTag}' found in ACR. Skipping build." -ForegroundColor Green
+} else {
+    Write-Host "Image '${AcrRepository}:${ImageTag}' not found in ACR. Building and pushing..." -ForegroundColor Yellow
+    Write-Host "Note: Warnings about packing source code and excluding .git files are normal and expected." -ForegroundColor Gray
+
+    $ErrorActionPreference = 'Continue'
+    az acr build `
+        --registry $AcrName `
+        --resource-group $ResourceGroupName `
+        --image "$($AcrRepository):$($ImageTag)" `
+        --file ../MongoMigrationWebApp/Dockerfile `
+        ..
+
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "`nError: Failed to build and push Docker image" -ForegroundColor Red
+        exit 1
+    }
+    $ErrorActionPreference = 'Stop'
+
+    Write-Host "`nDocker image built and pushed successfully." -ForegroundColor Green
+}
 
 # Step 2: Update Container App with new image
 Write-Host "`nStep 2: Updating Container App with new image..." -ForegroundColor Yellow
 Write-Host "Note: Warnings about cryptography or UserWarnings are normal and can be ignored." -ForegroundColor Gray
 
-$imageName = "$AcrName.azurecr.io/$($ContainerAppName):$($ImageTag)"
+$imageName = "$AcrName.azurecr.io/$($AcrRepository):$($ImageTag)"
 
 $ErrorActionPreference = 'Continue'
 az containerapp update `

@@ -832,85 +832,89 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
         using (cursor)
         {
-            try
-            {
-
-                if (job.JobType == JobType.RUOptimizedCopy)
+                try
                 {
-                    // Use linkedCts.Token instead of cts.Token to respect both timeout and manual cancellation
-                    if (await cursor.MoveNextAsync(linkedCts.Token))
+
+                    if (job.JobType == JobType.RUOptimizedCopy)
                     {
-                        if (!resetCS && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(mu.OriginalResumeToken)))
+                        // Use linkedCts.Token instead of cts.Token to respect both timeout and manual cancellation
+                        if (await cursor.MoveNextAsync(linkedCts.Token))
                         {
-                            var resumeTokenJson = cursor.GetResumeToken().ToJson();
+                            if (!resetCS && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(mu.OriginalResumeToken)))
+                            {
+                                var resumeTokenJson = cursor.GetResumeToken().ToJson();
 
-                            mu.ResumeToken = resumeTokenJson;
-                            mu.OriginalResumeToken = resumeTokenJson;
+                                mu.ResumeToken = resumeTokenJson;
+                                mu.OriginalResumeToken = resumeTokenJson;
 
+                            }
+                            return;
                         }
                         return;
                     }
-                    return;
-                }                   
 
-                // Iterate until cancellation or first change detected
-                // Use linkedCts to respect both timeout and manual cancellation
-                while (!linkedCts.Token.IsCancellationRequested)
-                {
-                    var hasNext = await cursor.MoveNextAsync(linkedCts.Token);
-                    if (!hasNext)
+                    // Iterate until cancellation or first change detected
+                    // Use linkedCts to respect both timeout and manual cancellation
+                    while (!linkedCts.Token.IsCancellationRequested)
                     {
-                        break; // Stream closed or no more data
-                    }
+                        var hasNext = await cursor.MoveNextAsync(linkedCts.Token);
+                        if (!hasNext)
+                        {
+                            break; // Stream closed or no more data
+                        }
 
-                    foreach (var change in cursor.Current)
-                    {
-                        //if bulk load is complete, no point in continuing to watch
-                        // Use the local resetCS variable captured at method start, not mu.ResetChangeStream
-                        if ((mu.RestoreComplete || job.IsSimulatedRun) && mu.DumpComplete && !resetCS)
-                            return;
+                        foreach (var change in cursor.Current)
+                        {
+                            //if bulk load is complete, no point in continuing to watch
+                            // Use the local resetCS variable captured at method start, not mu.ResetChangeStream
+                            if ((mu.RestoreComplete || job.IsSimulatedRun) && mu.DumpComplete && !resetCS)
+                                return;
 
 
-                        // Handle server-level vs collection-level resume token storage
-                        if (useServerLevel)
-                        {                                    
-                            var databaseName = change.CollectionNamespace.DatabaseNamespace.DatabaseName;
-                            var collectionName = change.CollectionNamespace.CollectionName;
-                            var collectionKey = $"{databaseName}.{collectionName}";
-
-                            //checking if change is in collections to be migrated.
-                            var migrationUnit = Helper.GetMigrationUnitsToMigrate(job).FirstOrDefault(mu =>
-                                string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
-                                string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
-
-                            if (migrationUnit != null && Helper.IsMigrationUnitValid(migrationUnit))
+                            // Handle server-level vs collection-level resume token storage
+                            if (useServerLevel)
                             {
-                                // Use common function for server-level resume token setting
-                                SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
-                                log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
+                                var databaseName = change.CollectionNamespace.DatabaseNamespace.DatabaseName;
+                                var collectionName = change.CollectionNamespace.CollectionName;
+                                var collectionKey = $"{databaseName}.{collectionName}";
+
+                                //checking if change is in collections to be migrated.
+                                var migrationUnit = Helper.GetMigrationUnitsToMigrate(job).FirstOrDefault(mu =>
+                                    string.Equals(mu.DatabaseName, databaseName, StringComparison.OrdinalIgnoreCase) &&
+                                    string.Equals(mu.CollectionName, collectionName, StringComparison.OrdinalIgnoreCase));
+
+                                if (migrationUnit != null && Helper.IsMigrationUnitValid(migrationUnit))
+                                {
+                                    // Use common function for server-level resume token setting
+                                    SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
+                                    log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
+                                    // Exit immediately after first change detected
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                // Use common function for collection-level resume token setting
+                                SetResumeTokenProperties(mu, change, resetCS);
+
+                                log.WriteLine($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}", LogType.Verbose);
+
                                 // Exit immediately after first change detected
                                 return;
                             }
-                        }
-                        else
-                        {
-                            // Use common function for collection-level resume token setting
-                            SetResumeTokenProperties(mu, change, resetCS);
 
-                            log.WriteLine($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}", LogType.Verbose);
-
-                            // Exit immediately after first change detected
-                            return;
                         }
-                                
                     }
+
                 }
-                   
-            }
-            catch (OperationCanceledException)
-            {
-                // Cancellation requested - exit quietly
-            }
+                catch (Exception ex) when (ex is TimeoutException)
+                {
+                    log.WriteLine($"Timeout while watching change stream for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Debug);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException)
+                {
+                    // Cancellation requested - exit quietly
+                }
         }
     }
 
@@ -1535,11 +1539,14 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 job.ResumeTokenOperation = operationType;
                 job.ResumeDocumentId = documentKeyJson;
 
+                
                 // Store collection key for server-level auto replay
                 if (change.CollectionNamespace != null && !string.IsNullOrEmpty(databaseName) && !string.IsNullOrEmpty(collectionName))
                 {
                     job.ResumeCollectionKey = $"{databaseName}.{collectionName}";
                 }
+
+                MigrationJobContext.SaveMigrationJob(job);
             }
             else if (target is MigrationUnit mu)
             {
@@ -1559,6 +1566,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 {
                     mu.ResetChangeStream = false;
                 }
+                MigrationJobContext.SaveMigrationUnit(mu,true);
             }
         }
 
