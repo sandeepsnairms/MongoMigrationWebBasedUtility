@@ -104,6 +104,8 @@ namespace OnlineMongoMigrationProcessor
                             }
 
                             mu.CSLastBatchDurationSeconds = seconds; // Store the factor for each mu
+
+                           
                             // Don't pass token to Task.Run - each collection manages its own timeout via CancellationTokenSource inside SetChangeStreamOptionandWatch
                             string collectionName = key; // Capture for closure
 
@@ -468,7 +470,9 @@ namespace OnlineMongoMigrationProcessor
                 targetCollection,
                 insertEvents: accumulatedChangesInColl.DocsToBeInserted,
                 updateEvents: accumulatedChangesInColl.DocsToBeUpdated,
-                deleteEvents: accumulatedChangesInColl.DocsToBeDeleted);
+                deleteEvents: accumulatedChangesInColl.DocsToBeDeleted,
+                accumulatedChangesInColl: accumulatedChangesInColl,
+                batchSize: 50);
 
             // Update resume token after successful flush
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
@@ -481,6 +485,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         mu.CursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
                         mu.ResumeToken = accumulatedChangesInColl.LatestResumeToken;
+                        
                         MigrationJobContext.SaveMigrationUnit(mu,true);
                     }
                     else
@@ -497,6 +502,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         mu.SyncBackCursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
                         mu.SyncBackResumeToken = accumulatedChangesInColl.LatestResumeToken;
+                        
                         MigrationJobContext.SaveMigrationUnit(mu,true);
                     }
                     else
@@ -550,6 +556,13 @@ namespace OnlineMongoMigrationProcessor
             var accumulatedChangesInColl = _accumulatedChangesPerCollection[collectionKey];
             bool shouldProcessFinalBatch = true; // Flag to control finally block execution
 
+            //reset latency counters
+            accumulatedChangesInColl.CSTotalReadDurationInMS = 0;
+            accumulatedChangesInColl.CSTotaWriteDurationInMS = 0;
+
+            // creating the watch cursor
+            System.Diagnostics.Stopwatch readStopwatch = new System.Diagnostics.Stopwatch();
+
             try
             {
                 var pipelineArray = CreateChangeStreamPipeline();
@@ -560,6 +573,8 @@ namespace OnlineMongoMigrationProcessor
                     async (ct) =>
                     {
                         _log.WriteLine($"{_syncBackPrefix}Starting cursor creation for {collectionKey}", LogType.Verbose);
+
+                        readStopwatch.Start();
 
                         // 1. Create cursor
                         var cursor = await CreateChangeStreamCursorAsync(
@@ -588,7 +603,8 @@ namespace OnlineMongoMigrationProcessor
                             ct,
                             seconds,
                             userFilterDoc,
-                            counter
+                            counter,
+                            readStopwatch
                         );
 
                         _log.WriteLine($"{_syncBackPrefix} Finished processing for {collectionKey}.", LogType.Verbose);
@@ -649,6 +665,8 @@ namespace OnlineMongoMigrationProcessor
                 // Only process final batch if we didn't exit early (e.g., due to timeout or cursor creation failure)
                 if (shouldProcessFinalBatch)
                 {
+                    // Note: readStopwatch time is already accumulated in ProcessMongoDB3x/4xChangeStreamAsync
+                    // No need to accumulate here to avoid double-counting
                     await ProcessWatchFinallyAsync(mu, sourceCollection, targetCollection, accumulatedChangesInColl, counter, collectionKey);
                 }
             }
@@ -719,7 +737,8 @@ namespace OnlineMongoMigrationProcessor
             CancellationToken cancellationToken,
             int seconds,
             BsonDocument userFilterDoc,
-            long counter)
+            long counter,
+            System.Diagnostics.Stopwatch readStopwatch)
         {
             // BACKPRESSURE: Check accumulated document count before starting to read change stream
             // This slows down reads when we have too many documents accumulated, preventing memory buildup
@@ -734,11 +753,11 @@ namespace OnlineMongoMigrationProcessor
 
                 if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
-                    counter = await ProcessMongoDB3xChangeStreamAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, userFilterDoc, collectionKey, counter);
+                    counter = await ProcessMongoDB3xChangeStreamAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, userFilterDoc, collectionKey, counter, readStopwatch);
                 }
                 else
                 {
-                    counter = await ProcessMongoDB4xChangeStreamAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, seconds, userFilterDoc, collectionKey, counter);
+                    counter = await ProcessMongoDB4xChangeStreamAsync(cursor, mu, sourceCollection, targetCollection, accumulatedChangesInColl, cancellationToken, seconds, userFilterDoc, collectionKey, counter, readStopwatch);
                 }
             }
 
@@ -754,10 +773,15 @@ namespace OnlineMongoMigrationProcessor
             CancellationToken cancellationToken,
             BsonDocument userFilterDoc,
             string collectionKey,
-            long counter)
+            long counter,
+            System.Diagnostics.Stopwatch readStopwatch)
         {
             foreach (var change in cursor.ToEnumerable(cancellationToken))
             {
+                // Stop the read stopwatch immediately after getting the change from source
+                readStopwatch.Stop();
+                accumulatedChangesInColl.CSTotalReadDurationInMS += readStopwatch.ElapsedMilliseconds;
+                
                 if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
                 {
                     _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {sourceCollection!.CollectionNamespace}", LogType.Info);
@@ -774,6 +798,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.CSNormalizedUpdatesInLastBatch = 0;
  
                     MigrationJobContext.SaveMigrationUnit(mu,true);
+                    
                     return counter; // Skip processing if the event has already been processed
                 }
 
@@ -788,13 +813,16 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Exception in ProcessCursor for {collectionKey}: {ex.Message}", LogType.Error);
                     break; // Exit loop on exception, let finally block handle cleanup
                 }
-
-                // MEMORY SAFETY: Flush accumulated changes periodically to prevent OOM
-                //if (IsReadyForFlush(accumulatedChangesInColl, out int total))
-                //{
-                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
-                //}
+                
+                // Restart stopwatch for next read iteration
+                readStopwatch.Restart();
             }
+
+            readStopwatch.Stop();
+
+
+            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+
 
             return counter;
         }       
@@ -808,7 +836,8 @@ namespace OnlineMongoMigrationProcessor
             int seconds,
             BsonDocument userFilterDoc,
             string collectionKey,
-            long counter)
+            long counter,
+            System.Diagnostics.Stopwatch readStopwatch)
         {
 
             using (cursor)
@@ -821,8 +850,15 @@ namespace OnlineMongoMigrationProcessor
                         var hasNext = await cursor.MoveNextAsync(cancellationToken);
                         if (!hasNext)
                         {
+                            readStopwatch.Stop();
                             break; // Stream closed or no more data
                         }
+                        
+                        // Stop the read stopwatch after reading from source is complete
+                        // Only accumulate read time when we actually got data (hasNext == true)
+                        readStopwatch.Stop();
+                        accumulatedChangesInColl.CSTotalReadDurationInMS += readStopwatch.ElapsedMilliseconds;
+                        
                         int changeCount = 0;
                         foreach (var change in cursor.Current)
                         {
@@ -844,6 +880,7 @@ namespace OnlineMongoMigrationProcessor
                                 mu.CSNormalizedUpdatesInLastBatch = 0;
 
                                 MigrationJobContext.SaveMigrationUnit(mu,true);
+                                
                                 return counter; // Skip processing if the event has already been processed
                             }
 
@@ -860,10 +897,15 @@ namespace OnlineMongoMigrationProcessor
                             }
 
                         }
-
-                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
+                        
+                        // Restart the stopwatch for the next read iteration
+                        readStopwatch.Restart();
 
                     }
+                    
+                    readStopwatch.Stop();
+
+                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
                 }
                 catch (OperationCanceledException)
                 {
@@ -871,6 +913,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 finally
                 {
+                    readStopwatch.Stop();
                     await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl);
                 }
             }
@@ -902,13 +945,20 @@ namespace OnlineMongoMigrationProcessor
                 mu.CSUpdatesInLastBatch = counter;
                 mu.CSNormalizedUpdatesInLastBatch = (long)(counter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
 
+                // Transfer latency metrics from accumulatedChangesInColl to mu
+                if (counter > 0)
+                {
+                    mu.CSAvgReadLatencyInMS = Math.Round((double)accumulatedChangesInColl.CSTotalReadDurationInMS / counter,2);
+                    mu.CSAvgWriteLatencyInMS = Math.Round((double)accumulatedChangesInColl.CSTotaWriteDurationInMS / counter,2);
+                }
+
                 MigrationJobContext.SaveMigrationUnit(mu,true);
                 _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {counter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
                 
 
                 if (counter > 0)
                 {
-                    _log.ShowInMonitor($"{_syncBackPrefix}Watch cycle completed for {sourceCollection.CollectionNamespace}: {counter} events processed in batch");
+                    _log.ShowInMonitor($"{_syncBackPrefix}Watch cycle completed for {sourceCollection.CollectionNamespace}: {counter} events processed in batch. Avg Read Latency: {mu.CSAvgReadLatencyInMS} ms | Avg Write Latency: {mu.CSAvgWriteLatencyInMS} ms");
                 }
             }
             catch (Exception ex)
@@ -1074,15 +1124,15 @@ namespace OnlineMongoMigrationProcessor
                             // Skip actual delete operation in simulation mode
                             if (!isWriteSimulated)
                             {
-                                _log.WriteLine($"{_syncBackPrefix}Processing {change.OperationType} operation for {collNameSpace} with _id {idValue}. No document found on source, deleting it from target.", LogType.Info);
-                                var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
-                                try
-                                {
-                                    targetCollection.DeleteOne(deleteTTLFilter);
-                                    IncrementEventCounter(mu, ChangeStreamOperationType.Delete);
-                                }
-                                catch
-                                { }
+                                _log.WriteLine($"{_syncBackPrefix}Processing {change.OperationType} operation for {collNameSpace} with _id {idValue}. No document found on source.", LogType.Info);
+                                //var deleteTTLFilter = Builders<BsonDocument>.Filter.Eq("_id", idValue);
+                                //try
+                                //{
+                                //    targetCollection.DeleteOne(deleteTTLFilter);
+                                //    IncrementEventCounter(mu, ChangeStreamOperationType.Delete);
+                                //}
+                                //catch
+                                //{ }
                             }
                         }
                         else

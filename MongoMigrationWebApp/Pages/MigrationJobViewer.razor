@@ -304,8 +304,8 @@
                         {
                             @if (MigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || MigrationJob.ProcessingSyncBack)
                             {
-                                <td>                           
-                                   @Helper.GetChangeStreamLag(mu, MigrationJob.ProcessingSyncBack)                            
+                                <td title="Avg Read Latency: @mu.CSAvgReadLatencyInMS.ToString("F2") ms | Avg Write Latency: @mu.CSAvgWriteLatencyInMS.ToString("F2") ms">                           
+                                    @Helper.GetChangeStreamLag(mu, MigrationJob.ProcessingSyncBack)
                                 </td>
                             }
                             <td>

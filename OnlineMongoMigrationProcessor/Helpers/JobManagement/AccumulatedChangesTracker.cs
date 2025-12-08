@@ -23,6 +23,10 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         public ChangeStreamOperationType LatestOperationType { get; private set; }
         public string LatestDocumentKey { get; private set; } = string.Empty;
 
+        // Track batch latencies
+        public long CSTotalReadDurationInMS { get; set; } = 0;
+        public long CSTotaWriteDurationInMS { get; set; } = 0;
+
         private string _collectionKey = string.Empty;
         public AccumulatedChangesTracker(string collectionKey)
         {

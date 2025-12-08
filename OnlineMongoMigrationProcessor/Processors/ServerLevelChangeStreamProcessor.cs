@@ -401,7 +401,8 @@ namespace OnlineMongoMigrationProcessor
                             targetCollection,
                             insertEvents: docs.DocsToBeInserted,
                             updateEvents: docs.DocsToBeUpdated,
-                            deleteEvents: docs.DocsToBeDeleted);
+                            deleteEvents: docs.DocsToBeDeleted,
+                            accumulatedChangesInColl: docs);
 
                             // Only update resume token AFTER successful batch write
                             // This ensures we can recover from the last successful checkpoint on failure

@@ -110,7 +110,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             _log.WriteLine($"{_logPrefix}[DEBUG] Partitioned operations into {operationBatches.Count} batches for {collection.CollectionNamespace}", LogType.Debug);
             
             // Process batches in parallel with sequence preservation
-            var tasks = new List<Task<BatchWriteResult>>();
+            var tasks = new List<Task<WriteResult>>();
             
             for (int i = 0; i < operationBatches.Count; i++)
             {
@@ -142,7 +142,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         _log.WriteLine($"{_logPrefix}Exception in batch {batchIndex} processing for {collection.CollectionNamespace}: {ex}", LogType.Error);
                         
                         // Return a failed result instead of throwing to allow other batches to continue
-                        return new BatchWriteResult
+                        return new WriteResult
                         {
                             Success = false,
                             Processed = 0,
@@ -166,9 +166,10 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 // Aggregate results
                 foreach (var batchResult in batchResults)
                 {
-                    result.TotalProcessed += batchResult.Processed;
-                    result.TotalFailures += batchResult.Failures;
-                    result.TotalSkipped += batchResult.Skipped;
+                    result.Processed += batchResult.Processed;
+                    result.Failures += batchResult.Failures;
+                    result.Skipped += batchResult.Skipped;
+                    result.WriteLatencyMS += batchResult.WriteLatencyMS;
                     
                     if (!batchResult.Success)
                     {
@@ -177,15 +178,15 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     }
                 }
                 
-                _log.WriteLine($"{_logPrefix}[DEBUG] Result aggregation completed for {collection.CollectionNamespace}: totalProcessed={result.TotalProcessed}, totalFailures={result.TotalFailures}, totalSkipped={result.TotalSkipped}, success={result.Success}", LogType.Debug);
+                _log.WriteLine($"{_logPrefix}[DEBUG] Result aggregation completed for {collection.CollectionNamespace}: totalProcessed={result.Processed}, totalFailures={result.Failures}, totalSkipped={result.Skipped}, success={result.Success}", LogType.Debug);
                 
-                if (result.TotalFailures > 0)
+                if (result.Failures > 0)
                 {
-                    _log.WriteLine($"{_logPrefix}Parallel processing completed with {result.TotalFailures} failures for {collection.CollectionNamespace.FullName}", LogType.Warning);
+                    _log.WriteLine($"{_logPrefix}Parallel processing completed with {result.Failures} failures for {collection.CollectionNamespace.FullName}", LogType.Warning);
                 }
                 else
                 {
-                    _log.WriteLine($"{_logPrefix}Parallel processing completed successfully: {result.TotalProcessed} processed, {result.TotalSkipped} skipped for {collection.CollectionNamespace.FullName}", LogType.Debug);
+                    _log.WriteLine($"{_logPrefix}Parallel processing completed successfully: {result.Processed} processed, {result.Skipped} skipped for {collection.CollectionNamespace.FullName}", LogType.Debug);
                 }
             }
             catch (Exception ex)
@@ -282,7 +283,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <summary>
         /// Process a batch of operations with retry logic and exponential backoff
         /// </summary>
-        private async Task<BatchWriteResult> ProcessBatchWithRetryAsync<TMigration>(
+        private async Task<WriteResult> ProcessBatchWithRetryAsync<TMigration>(
             TMigration mu,
             IMongoCollection<BsonDocument> collection,
             List<OrderedOperation> operations,
@@ -294,7 +295,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             MongoClient? targetClient,
             bool isSimulatedRun)
         {
-            var result = new BatchWriteResult { Success = true };
+            var result = new WriteResult { Success = true };
             
             if (!operations.Any())
             {
@@ -325,6 +326,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 result.Processed += insertResult.Processed;
                 result.Failures += insertResult.Failures;
                 result.Skipped += insertResult.Skipped;
+                result.WriteLatencyMS += insertResult.WriteLatencyMS;
                 result.Success &= insertResult.Success;
                 result.Errors.AddRange(insertResult.Errors);
             }
@@ -337,6 +339,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 result.Processed += updateResult.Processed;
                 result.Failures += updateResult.Failures;
                 result.Skipped += updateResult.Skipped;
+                result.WriteLatencyMS += updateResult.WriteLatencyMS;
                 result.Success &= updateResult.Success;
                 result.Errors.AddRange(updateResult.Errors);
             }
@@ -349,6 +352,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 result.Processed += deleteResult.Processed;
                 result.Failures += deleteResult.Failures;
                 result.Skipped += deleteResult.Skipped;
+                result.WriteLatencyMS += deleteResult.WriteLatencyMS;
                 result.Success &= deleteResult.Success;
                 result.Errors.AddRange(deleteResult.Errors);
             }
@@ -359,7 +363,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <summary>
         /// Process inserts with retry logic
         /// </summary>
-        private async Task<BatchWriteResult> ProcessInsertsWithRetryAsync<TMigration>(
+        private async Task<WriteResult> ProcessInsertsWithRetryAsync<TMigration>(
          TMigration mu,
          IMongoCollection<BsonDocument> collection,
          List<ChangeStreamDocument<BsonDocument>> events,
@@ -372,7 +376,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
          string collectionName,
          bool isSimulatedRun ) // <-- New parameter
         {
-            var result = new BatchWriteResult { Success = true };
+            var result = new WriteResult { Success = true };
 
             foreach (var batch in events.Chunk(batchSize))
             {
@@ -409,42 +413,45 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     .ToList();
 
                 // Retry loop with exponential backoff
-                for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
+                var writeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                try
                 {
-                    try
+                    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
                     {
-                        long insertCount = 0;
-
-                        if (insertDocs.Any())
+                        try
                         {
-                            if (!isSimulatedRun)
+                            long insertCount = 0;
+
+                            if (insertDocs.Any())
                             {
-                                if (!MongoHelper.IsCosmosRUEndpoint(collection))
+                                if (!isSimulatedRun)
                                 {
-                                    // Use BulkWriteAsync
-                                    var insertModels = insertDocs.Select(d => new InsertOneModel<BsonDocument>(d)).ToList();
-                                    var writeResult = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
-                                    insertCount = writeResult.InsertedCount;
+                                    if (!MongoHelper.IsCosmosRUEndpoint(collection))
+                                    {
+                                        // Use BulkWriteAsync
+                                        var insertModels = insertDocs.Select(d => new InsertOneModel<BsonDocument>(d)).ToList();
+                                        var writeResult = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                                        insertCount = writeResult.InsertedCount;
+                                    }
+                                    else
+                                    {
+                                        // Use InsertManyAsync
+                                        await collection.InsertManyAsync(insertDocs, new InsertManyOptions { IsOrdered = false });
+                                        insertCount = insertDocs.Count;
+                                    }
                                 }
                                 else
                                 {
-                                    // Use InsertManyAsync
-                                    await collection.InsertManyAsync(insertDocs, new InsertManyOptions { IsOrdered = false });
                                     insertCount = insertDocs.Count;
                                 }
-                            }
-                            else
-                            {
-                                insertCount = insertDocs.Count;
+
+                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
+                                result.Processed += (int)insertCount;
                             }
 
-                            counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
-                            result.Processed += (int)insertCount;
+                            break; // Success - exit retry loop
                         }
-
-                        break; // Success - exit retry loop
-                    }
-                    catch (MongoBulkWriteException<BsonDocument> ex)
+                        catch (MongoBulkWriteException<BsonDocument> ex)
                     {
                         long insertCount = ex.Result?.InsertedCount ?? 0;
                         result.Processed += (int)insertCount;
@@ -497,6 +504,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             throw new InvalidOperationException(errorMsg);
                         }
                     }
+                    }
+                }
+                finally
+                {
+                    writeStopwatch.Stop();
+                    result.WriteLatencyMS += writeStopwatch.ElapsedMilliseconds;
                 }
             }
 
@@ -507,7 +520,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <summary>
         /// Process updates with retry logic
         /// </summary>
-        private async Task<BatchWriteResult> ProcessUpdatesWithRetryAsync<TMigration>(
+        private async Task<WriteResult> ProcessUpdatesWithRetryAsync<TMigration>(
             TMigration mu,
             IMongoCollection<BsonDocument> collection,
             List<ChangeStreamDocument<BsonDocument>> events,
@@ -520,7 +533,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             string collectionName,
             bool isSimulatedRun)
         {
-            var result = new BatchWriteResult { Success = true };
+            var result = new WriteResult { Success = true };
 
             foreach (var batch in events.Chunk(batchSize))
             {
@@ -554,29 +567,33 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     .ToList();
 
                 // Retry loop with exponential backoff
-                for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
+                var writeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                try
                 {
-                    try
+                    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
                     {
-                        if (updateModels.Any())
+                        try
                         {
-                            long updateCount = 0;
-                            if (!isSimulatedRun)
+                            if (updateModels.Any())
                             {
-                                var writeResult = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
-                                updateCount = writeResult.ModifiedCount + writeResult.Upserts.Count;
+                                long updateCount = 0;
+                                
+                                if (!isSimulatedRun)
+                                {
+                                    var writeResult = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
+                                    updateCount = writeResult.ModifiedCount + writeResult.Upserts.Count;
+                                }
+                                else
+                                {
+                                    updateCount = updateModels.Count;
+                                }
+                                
+                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
+                                result.Processed += (int)updateCount;
                             }
-                            else
-                            {
-                                updateCount = updateModels.Count;
-                            }
-                            
-                            counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
-                            result.Processed += (int)updateCount;
+                            break; // Success - exit retry loop
                         }
-                        break; // Success - exit retry loop
-                    }
-                    catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
+                        catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
                     {
                         if (attempt < MAX_RETRIES)
                         {
@@ -611,6 +628,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             throw new InvalidOperationException(errorMsg);
                         }
                     }
+                    }
+                }
+                finally
+                {
+                    writeStopwatch.Stop();
+                    result.WriteLatencyMS += writeStopwatch.ElapsedMilliseconds;
                 }
             }
 
@@ -620,7 +643,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <summary>
         /// Process deletes with retry logic
         /// </summary>
-        private async Task<BatchWriteResult> ProcessDeletesWithRetryAsync<TMigration>(
+        private async Task<WriteResult> ProcessDeletesWithRetryAsync<TMigration>(
             TMigration mu,
             IMongoCollection<BsonDocument> collection,
             List<ChangeStreamDocument<BsonDocument>> events,
@@ -633,7 +656,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             string collectionName,
             bool isSimulatedRun)
         {
-            var result = new BatchWriteResult { Success = true };
+            var result = new WriteResult { Success = true };
 
             foreach (var batch in events.Chunk(batchSize))
             {
@@ -651,29 +674,33 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     .ToList();
 
                 // Retry loop with exponential backoff
-                for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
+                var writeStopwatch = System.Diagnostics.Stopwatch.StartNew();
+                try
                 {
-                    try
+                    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
                     {
-                        if (deleteModels.Any())
+                        try
                         {
-                            long deleteCount = 0;
-                            if (!isSimulatedRun)
+                            if (deleteModels.Any())
                             {
-                                var writeResult = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
-                                deleteCount = writeResult.DeletedCount;
+                                long deleteCount = 0;
+                                
+                                if (!isSimulatedRun)
+                                {
+                                    var writeResult = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
+                                    deleteCount = writeResult.DeletedCount;
+                                }
+                                else
+                                {
+                                    deleteCount = deleteModels.Count;
+                                }
+                                
+                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)deleteCount);
+                                result.Processed += (int)deleteCount;
                             }
-                            else
-                            {
-                                deleteCount = deleteModels.Count;
-                            }
-                            
-                            counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)deleteCount);
-                            result.Processed += (int)deleteCount;
+                            break; // Success - exit retry loop
                         }
-                        break; // Success - exit retry loop
-                    }
-                    catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
+                        catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
                     {
                         if (attempt < MAX_RETRIES)
                         {
@@ -708,6 +735,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             throw new InvalidOperationException(errorMsg);
                         }
                     }
+                    }
+                }
+                finally
+                {
+                    writeStopwatch.Stop();
+                    result.WriteLatencyMS += writeStopwatch.ElapsedMilliseconds;
                 }
             }
 
@@ -762,26 +795,15 @@ namespace OnlineMongoMigrationProcessor.Helpers
     }
 
     /// <summary>
-    /// Result of parallel write processing
+    /// Result of write processing (single batch or aggregated)
     /// </summary>
     public class WriteResult
-    {
-        public bool Success { get; set; } = true;
-        public int TotalProcessed { get; set; }
-        public int TotalFailures { get; set; }
-        public int TotalSkipped { get; set; }
-        public List<string> Errors { get; set; } = new List<string>();
-    }
-
-    /// <summary>
-    /// Result of a single batch write operation
-    /// </summary>
-    public class BatchWriteResult
     {
         public bool Success { get; set; } = true;
         public int Processed { get; set; }
         public int Failures { get; set; }
         public int Skipped { get; set; }
         public List<string> Errors { get; set; } = new List<string>();
+        public long WriteLatencyMS { get; set; } = 0;
     }
 }

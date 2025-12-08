@@ -32,6 +32,10 @@ namespace OnlineMongoMigrationProcessor
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public long CSUpdatesInLastBatch { get; set; }
+
+        public double CSAvgReadLatencyInMS { get; set; }
+        public double CSAvgWriteLatencyInMS { get; set; }
+
         public DateTime CursorUtcTimestamp { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
         public double DumpPercent { get; set; }
@@ -111,6 +115,7 @@ namespace OnlineMongoMigrationProcessor
         public long CSNormalizedUpdatesInLastBatch { get; set; }
         public int CSLastBatchDurationSeconds { get; set; }
 
+
 		public int CSAddHours { get; set; }
         public int SyncBackAddHours { get; set; }
         public string? UserFilter { get; set; }
@@ -143,10 +148,7 @@ namespace OnlineMongoMigrationProcessor
         public long SyncBackDocsDeleted { get; set; }
         public long SyncBackDocsUpdated { get; set; }
         public long SyncBackDuplicateDocsSkipped { get; set; }
-
-       
-
-        // Aggressive Change Stream cleanup tracking
+         // Aggressive Change Stream cleanup tracking
         public bool AggressiveCacheDeleted { get; set; } = false;
         public DateTime? AggressiveCacheDeletedOn { get; set; }
 
@@ -195,6 +197,8 @@ namespace OnlineMongoMigrationProcessor
             mub.DatabaseName = this.DatabaseName;
             mub.CollectionName = this.CollectionName;
             mub.CSUpdatesInLastBatch = this.CSUpdatesInLastBatch;
+            mub.CSAvgReadLatencyInMS = this.CSAvgReadLatencyInMS;
+            mub.CSAvgWriteLatencyInMS = this.CSAvgWriteLatencyInMS;
             mub.CursorUtcTimestamp = this.CursorUtcTimestamp;
             mub.SyncBackCursorUtcTimestamp = this.SyncBackCursorUtcTimestamp;
             mub.DumpPercent = this.DumpPercent;

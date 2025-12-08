@@ -366,6 +366,7 @@ namespace OnlineMongoMigrationProcessor
             List<ChangeStreamDocument<BsonDocument>> insertEvents,
             List<ChangeStreamDocument<BsonDocument>> updateEvents,
             List<ChangeStreamDocument<BsonDocument>> deleteEvents,
+            AccumulatedChangesTracker accumulatedChangesInColl,
             int batchSize = 50)
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
@@ -417,13 +418,16 @@ namespace OnlineMongoMigrationProcessor
                     _targetClient,
                     isSimulatedRun);
 
-                _log.WriteLine($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.TotalFailures} for {collectionKey}", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.Failures}, WriteLatency: {result.WriteLatencyMS}ms for {collectionKey}", LogType.Debug);
 				//_log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
+
+                // Track write latency directly in AccumulatedChangesTracker
+                accumulatedChangesInColl.CSTotaWriteDurationInMS += result.WriteLatencyMS;
 
                 if (!result.Success)
                 {
-                    IncrementFailureCounter(mu, result.TotalFailures);
-                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.TotalFailures} failures for {collectionKey}", LogType.Debug);
+                    IncrementFailureCounter(mu, result.Failures);
+                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.Failures} failures for {collectionKey}", LogType.Debug);
                     
                     // If there were critical errors that would cause data loss, stop the job
                     if (result.Errors.Any(e => e.Contains("CRITICAL")))
@@ -433,10 +437,10 @@ namespace OnlineMongoMigrationProcessor
                         throw new InvalidOperationException(criticalError);
                     }
                 }
-                else if (result.TotalFailures > 0)
+                else if (result.Failures > 0)
                 {
-                    IncrementFailureCounter(mu, result.TotalFailures);
-                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.TotalFailures} non-critical failures for {collectionKey}", LogType.Verbose);
+                    IncrementFailureCounter(mu, result.Failures);
+                    _log.WriteLine($"{_syncBackPrefix}Bulk processing had {result.Failures} non-critical failures for {collectionKey}", LogType.Verbose);
                 }
                 
                 _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync completed successfully for {collectionKey}", LogType.Verbose);
