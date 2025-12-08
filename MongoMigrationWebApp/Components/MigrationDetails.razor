@@ -137,7 +137,19 @@
                         <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" />
                         Simulation Mode (No Writes to Target)
                     </label>
-                </div>                             
+                </div>
+                <div class="mb-3">
+                    <label for="minimumLogLevel" class="form-label" title="Set the minimum log level to control the verbosity of logs. Lower levels include more detailed information.">
+                        Minimum Log Level
+                    </label>
+                    <select id="minimumLogLevel" class="form-select" @bind="selectedLogLevel">
+                        <option value="@LogType.Error">Error Only</option>
+                        <option value="@LogType.Warning">Warning + Error</option>
+                        <option value="@LogType.Info">Info + Warning + Error</option>
+                        <option value="@LogType.Debug">Debug + Info + Warning + Error</option>
+                        <option value="@LogType.Verbose">All (Verbose)</option>
+                    </select>
+                </div>
 
                 @if(ShowWarning())
                 {
@@ -193,6 +205,7 @@
     private bool allCollectionsUseObjectId = false; // if all collections use ObjectId for the _id field
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
+    private LogType selectedLogLevel = LogType.Info; // Default log level
     private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
     private string name = string.Empty; // Name of the migration job
     private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
@@ -347,6 +360,7 @@ catch (Exception ex)
             appendMode = true;
             aggressiveCS = false;
             startCSAfterUploads = true;
+            selectedLogLevel = LogType.Info; // Default to Info
             SelectedChangeStreamMode = "Delayed"; // Default to Delayed
             SelectedChangeStreamScope = "Collection"; // Default to Collection
             changeStreamLevel = ChangeStreamLevel.Collection; // Default to Collection
@@ -376,6 +390,7 @@ catch (Exception ex)
             isSimulatedRun = Job?.IsSimulatedRun ?? false;
             skipIndexes = Job?.SkipIndexes ?? false;
             appendMode = Job?.AppendMode ?? false;
+            selectedLogLevel = Job?.MinimumLogLevel ?? LogType.Info; // Load from job or default to Info
             changeStreamLevel = Job?.ChangeStreamLevel ?? ChangeStreamLevel.Collection;
 
             // Set dropdown value based on existing boolean flags
@@ -516,7 +531,8 @@ catch (Exception ex)
             CSStartsAfterAllUploads = startCSAfterUploads,
             AggresiveChangeStream = aggressiveCS,
             ChangeStreamLevel = changeStreamLevel,
-            AllCollectionsUseObjectId = allCollectionsUseObjectId  // Transient flag, not persisted
+            AllCollectionsUseObjectId = allCollectionsUseObjectId,  // Transient flag, not persisted
+            MinimumLogLevel = selectedLogLevel
         };
         await OnSubmit.InvokeAsync(job);
     }

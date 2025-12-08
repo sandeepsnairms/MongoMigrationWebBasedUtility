@@ -17,50 +17,84 @@ namespace MongoMigrationWebApp.Service
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
         private string _lastJobID = string.Empty;
+        private readonly IConfiguration _configuration;
+        private System.Threading.Timer? _resumeTimer;
+        private bool _resumeExecuted = false;
 
         public JobManager(IConfiguration configuration)
         {
-            LogToFile("Resuming migration job after application restart...");
-            var migrationJobs = GetMigrations(out string errorMessage);
+            _configuration = configuration;
+            LogToFile("Starting Timer");
+            // Start a timer that fires once after 1 minute
+            _resumeTimer = new System.Threading.Timer(
+                ResumeTimerCallback,
+                null,
+                TimeSpan.FromSeconds(60),
+                System.Threading.Timeout.InfiniteTimeSpan
+            );
+        }
 
-            LogToFile("Step 0");
+        private void ResumeTimerCallback(object? state)
+        {
+            // Ensure this only executes once
+            if (_resumeExecuted)
+                return;
 
-            if (migrationJobs != null && migrationJobs.Count == 1)
+            _resumeExecuted = true;
+
+            try
             {
+                LogToFile("Resuming migration job after application restart...");
+                var migrationJobs = GetMigrations(out string errorMessage);
 
-                LogToFile($"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
-                if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
+                LogToFile("Step 0");
+
+                if (migrationJobs != null && migrationJobs.Count == 1)
                 {
-                    try
+
+                    LogToFile($"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
+                    if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
                     {
-                        LogToFile("Step2 : before reading config"); 
-
-
-                        var sourceConnectionString = configuration.GetConnectionString("SourceConnectionString");
-                        var targetConnectionString = configuration.GetConnectionString("TargetConnectionString");
-
-                        if(sourceConnectionString != null && targetConnectionString != null)
+                        try
                         {
-                            LogToFile($"Step 3 :Cluster found" + sourceConnectionString.Contains("cluster"));
+                            LogToFile("Step2 : before reading config");
 
-                            var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
-                            var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
-                            if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+
+                            var sourceConnectionString = _configuration.GetConnectionString("SourceConnectionString");
+                            var targetConnectionString = _configuration.GetConnectionString("TargetConnectionString");
+
+                            if (sourceConnectionString != null && targetConnectionString != null)
                             {
-                                migrationJobs[0].SourceConnectionString = sourceConnectionString;
-                                migrationJobs[0].TargetConnectionString = targetConnectionString;
-                                //ViewMigration(migrationJobs[0].Id);
-                                StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                                LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("mongocluster"));
+
+                                var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
+                                var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
+                                if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+                                {
+                                    LogToFile($"Step 4 :Startig Job");
+                                    migrationJobs[0].SourceConnectionString = sourceConnectionString;
+                                    migrationJobs[0].TargetConnectionString = targetConnectionString;
+                                    //ViewMigration(migrationJobs[0].Id);
+                                    StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
+                                    LogToFile($"Step 5 :Started Job");
+                                }
                             }
                         }
-                    }
-                    catch(Exception ex)
-                    {
-                        LogToFile($"Exception : {ex}");
+                        catch (Exception ex)
+                        {
+                            LogToFile($"Exception : {ex}");
+                        }
                     }
                 }
             }
+            finally
+            {
+                // Dispose the timer after execution
+                _resumeTimer?.Dispose();
+                _resumeTimer = null;
+            }
         }
+
 
         #region Logging
 

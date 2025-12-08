@@ -572,7 +572,7 @@ namespace OnlineMongoMigrationProcessor
 
 
                 }
-                catch (TimeoutException tex)
+                catch (Exception ex) when (ex is TimeoutException || ex is OperationCanceledException)
                 {
                     // Clear accumulated data to prevent memory leak
                     int clearedCount = accumulatedChangesInColl.DocsToBeInserted.Count + 
@@ -584,7 +584,7 @@ namespace OnlineMongoMigrationProcessor
 
                     shouldProcessFinalBatch = false; // Skip finally block processing
                     
-                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out for {collectionKey} after {seconds + 10}s - will retry in next round. Exception: {tex.Message}", LogType.Debug);
+                    _log.WriteLine($"{_syncBackPrefix}Watch() timed out for {collectionKey} after {seconds + 10}s - will retry in next round.", LogType.Debug);
                     
                     // Re-throw to allow outer handler to track consecutive timeouts
                     throw;

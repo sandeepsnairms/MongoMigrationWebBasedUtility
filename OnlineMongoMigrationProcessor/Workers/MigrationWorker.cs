@@ -987,6 +987,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                     totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, documentCount / (SamplePartitioner.MaxSamples == 0 ? 1 : SamplePartitioner.MaxSamples));
                     totalChunks = Math.Max(1, totalChunks); // At least one chunk
                     totalChunks = Math.Max(totalChunks, totalChunksBySize);
+                    //Ensuring we do not create too many chunks
+                    totalChunks = Math.Min(totalChunks, SamplePartitioner.MaxSamples);
                     minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
                 }
 
