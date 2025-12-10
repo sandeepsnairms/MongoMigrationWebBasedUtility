@@ -39,7 +39,7 @@ namespace OnlineMongoMigrationProcessor
             MaxSegments = 20;
             MaxSamples = 2000;
 
-        BsonDocument? userFilter = null;
+            BsonDocument? userFilter = null;
             userFilter = MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
 
             if (optimizeForObjectId && dataType == DataType.ObjectId)
