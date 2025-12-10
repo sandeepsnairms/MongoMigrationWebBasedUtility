@@ -281,6 +281,8 @@
                         <td>
                             <i class="bi bi-info-circle-fill me-2 collection-info-icon" title="More info" style="cursor: pointer;"
                                @onclick="() => ShowCollectionDetails(mu)"></i>
+                            <i class="bi bi-download me-2 collection-info-icon" title="Download JSON" style="cursor: pointer;"
+                               @onclick="() => DownloadMigrationUnit(mu)"></i>
                             @mu.DatabaseName
                         </td>
                         <td>@mu.CollectionName</td>
@@ -1048,6 +1050,31 @@ else if (@_showLogBackupFile)
             return;
         }
         await Downloader(JobId, JobId);
+    }
+
+    private async Task DownloadMigrationUnit(MigrationUnitBasic mu)
+    {
+        if (string.IsNullOrEmpty(JobId) || string.IsNullOrEmpty(mu?.Id))
+        {
+            return;
+        }
+
+        var url = $"/api/File/download/migrationunit/{JobId}/{mu.Id}";
+        var response = await HttpClient.GetAsync(url);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var fileBytes = await response.Content.ReadAsByteArrayAsync();
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+            var fileName = $"{mu.DatabaseName}_{mu.CollectionName}_{mu.Id}.json";
+
+            // Use JavaScript to trigger the file download
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, fileName, contentType);
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
+        }
     }
 
     private async Task Downloader(string fileName, string displayName)

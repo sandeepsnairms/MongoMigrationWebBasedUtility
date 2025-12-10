@@ -1448,6 +1448,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             _log.WriteLine($"No boundaries created for DataType: {dataType}, creating single chunk", LogType.Debug);
             var chunk = new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false);
+            chunk.Id = migrationChunks.Count.ToString();
             migrationChunks.Add(chunk);
 
             if (MigrationJobContext.CurrentlyActiveJob!.JobType == JobType.MongoDriver)
@@ -1467,6 +1468,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {               
                 var (startId, endId) = GetStartEnd(true, chunkBoundaries.Boundaries[i], chunkBoundaries.Boundaries.Count, i, userFilter);
                 var chunk = new MigrationChunk(startId, endId, dataType, false, false);
+                chunk.Id = migrationChunks.Count.ToString();
                 migrationChunks.Add(chunk);
 
                 var boundary = chunkBoundaries.Boundaries[i];

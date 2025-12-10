@@ -337,9 +337,15 @@ namespace OnlineMongoMigrationProcessor
             DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
             if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return "NA";
+            
+            return GetChangeStreamLag(timestamp);
+        }
+
+        public static string GetChangeStreamLag(DateTime timestamp)
+        {
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
-            
+
             // Enhanced lag reporting with more granular information
             if (lag.TotalSeconds < 60)
                 return $"{(int)lag.TotalSeconds} sec";

@@ -227,11 +227,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 				var client = new MongoClient(connectionString);
 				var database = client.GetDatabase(databaseName);
 				
-				// Get collection information with filter to exclude system collections
-				var filter = new BsonDocument("name", new BsonDocument("$not", new BsonRegularExpression("^system\\.")));
-				var options = new ListCollectionsOptions { Filter = filter };
-				
-				var collectionsCursor = await database.ListCollectionsAsync(options);
+				// Get all collections (system collections will be filtered below)
+				var collectionsCursor = await database.ListCollectionsAsync();
 				var allCollections = await collectionsCursor.ToListAsync();
 
 				foreach (var collectionInfo in allCollections)
