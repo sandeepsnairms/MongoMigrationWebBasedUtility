@@ -161,8 +161,6 @@ namespace OnlineMongoMigrationProcessor
                     MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); ;
                 }
 
-
-
                 if (timeStamp > DateTime.MinValue && resumeToken == null && !(MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
                 {
                     var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
@@ -330,7 +328,7 @@ namespace OnlineMongoMigrationProcessor
                     timeStamp = change.WallTime.Value;
                 }
 
-                ShowInMonitor(change, collectionKey, timeStamp, counter);
+                _ = Task.Run(() => ShowInMonitor(change, collectionKey, timeStamp, counter));
 
 
                 // Get target collection
@@ -399,9 +397,9 @@ namespace OnlineMongoMigrationProcessor
                             await BulkProcessChangesAsync(
                             migrationUnit,
                             targetCollection,
-                            insertEvents: docs.DocsToBeInserted,
-                            updateEvents: docs.DocsToBeUpdated,
-                            deleteEvents: docs.DocsToBeDeleted,
+                            insertEvents: docs.DocsToBeInserted.Values.ToList(),
+                            updateEvents: docs.DocsToBeUpdated.Values.ToList(),
+                            deleteEvents: docs.DocsToBeDeleted.Values.ToList(),
                             accumulatedChangesInColl: docs);
 
                             // Only update resume token AFTER successful batch write

@@ -370,10 +370,10 @@ namespace OnlineMongoMigrationProcessor
             int batchSize = 50)
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
-            _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
+            _log.WriteLine($"{_syncBackPrefix}BulkProcessChangesAsync started - Collection: {collectionKey}, Events: {accumulatedChangesInColl.TotalEventCount}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}", LogType.Debug);
 
             if ((insertEvents.Count + updateEvents.Count + deleteEvents.Count) > 0)
-                _log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
+                _log.ShowInMonitor($"{_syncBackPrefix}Flushing Changes for Collection: {collectionKey}, Events: {accumulatedChangesInColl.TotalEventCount}, Inserts: {insertEvents.Count}, Updates: {updateEvents.Count}, Deletes: {deleteEvents.Count}, BatchSize: {batchSize}");
 
             CounterDelegate<MigrationUnit> counterDelegate = (migrationUnit, counterType, operationType, count) =>
             {

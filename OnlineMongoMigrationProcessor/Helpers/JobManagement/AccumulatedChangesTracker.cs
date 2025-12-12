@@ -11,10 +11,35 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     public class AccumulatedChangesTracker
     {
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeInserted { get; private set; } = new();
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeUpdated { get; private set; } = new();
-        public List<ChangeStreamDocument<BsonDocument>> DocsToBeDeleted { get; private set; } = new();
+        // Thread-safety lock for dictionary operations
+        private readonly object _lock = new object();
+               
+        public Dictionary<string, ChangeStreamDocument<BsonDocument>> DocsToBeInserted { get; private set; } = new();
+        public Dictionary<string, ChangeStreamDocument<BsonDocument>> DocsToBeUpdated { get; private set; } = new();
+        public Dictionary<string, ChangeStreamDocument<BsonDocument>> DocsToBeDeleted { get; private set; } = new();
 
+        public long TotalChangesCount
+        {
+            get
+            {
+                //lock (_lock)
+                //{
+                    return DocsToBeInserted.Count + DocsToBeUpdated.Count + DocsToBeDeleted.Count;
+                //}
+            }
+        }
+
+        private long _totalEventCount = 0;
+        public long TotalEventCount
+        {
+            get
+            {
+                //lock (_lock)
+                //{
+                    return _totalEventCount;
+                //}
+            }
+        }
 
         // Track the latest resume token for checkpoint on success
         public string CollectionKey { get; private set; } = string.Empty;
@@ -37,72 +62,71 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void AddInsert(ChangeStreamDocument<BsonDocument> change)
         {
-            var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
-            if (changeCollectionKey != _collectionKey)
-                return;
+            lock (_lock)
+            {
+                _totalEventCount++;
+                var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+                if (changeCollectionKey != _collectionKey)
+                    return;
 
-            var id = change.DocumentKey.ToJson();
+                var id = change.DocumentKey.ToJson();
+                if(string.IsNullOrEmpty(id))
+                    return;
 
-            if(string.IsNullOrEmpty(id))
-                return;
+                //To deduplicate
+                DocsToBeUpdated.Remove(id);
+                DocsToBeDeleted.Remove(id);
+                
+                // Directly set/overwrite
+                DocsToBeInserted[id] = change;
 
-            // Remove from other lists
-            DocsToBeUpdated.RemoveAll(c => c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-            DocsToBeDeleted.RemoveAll(c => c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-
-            // Replace if already exists
-            DocsToBeInserted.RemoveAll(c => c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-            DocsToBeInserted.Add(change);
-
-            // Track earliest and latest change metadata for checkpoint updates
-            UpdateMetadata(change);
+                UpdateMetadata(change);
+            }
         }
 
         public void AddUpdate(ChangeStreamDocument<BsonDocument> change)
         {
-            var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
-            if (changeCollectionKey != _collectionKey)
-                return;
+            lock (_lock)
+            {
+                _totalEventCount++;
+                var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+                if (changeCollectionKey != _collectionKey)
+                    return;
 
-            var id = change.DocumentKey.ToJson();
+                var id = change.DocumentKey.ToJson();
+                if (string.IsNullOrEmpty(id))
+                    return;
 
-            if (string.IsNullOrEmpty(id))
-                return;
+                //To deduplicate
+                DocsToBeDeleted.Remove(id);
+                DocsToBeUpdated[id] = change;
 
-            // Remove from delete list
-            DocsToBeDeleted.RemoveAll(c => c.DocumentKey != null && c.DocumentKey != null && c.DocumentKey.ToJson() == id);
+                // Don't remove from insert — updates after insert are valid
 
-            // Replace in update list
-            DocsToBeUpdated.RemoveAll(c => c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-            DocsToBeUpdated.Add(change);
-
-            // Don't remove from insert — updates after insert are valid
-
-            // Track earliest and latest change metadata for checkpoint updates
-            UpdateMetadata(change);
+                UpdateMetadata(change);
+            }
         }
 
         public void AddDelete(ChangeStreamDocument<BsonDocument> change)
         {
-            var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
-            if (changeCollectionKey != _collectionKey)
-                return;
+            lock (_lock)
+            {
+                _totalEventCount++;
+                var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+                if (changeCollectionKey != _collectionKey)
+                    return;
 
-            var id = change.DocumentKey.ToJson();
+                var id = change.DocumentKey.ToJson();
+                if (string.IsNullOrEmpty(id))
+                    return;
+                
+                //To deduplicate
+                DocsToBeInserted.Remove(id);
+                DocsToBeUpdated.Remove(id);
+                DocsToBeDeleted[id] = change;
 
-            if (string.IsNullOrEmpty(id))
-                return;
-
-            // Remove from insert and update
-            DocsToBeInserted.RemoveAll(c => c.DocumentKey != null && c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-            DocsToBeUpdated.RemoveAll(c => c.DocumentKey != null && c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-
-            // Replace in delete list
-            DocsToBeDeleted.RemoveAll(c => c.DocumentKey != null && c.DocumentKey != null && c.DocumentKey.ToJson() == id);
-            DocsToBeDeleted.Add(change);
-
-            // Track earliest and latest change metadata for checkpoint updates
-            UpdateMetadata(change);
+                UpdateMetadata(change);
+            }
         }
 
         /// <summary>
@@ -137,17 +161,38 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 }
             }
         }
+        public bool Reset(bool isFinalFlush = true)
+        {
+            lock (_lock)
+            {
+                DocsToBeInserted.Clear();
+                DocsToBeUpdated.Clear();
+                DocsToBeDeleted.Clear();
+
+                if (isFinalFlush)
+                {
+                    _totalEventCount = 0;
+                    LatestResumeToken = string.Empty;
+                    LatestTimestamp = DateTime.MinValue;
+                    LatestDocumentKey = string.Empty;
+                }
+                return true;
+                
+            }
+        }
 
         /// <summary>
         /// Clear all metadata after successful checkpoint update or on failure rollback.
         /// </summary>
         public void ClearMetadata()
         {
-           
-            // Clear latest
-            LatestResumeToken = string.Empty;
-            LatestTimestamp = DateTime.MinValue;
-            LatestDocumentKey = string.Empty;
+            lock (_lock)
+            {
+                // Clear latest
+                LatestResumeToken = string.Empty;
+                LatestTimestamp = DateTime.MinValue;
+                LatestDocumentKey = string.Empty;
+            }
         }       
         
     }

@@ -1489,14 +1489,14 @@ else if (@_showLogBackupFile)
     private void OnCSReset(List<MigrationUnit> migrationUnits)
     {
         _resetChangeStreamDialogOpen = false;
-        var mj = MigrationJob;
-        if (migrationUnits != null && mj?.MigrationUnitBasics != null)
+        //var mj = MigrationJob;
+        if (migrationUnits != null && MigrationJob?.MigrationUnitBasics != null)
         {
-            //var jobList = JobManager.GetJobList();
-            var migrationUnitsToReset = JobManager.GetMigrationUnits(mj);
+            var migrationUnitsToReset = JobManager.GetMigrationUnits(MigrationJob);
+            var migrationUnitIdsToReset = migrationUnits.Select(mu => mu.Id).ToHashSet();
             for (int i = 0; i < migrationUnitsToReset.Count; i++)
             {
-                if (migrationUnits.Contains(migrationUnitsToReset[i]))
+                if (migrationUnitIdsToReset.Contains(migrationUnitsToReset[i].Id))
                     migrationUnitsToReset[i].ResetChangeStream = true; // Reset change stream for every second collection
                 else
                     migrationUnitsToReset[i].ResetChangeStream = false; // Ensure other collections are not reset

@@ -745,7 +745,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         isSucessful = true;
                     }
                 }
-                catch (Exception ex) when (ex is MongoExecutionTimeoutException)
+                catch (Exception ex) when (ex is MongoExecutionTimeoutException || ex is TimeoutException)
                 {
                     log.WriteLine($"Timeout when setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Debug);
                 }
