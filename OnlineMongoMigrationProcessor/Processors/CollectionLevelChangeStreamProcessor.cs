@@ -209,6 +209,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+                    _log.WriteLine($"{_syncBackPrefix}Cleaning up {_activeCursors.Count} remaining active cursors", LogType.Warning);
         private bool AdjustCusrsorTimeCollection(MigrationUnit mu, bool force=false)
         {
             try
