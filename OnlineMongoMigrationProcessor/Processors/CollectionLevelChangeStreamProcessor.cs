@@ -74,8 +74,16 @@ namespace OnlineMongoMigrationProcessor
                 loops++;
                 LogRoundCompletion(loops, totalKeys);
 
+                
+                // Initialize resume tokens for migration units without them, after 1st loop and  then every 4 loops
+                if (loops==1||loops % 4 == 0)
+                {
+                    _ = InitializeResumeTokensForUnsetUnitsAsync(token);
+                }
+
                 //static collections resume tokens need adjustment
                 AdjustCusrsorTimeForStaticCollections();
+
 
                 index = 0;
                 sortedKeys = GetSortedCollectionKeys();
@@ -98,8 +106,17 @@ namespace OnlineMongoMigrationProcessor
             return _migrationUnitsToProcess
                 .Where(kvp =>
                 {
-                    var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(kvp.Key);
-                    return mu != null && (!string.IsNullOrEmpty(mu.ResumeToken) || !string.IsNullOrEmpty(mu.OriginalResumeToken));
+                    var mu = MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics.FirstOrDefault(m => m.Id == kvp.Key);
+                    if (mu == null)
+                        return false;                    
+                   
+                    
+                    // Check cursor timestamp based on syncBack mode
+                    bool hasCursorTimestamp = _syncBack 
+                        ? mu.SyncBackCursorUtcTimestamp > DateTime.MinValue 
+                        : mu.CursorUtcTimestamp > DateTime.MinValue;
+                    
+                    return hasCursorTimestamp;
                 })
                 .OrderByDescending(kvp => kvp.Value) //value is CSNormalizedUpdatesInLastBatch
                 .Select(kvp => kvp.Key)
@@ -108,7 +125,7 @@ namespace OnlineMongoMigrationProcessor
 
         private void LogProcessingConfiguration(int collectionCount)
         {
-            _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {collectionCount} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, collectionCount)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.", LogType.Info);
+            _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {collectionCount} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, collectionCount)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds. Collections without a resume token will be skipped and rechecked every 4 rounds.", LogType.Info);
         }
 
         private int CalculateBatchDuration(List<string> batchKeys)
@@ -264,7 +281,7 @@ namespace OnlineMongoMigrationProcessor
 
         private void LogRoundCompletion(long loops, int totalKeys)
         {
-            _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts.");
+            _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts. Collections without a resume token will be skipped.");
         }
 
         private bool AdjustCusrsorTimeCollection(MigrationUnit mu, bool force=false)
@@ -339,6 +356,59 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{_syncBackPrefix}Error adjusting cursor time for static collection {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Error);
                 StopProcessing = true;
                 return false;
+            }
+        }
+
+        private async Task InitializeResumeTokensForUnsetUnitsAsync(CancellationToken token)
+        {
+            try
+            {
+                bool shownlog = false;
+                foreach (var unitId in _migrationUnitsToProcess.Keys)
+                {
+                    if (token.IsCancellationRequested || ExecutionCancelled)
+                        break;
+
+                    var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(unitId);
+                    if (mu == null)
+                        continue;
+
+                    // Check if both ResumeToken and OriginalResumeToken are not set
+                    if (string.IsNullOrEmpty(mu.ResumeToken) && string.IsNullOrEmpty(mu.OriginalResumeToken))
+                    {
+                        if(shownlog==false)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Rechecking collections without a resume token; these collections were previously skipped.", LogType.Info);
+                            shownlog = true;
+                        }
+
+                        _log.WriteLine($"{_syncBackPrefix}Setting resume token for {mu.DatabaseName}.{mu.CollectionName} (no tokens set)", LogType.Verbose);
+                        
+                        try
+                        {
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(
+                                _log,
+                                _syncBack ? _targetClient : _sourceClient,
+                                MigrationJobContext.CurrentlyActiveJob,
+                                mu,
+                                30,
+                                token);
+                        }
+                        catch (Exception ex)
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}Error setting resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Debug);
+                        }
+                    }
+
+                    //remove from cache
+                    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
+                }
+
+                _log.WriteLine($"{_syncBackPrefix}InitializeResumeTokensForUnsetUnitsAsync completed", LogType.Verbose);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Error in InitializeResumeTokensForUnsetUnitsAsync: {ex.Message}", LogType.Error);
             }
         }
 
@@ -1112,6 +1182,13 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 MigrationJobContext.SaveMigrationUnit(mu,true);
+                
+                // Update the dictionary with the latest CSNormalizedUpdatesInLastBatch for accurate sorting
+                if (_migrationUnitsToProcess.ContainsKey(mu.Id))
+                {
+                    _migrationUnitsToProcess[mu.Id] = mu.CSNormalizedUpdatesInLastBatch;
+                }
+                
                 _log.WriteLine($"{_syncBackPrefix}Batch counters updated - CSUpdatesInLastBatch: {eventCounter}, CSNormalizedUpdatesInLastBatch: {mu.CSNormalizedUpdatesInLastBatch} for {collectionKey}", LogType.Verbose);
                 
 

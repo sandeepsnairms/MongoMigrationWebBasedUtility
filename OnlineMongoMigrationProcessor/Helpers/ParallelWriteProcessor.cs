@@ -213,7 +213,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             long sequenceNumber = 0;
 
             // Add all operations with their sequence numbers based on ClusterTime
-            foreach (var evt in insertEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+            foreach (var evt in insertEvents.Where(e => e != null).OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
             {
                 operations.Add(new OrderedOperation
                 {
@@ -224,7 +224,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 });
             }
 
-            foreach (var evt in updateEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+            foreach (var evt in updateEvents.Where(e => e != null).OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
             {
                 operations.Add(new OrderedOperation
                 {
@@ -235,7 +235,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 });
             }
 
-            foreach (var evt in deleteEvents.OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
+            foreach (var evt in deleteEvents.Where(e => e != null).OrderBy(e => e.ClusterTime ?? new BsonTimestamp(0, 0)))
             {
                 operations.Add(new OrderedOperation
                 {
