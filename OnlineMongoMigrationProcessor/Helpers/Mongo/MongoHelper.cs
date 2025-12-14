@@ -460,35 +460,6 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             
         }
 
-
-        public static bool GetPendingOplogCountAsync(Log log, MongoClient client, long secondsSinceEpoch, string collectionNameNamespace)
-        {
-            try
-            {
-                var localDb = client.GetDatabase("local");
-                var oplog = localDb.GetCollection<BsonDocument>("oplog.rs");
-
-                // Convert secondsSinceEpoch (UNIX timestamp) to DateTime (UTC)
-                var wallTime = DateTimeOffset.FromUnixTimeSeconds(secondsSinceEpoch).UtcDateTime;
-
-                var filter = Builders<BsonDocument>.Filter.And(
-                    Builders<BsonDocument>.Filter.Gte("wall", wallTime),
-                    Builders<BsonDocument>.Filter.Eq("ns", collectionNameNamespace)
-                );
-
-                var count = oplog.CountDocuments(filter);
-                log.WriteLine($"Approximate pending oplog entries for  {collectionNameNamespace} is {count}", LogType.Debug);
-                return true;
-            }
-            catch
-            {
-                //log.WriteLine($"Could not calculate pending oplog entries. Reason: {ex.Message}");
-                //do nothing
-                return false;
-            }
-        }
-
-
         public static async Task<(bool IsCSEnabled, string Version)> IsChangeStreamEnabledAsync(Log log,string PEMFileContents,string connectionString, MigrationUnit mu, bool createCollection=false)
         {
             string version = string.Empty;
@@ -1250,48 +1221,6 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
             return false;
         }
-
-        //public static bool UsesOnlyGteAndLt(BsonDocument filter)
-        //{
-        //    if (filter == null || !filter.Any())
-        //        return false;
-
-        //    return CheckElement(filter);
-        //}
-
-        //private static bool CheckElement(BsonValue value)
-        //{
-        //    if (value == null || value.IsBsonNull)
-        //        return true;
-
-        //    if (value.IsBsonDocument)
-        //    {
-        //        var doc = value.AsBsonDocument;
-        //        foreach (var elem in doc.Elements)
-        //        {
-        //            if (elem.Name.StartsWith("$"))
-        //            {
-        //                // found an operator — check if it's allowed
-        //                if (elem.Name != "$gte" && elem.Name != "$lt")
-        //                    return false;
-        //            }
-
-        //            // recursively check nested content
-        //            if (!CheckElement(elem.Value))
-        //                return false;
-        //        }
-        //    }
-        //    else if (value.IsBsonArray)
-        //    {
-        //        foreach (var item in value.AsBsonArray)
-        //        {
-        //            if (!CheckElement(item))
-        //                return false;
-        //        }
-        //    }
-
-        //    return true;
-        //}
 
         public static BsonDocument GetFilterDoc(string? filter)
         {

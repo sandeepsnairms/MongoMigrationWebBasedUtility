@@ -23,13 +23,8 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class DumpRestoreProcessor : MigrationProcessor
     {
-
-        //private string _toolsLaunchFolder = string.Empty;
         private string _mongoDumpOutputFolder = Path.Combine(Helper.GetWorkingFolder(), "mongodump");
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
-
-        //private SafeFifoCollection<string, MigrationUnit> MigrationUnitsPendingUpload = new SafeFifoCollection<string, MigrationUnit>();
-
         private OrderedUniqueList<string> _migrationUnitsPendingUpload = new OrderedUniqueList<string>();
 
         // Worker pool references (shared across all processors via coordinator)
@@ -1052,58 +1047,25 @@ namespace OnlineMongoMigrationProcessor
         {
             _cts.Token.ThrowIfCancellationRequested();
 
-            // Build base args per attempt
-            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";//  --out {Path.Combine(folder,$"{chunkIndex}.bson")}";
-
             // Disk space/backpressure check
             if (!CheckDiskSpaceForDump(mu, folder, targetConnectionString, dbName, colName))
             {
                 return Task.FromResult(TaskResult.Canceled);
             }
 
-            long docCount = BuildDumpQuery(mu, chunkIndex, collection, dbName, colName, ref args);
+            // Build base args per attempt
+            string args = BuildDumpArgs(sourceConnectionString, dbName, colName);
 
-            // Ensure previous dump file (if any) is removed before fresh dump
-            var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
-            if (File.Exists(dumpFilePath))
-            {
-                try { File.Delete(dumpFilePath); } catch { }
-            }
+            long docCount = BuildDumpQuery(mu, chunkIndex, collection, dbName, colName, ref args);
+            var dumpFilePath = PrepareDumpFile(folder, chunkIndex);
 
             try
             {
-                // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log);
-
-                var task = Task.Run(() => processExecutor.Execute(
-                    mu, 
-                    mu.MigrationChunks[chunkIndex], 
-                    chunkIndex, 
-                    initialPercent, 
-                    contributionFactor, 
-                    docCount, 
-                    $"{MongoToolsFolder}mongodump", 
-                    args,
-                    dumpFilePath,
-                    _cts.Token,
-                    onProcessStarted: (pid) => RegisterDumpProcess(pid),
-                    onProcessEnded: (pid) => UnregisterDumpProcess(pid),
-                    isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
-                ), _cts.Token);
-                task.Wait(_cts.Token);
-                bool result = task.Result;
+                bool result = ExecuteDumpProcess(mu, chunkIndex, args, dumpFilePath, docCount, initialPercent, contributionFactor);
 
                 if (result)
                 {
-                    UpdateChunkStatusSafe(mu.MigrationChunks[chunkIndex], () =>
-                    {
-                        mu.MigrationChunks[chunkIndex].IsDownloaded = true;
-                    });
-                    _log.WriteLine($"{dbName}.{colName} added to upload queue.");
-                    //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
-                    _migrationUnitsPendingUpload.Add(mu.Id);
-                    Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
-                    return Task.FromResult(TaskResult.Success);
+                    return HandleDumpChunkSuccess(mu, chunkIndex, targetConnectionString, dbName, colName);
                 }
                 else
                 {
@@ -1153,7 +1115,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Build args per attempt
-            string args = $" --uri=\"{targetConnectionString}\" --gzip --archive";// {Path.Combine(folder, $"{chunkIndex}.bson")}";
+            string args = BuildRestoreArgs(targetConnectionString, mu, chunkIndex, dbName, colName);
 
             // If first mu, drop collection, else append. Also No drop in AppendMode
             if (chunkIndex == 0 && !MigrationJobContext.CurrentlyActiveJob.AppendMode)
@@ -1174,18 +1136,10 @@ namespace OnlineMongoMigrationProcessor
                 : Helper.GetMigrationUnitDocCount(mu);
 
             // Determine insertion workers and add to args if needed
-            int insertionWorkers = GetInsertionWorkersCount();
-            _log.WriteLine($"Restore will use {insertionWorkers} insertion worker(s) for {dbName}.{colName}[{chunkIndex}] ({docCount} docs)");
-            
-            if (insertionWorkers > 1)
-            {
-                args = $"{args} --numInsertionWorkersPerCollection={insertionWorkers}";
-            }
+            args = ConfigureInsertionWorkers(args, dbName, colName, chunkIndex, docCount);
 
             try
             {
-                // Create dedicated executor for this worker to avoid shared state issues
-                var processExecutor = new ProcessExecutor(_log);
                 var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
 
                 // Validate dump file exists before restore
@@ -1195,23 +1149,7 @@ namespace OnlineMongoMigrationProcessor
                     return validationResult;
                 }
 
-                var task = Task.Run(() => processExecutor.Execute(
-                    mu, 
-                    mu.MigrationChunks[chunkIndex], 
-                    chunkIndex, 
-                    initialPercent, 
-                    contributionFactor, 
-                    docCount, 
-                    $"{MongoToolsFolder}mongorestore", 
-                    args,
-                    dumpFilePath,
-                    _cts.Token,
-                    onProcessStarted: (pid) => RegisterRestoreProcess(pid),
-                    onProcessEnded: (pid) => UnregisterRestoreProcess(pid),
-                    isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
-                ), _cts.Token);
-                task.Wait(_cts.Token);
-                bool result = task.Result;                             
+                bool result = ExecuteRestoreProcess(mu, chunkIndex, args, dumpFilePath, docCount, initialPercent, contributionFactor);                             
 
                 if (result)
                 {
@@ -2130,6 +2068,128 @@ namespace OnlineMongoMigrationProcessor
             return null; // File exists, validation passed
         }
 
+        private string BuildDumpArgs(string sourceConnectionString, string dbName, string colName)
+        {
+            return $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";
+        }
+
+        private string PrepareDumpFile(string folder, int chunkIndex)
+        {
+            var dumpFilePath = $"{Path.Combine(folder, $"{chunkIndex}.bson")}";
+            
+            // Ensure previous dump file (if any) is removed before fresh dump
+            if (File.Exists(dumpFilePath))
+            {
+                try { File.Delete(dumpFilePath); } catch { }
+            }
+            
+            return dumpFilePath;
+        }
+
+        private bool ExecuteDumpProcess(MigrationUnit mu, int chunkIndex, string args, string dumpFilePath, 
+            long docCount, double initialPercent, double contributionFactor)
+        {
+            // Create dedicated executor for this worker to avoid shared state issues
+            var processExecutor = new ProcessExecutor(_log);
+
+            var task = Task.Run(() => processExecutor.Execute(
+                mu, 
+                mu.MigrationChunks[chunkIndex], 
+                chunkIndex, 
+                initialPercent, 
+                contributionFactor, 
+                docCount, 
+                $"{MongoToolsFolder}mongodump", 
+                args,
+                dumpFilePath,
+                _cts.Token,
+                onProcessStarted: (pid) => RegisterDumpProcess(pid),
+                onProcessEnded: (pid) => UnregisterDumpProcess(pid),
+                isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
+            ), _cts.Token);
+            
+            task.Wait(_cts.Token);
+            return task.Result;
+        }
+
+        private Task<TaskResult> HandleDumpChunkSuccess(MigrationUnit mu, int chunkIndex, 
+            string targetConnectionString, string dbName, string colName)
+        {
+            UpdateChunkStatusSafe(mu.MigrationChunks[chunkIndex], () =>
+            {
+                mu.MigrationChunks[chunkIndex].IsDownloaded = true;
+            });
+            
+            _log.WriteLine($"{dbName}.{colName} added to upload queue.");
+            _migrationUnitsPendingUpload.Add(mu.Id);
+            Task.Run(() => Upload(mu.Id, targetConnectionString), _cts.Token);
+            
+            return Task.FromResult(TaskResult.Success);
+        }
+
+        private string BuildRestoreArgs(string targetConnectionString, MigrationUnit mu, int chunkIndex, 
+            string dbName, string colName)
+        {
+            string args = $" --uri=\"{targetConnectionString}\" --gzip --archive";
+
+            // If first mu, drop collection, else append. Also No drop in AppendMode
+            if (chunkIndex == 0 && !MigrationJobContext.CurrentlyActiveJob.AppendMode)
+            {
+                args = $"{args} --drop";
+                if (MigrationJobContext.CurrentlyActiveJob.SkipIndexes)
+                {
+                    args = $"{args} --noIndexRestore"; // No index to create for all chunks.
+                }
+            }
+            else
+            {
+                args = $"{args} --noIndexRestore"; // No index to create. Index restore only for 1st chunk.
+            }
+            
+            return args;
+        }
+
+        private string ConfigureInsertionWorkers(string args, string dbName, string colName, 
+            int chunkIndex, long docCount)
+        {
+            int insertionWorkers = GetInsertionWorkersCount();
+            _log.WriteLine($"Restore will use {insertionWorkers} insertion worker(s) for {dbName}.{colName}[{chunkIndex}] ({docCount} docs)");
+            
+            if (insertionWorkers > 1)
+            {
+                args = $"{args} --numInsertionWorkersPerCollection={insertionWorkers}";
+            }
+            
+            return args;
+        }
+
+        private bool ExecuteRestoreProcess(MigrationUnit mu, int chunkIndex, string args, string dumpFilePath, 
+            long docCount, double initialPercent, double contributionFactor)
+        {
+            // Create dedicated executor for this worker to avoid shared state issues
+            var processExecutor = new ProcessExecutor(_log);
+
+            var task = Task.Run(() => processExecutor.Execute(
+                mu, 
+                mu.MigrationChunks[chunkIndex], 
+                chunkIndex, 
+                initialPercent, 
+                contributionFactor, 
+                docCount, 
+                $"{MongoToolsFolder}mongorestore", 
+                args,
+                dumpFilePath,
+                _cts.Token,
+                onProcessStarted: (pid) => RegisterRestoreProcess(pid),
+                onProcessEnded: (pid) => UnregisterRestoreProcess(pid),
+                isControlledPauseRequested: () => MigrationJobContext.ControlledPauseRequested
+            ), _cts.Token);
+            
+            task.Wait(_cts.Token);
+            return task.Result;
+        }
+
         #endregion
     }
 }
+

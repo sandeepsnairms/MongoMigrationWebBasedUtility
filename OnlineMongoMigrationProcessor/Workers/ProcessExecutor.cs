@@ -585,25 +585,6 @@ namespace OnlineMongoMigrationProcessor.Workers
             return 0;
         }
 
-        //public void Terminate()
-        //{
-        //    lock (_processLock)
-        //    {
-        //        if (_process != null && !_process.HasExited)
-        //        {
-        //            try
-        //            {
-        //                _process.Kill(entireProcessTree: true);
-        //                _log.WriteLine("Process terminated via Terminate() method");
-        //            }
-        //            catch (Exception ex)
-        //            {
-        //                _log.WriteLine($"Error terminating process: {Helper.RedactPii(ex.Message)}", LogType.Error);
-        //            }
-        //        }
-        //    }
-        //}
-
         /// <summary>
         /// Stops and cleans up all percentage calculation timers.
         /// Call this when stopping a migration job to prevent timers from previous jobs

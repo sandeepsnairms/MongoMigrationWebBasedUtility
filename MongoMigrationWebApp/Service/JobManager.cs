@@ -11,7 +11,6 @@ namespace MongoMigrationWebApp.Service
 
     public class JobManager
     {
-        //private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
@@ -130,12 +129,6 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Job Management
 
-        //public JobList GetJobList()
-        //{
-        //    return _jobList ??= new JobList();
-        //}
-
-       
         public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
         {            
             return Helper.GetMigrationUnitsToMigrate(mj);
@@ -144,19 +137,7 @@ namespace MongoMigrationWebApp.Service
         
         public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
-            //if(active)
-            //{
-            //    if (MigrationWorker != null && MigrationWorker.IsProcessRunning(id))
-            //    {
-            //        Console.WriteLine($"GetMigrationJobById from MigrationWorker.CurrentlyActiveJob");
-            //        var mj = MigrationWorker.CurrentlyActiveJob;
-            //        if(mj != null)
-            //            return mj;
-            //    }
-            //}
-            //Console.WriteLine($"GetMigrationJobById from Store");
             var job = MigrationJobContext.GetMigrationJob(id);
-            //MigrationJobContext.ActiveMigrationJobId = id;
             return job;
         }
 

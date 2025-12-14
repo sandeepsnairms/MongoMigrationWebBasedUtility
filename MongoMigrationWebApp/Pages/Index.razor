@@ -151,26 +151,6 @@
 #pragma warning restore CS1998
 #pragma warning disable CS8602
 
-    // private async Task DownloadFile()
-    // {
-    //     var url = $"/api/File/download/Jobs";
-    //     var response = await HttpClient.GetAsync(url);
-
-    //     if (response.IsSuccessStatusCode)
-    //     {
-    //         var fileBytes = await response.Content.ReadAsByteArrayAsync();
-    //         var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
-
-    //         // Use JavaScript to trigger the file download
-    //         await JS.InvokeVoidAsync("downloadFile", fileBytes, "MigrationJobs.json", contentType);
-    //     }
-    //     else
-    //     {
-    //         await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
-    //     }
-    // }
-    
-
     private List<MigrationJob> GetMigrations()
     {
         return GetMigrationsFromManager(true);

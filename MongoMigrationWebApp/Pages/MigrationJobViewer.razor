@@ -1184,34 +1184,6 @@ else if (@_showLogBackupFile)
         return Task.FromResult(false);
     }
 
-    // private string GetChangeStreamLag(MigrationUnit mu, bool isSyncBack=false)
-    // {
-    //     DateTime timestamp;
-    //     if (isSyncBack)
-    //     {
-    //         timestamp = mu.SyncBackCursorUtcTimestamp;
-    //     }
-    //     else
-    //     {
-    //         timestamp = mu.CursorUtcTimestamp;
-    //     }
-
-    //     if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
-    //     {
-    //         return "NA";
-    //     }
-
-    //     var currentUtc = DateTime.UtcNow;
-    //     var lag = currentUtc - timestamp;
-
-    //     if (lag.TotalSeconds < 0)
-    //     {
-    //         return "Invalid";
-    //     }
-
-    //     return $"{(int)lag.TotalMinutes} min {(int)lag.Seconds} sec";
-    // }
-
     private bool CheckCutoverReadiness()
     {
         //var mjCheck = MigrationJob;
@@ -1226,24 +1198,6 @@ else if (@_showLogBackupFile)
         }
         return true;
     }
-
-
-
-    // private MigrationJob GetMigrationJob(string id)
-    // {
-    //     MigrationJob = JobManager.GetMigrationJobById(JobId);
-    //     if (MigrationJob==null)
-    //     re
-    //     if(MigrationJob.Id == id)
-    //     {
-    //         return MigrationJob;
-    //     }
-    //     else
-    //     {
-    //         throw new Exception("Migration Job not found");            
-    //     }
-    //     //return null;
-    // }
 
     protected override async Task OnParametersSetAsync()
     {

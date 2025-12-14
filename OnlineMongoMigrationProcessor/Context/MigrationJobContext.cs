@@ -181,15 +181,6 @@ namespace OnlineMongoMigrationProcessor.Context
             }
         }
 
-
-        //public static MigrationJob? GetCurrentlyActiveMigrationJob()
-        //{
-        //    // Use the cached property instead of directly calling GetMigrationJob
-        //    return CurrentlyActiveJob;
-        //}
-
-
-
         public static List<MigrationJob>  PopulateMigrationJobs(List<string> ids)
         {
             List<MigrationJob> jobs = new List<MigrationJob>();

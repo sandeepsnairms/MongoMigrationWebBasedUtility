@@ -112,45 +112,16 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 foreach (var segment in mu.MigrationChunks[migrationChunkIndex].Segments)
                 {
-
                     //back ward compatibility, Id was introduced later
                     segmentIndex++;
                     if (string.IsNullOrEmpty(segment.Id))
                         segment.Id = segmentIndex.ToString();
 
-                    FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
-
-                    if ((mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 && string.IsNullOrEmpty(mu.UserFilter)) || segment.IsProcessed == true)
-                    {
-                        combinedFilter = Builders<BsonDocument>.Filter.Empty;
-
-                        var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(MongoHelper.GetFilterDoc(mu.UserFilter));
-
-                        // Safely combine filters
-                        combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
-
-                    }
-                    else
-                    {
-#pragma warning disable CS8604 // Possible null reference argument.
-                        var bounds = SamplePartitioner.GetChunkBounds(segment.Gte, segment.Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
-#pragma warning restore CS8604 // Possible null reference argument.
-                        var gte = bounds.gte;
-                        var lt = bounds.lt;
-
-                        // Filter by id bounds
-                        FilterDefinition<BsonDocument> idFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
-
-                        //// Filter by datatype (skip if DataTypeFor_Id is specified)
-                        //BsonDocument? userFilter = MongoHelper.GetFilterDoc(mu.UserFilter);
-                        //BsonDocument matchCondition = SamplePartitioner.BuildDataTypeCondition(mu.MigrationChunks[migrationChunkIndex].DataType, userFilter, mu.DataTypeFor_Id.HasValue);
-
-                        //// Combine the filters using $and
-                        //combinedFilter = Builders<BsonDocument>.Filter.And(idFilter, matchCondition);
-                        combinedFilter=idFilter;
-
-                        //var count=MongoHelper.GetDocumentCount(_sourceCollection, idFilter, new BsonDocument());//filter already has user filter.
-                    }
+                    FilterDefinition<BsonDocument> combinedFilter = BuildSegmentFilter(
+                        segment, 
+                        filter, 
+                        mu, 
+                        migrationChunkIndex);
 
                     await semaphore.WaitAsync();
 					tasks.Add(Task.Run(async () =>
@@ -195,39 +166,13 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount > 0 || errors.Count>0)
             {
-#pragma warning disable CS8604 // Possible null reference argument.
-                var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[migrationChunkIndex].Gte, mu.MigrationChunks[migrationChunkIndex].Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
-                var gte = bounds.gte;
-                var lt = bounds.lt;
-
-               _log.WriteLine($"Counting documents on target {mu.DatabaseName}.{mu.CollectionName}[{ migrationChunkIndex}].");
-                
-
-                try
+                var validationResult = ValidateChunkDocumentCounts(mu, migrationChunkIndex);
+                if (validationResult != TaskResult.Success)
                 {
-                    mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
-                    mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
+                    return validationResult;
                 }
-                catch (Exception ex)
-                {
-                   _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Warning);
-                    
-                    ResetSegmentsInChunk(mu.MigrationChunks[migrationChunkIndex]);
-                    return TaskResult.Retry;
-                }
-
-                if (mu.MigrationChunks[migrationChunkIndex].DocCountInTarget == mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount)
-                {
-                   _log.WriteLine($"No documents missing in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Target count: {mu.MigrationChunks[migrationChunkIndex].DocCountInTarget}");
-                }
-                else
-                {
-                   _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Warning);
-					return TaskResult.Retry;
-				}
 
                 MigrationJobContext.SaveMigrationUnit(mu,false);
-
             }
             return TaskResult.Success;
         }
@@ -294,34 +239,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         // 2. Write to target (unless simulated)
                         if (!isWriteSimulated)
                         {
-                            if (!MongoHelper.IsCosmosRUEndpoint(_targetCollection))
-                            {
-                                // BulkWriteAsync
-                                var insertModels = set.Select(doc =>
-                                {
-                                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
-                                        doc["_id"] = doc["_id"].AsObjectId;
-                                    return new InsertOneModel<BsonDocument>(doc);
-                                }).ToList();
-
-                                var result = await _targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false }, cancellationToken);
-                                Interlocked.Add(ref _successCount, result.InsertedCount);
-                                segment.ResultDocCount += result.InsertedCount;
-                            }
-                            else
-                            {
-                                // InsertManyAsync
-                                var docsToInsert = set.Select(doc =>
-                                {
-                                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
-                                        doc["_id"] = doc["_id"].AsObjectId;
-                                    return doc;
-                                }).ToList();
-
-                                await _targetCollection.InsertManyAsync(docsToInsert, new InsertManyOptions { IsOrdered = false }, cancellationToken);
-                                Interlocked.Add(ref _successCount, docsToInsert.Count);
-                                segment.ResultDocCount += docsToInsert.Count;
-                            }
+                            await WriteDocumentsToTarget(set, segment, cancellationToken);
                         }
                         else
                         {
@@ -330,30 +248,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
-                        long bulkInserted = ex.Result?.InsertedCount ?? 0;
-                        Interlocked.Add(ref _successCount, bulkInserted);
-                        segment.ResultDocCount += bulkInserted;
-
-
-                        int dupeCount = ex.WriteErrors.Count(e => e.Code == 11000);
-                        if (dupeCount > 0)
-                        {
-                            Interlocked.Add(ref _skippedCount, dupeCount);
-                            segment.ResultDocCount += dupeCount;
-                        }
-
-                         int otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
-                        if (otherErrors > 0)
-                        {
-                            Interlocked.Add(ref _failureCount, otherErrors);
-                            _log.WriteLine(
-                                $"Document copy encountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
-                                LogType.Error);
-                            LogErrors(
-                                ex.WriteErrors.Where(e => e.Code != 11000).ToList(),
-                                $"segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]"
-                            );
-                        }
+                        HandleBulkWriteException(ex, segment, mu, migrationChunkIndex, segmentId);
                     }
                     catch (OutOfMemoryException ex)
                     {
@@ -517,61 +412,13 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 if (documentIds.Count > 0)
                 {
-                    _log.WriteLine($"Processing {documentIds.Count} individual documents as bulk insert failed.");
-
-                    var targetFilter = Builders<BsonDocument>.Filter.In("_id", documentIds);
-                    var existingTargetDocs = await _targetCollection.Find(targetFilter)
-                        .Project(Builders<BsonDocument>.Projection.Include("_id"))
-                        .ToListAsync(cancellationToken);
-
-                    var existingIds = new HashSet<BsonValue>(existingTargetDocs.Select(doc => doc["_id"]));
-
-                    _log.WriteLine($"Count before loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
-                    // Find missing documents
-                    foreach (var sourceDoc in sourceDocuments)
-                    {
-                        _log.ShowInMonitor("Processing document with _id : " + sourceDoc["_id"].ToString());
-                        if (cancellationToken.IsCancellationRequested)
-                            return;
-
-                        if (!sourceDoc.Contains("_id"))
-                            continue;
-
-                        var idValue = sourceDoc["_id"];
-
-                        if (!existingIds.Contains(idValue))
-                        {
-                            missingDocuments.Add(sourceDoc);
-                            foundMissingCount++;
-                            
-                            // Attempt to insert the missing document if not simulated
-                            if (!isWriteSimulated)
-                            {
-                                try
-                                {
-                                    await _targetCollection.InsertOneAsync(sourceDoc, cancellationToken: cancellationToken);
-                                    Interlocked.Increment(ref _successCount);
-                                    Interlocked.Decrement(ref _failureCount);                                    
-                                    // Update the segment that should contain this document
-                                    UpdateSegmentResultCount(migrationChunk);
-                                }
-                                catch (MongoDuplicateKeyException)
-                                {
-                                    // Document was inserted by another process, skip                                   
-                                    Interlocked.Increment(ref _skippedCount);
-                                    Interlocked.Decrement(ref _failureCount);
-                                    // Update the segment that should contain this document
-                                    UpdateSegmentResultCount(migrationChunk);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _log.WriteLine($"Failed to insert missing document with _id: {idValue}. Error: {ex.Message}", LogType.Error);
-                                    Interlocked.Increment(ref _failureCount);
-                                }
-                            }                            
-                        }
-                    }
-                    _log.WriteLine($"Count after loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
+                    foundMissingCount += await ProcessMissingDocuments(
+                        sourceDocuments, 
+                        documentIds, 
+                        migrationChunk, 
+                        isWriteSimulated, 
+                        cancellationToken, 
+                        missingDocuments);
                 }
 
                 pageIndex++;
@@ -612,6 +459,211 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (segmentToUpdate != null)
             {
                 segmentToUpdate.ResultDocCount++;
+            }
+        }
+
+        private FilterDefinition<BsonDocument> BuildSegmentFilter(
+            Segment segment,
+            FilterDefinition<BsonDocument> filter,
+            MigrationUnit mu,
+            int migrationChunkIndex)
+        {
+            FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
+
+            if ((mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 && string.IsNullOrEmpty(mu.UserFilter)) || segment.IsProcessed == true)
+            {
+                var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(MongoHelper.GetFilterDoc(mu.UserFilter));
+                combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
+            }
+            else
+            {
+#pragma warning disable CS8604 // Possible null reference argument.
+                var bounds = SamplePartitioner.GetChunkBounds(segment.Gte, segment.Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
+#pragma warning restore CS8604 // Possible null reference argument.
+                var gte = bounds.gte;
+                var lt = bounds.lt;
+
+                combinedFilter = MongoHelper.GenerateQueryFilter(gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
+            }
+
+            return combinedFilter;
+        }
+
+        private TaskResult ValidateChunkDocumentCounts(MigrationUnit mu, int migrationChunkIndex)
+        {
+#pragma warning disable CS8604 // Possible null reference argument.
+            var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[migrationChunkIndex].Gte, mu.MigrationChunks[migrationChunkIndex].Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
+            var gte = bounds.gte;
+            var lt = bounds.lt;
+
+            _log.WriteLine($"Counting documents on target {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}].");
+
+            try
+            {
+                mu.MigrationChunks[migrationChunkIndex].DocCountInTarget = MongoHelper.GetDocumentCount(_targetCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
+                mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, gte, lt, mu.MigrationChunks[migrationChunkIndex].DataType, MongoHelper.GetFilterDoc(mu.UserFilter), mu.DataTypeFor_Id.HasValue);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Encountered error while counting documents on target for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed. Details: {ex}", LogType.Warning);
+                ResetSegmentsInChunk(mu.MigrationChunks[migrationChunkIndex]);
+                return TaskResult.Retry;
+            }
+
+            if (mu.MigrationChunks[migrationChunkIndex].DocCountInTarget == mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount)
+            {
+                _log.WriteLine($"No documents missing in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Target count: {mu.MigrationChunks[migrationChunkIndex].DocCountInTarget}");
+            }
+            else
+            {
+                _log.WriteLine($"Count mismatch in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Chunk will be reprocessed.", LogType.Warning);
+                return TaskResult.Retry;
+            }
+
+            return TaskResult.Success;
+        }
+
+        private async Task WriteDocumentsToTarget(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        {
+            if (!MongoHelper.IsCosmosRUEndpoint(_targetCollection))
+            {
+                await WriteBulkDocuments(documents, segment, cancellationToken);
+            }
+            else
+            {
+                await WriteDocumentsWithInsertMany(documents, segment, cancellationToken);
+            }
+        }
+
+        private async Task WriteBulkDocuments(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        {
+            var insertModels = documents.Select(doc =>
+            {
+                if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                    doc["_id"] = doc["_id"].AsObjectId;
+                return new InsertOneModel<BsonDocument>(doc);
+            }).ToList();
+
+            var result = await _targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false }, cancellationToken);
+            Interlocked.Add(ref _successCount, result.InsertedCount);
+            segment.ResultDocCount += result.InsertedCount;
+        }
+
+        private async Task WriteDocumentsWithInsertMany(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        {
+            var docsToInsert = documents.Select(doc =>
+            {
+                if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                    doc["_id"] = doc["_id"].AsObjectId;
+                return doc;
+            }).ToList();
+
+            await _targetCollection.InsertManyAsync(docsToInsert, new InsertManyOptions { IsOrdered = false }, cancellationToken);
+            Interlocked.Add(ref _successCount, docsToInsert.Count);
+            segment.ResultDocCount += docsToInsert.Count;
+        }
+
+        private void HandleBulkWriteException(
+            MongoBulkWriteException<BsonDocument> ex,
+            Segment segment,
+            MigrationUnit mu,
+            int migrationChunkIndex,
+            string segmentId)
+        {
+            long bulkInserted = ex.Result?.InsertedCount ?? 0;
+            Interlocked.Add(ref _successCount, bulkInserted);
+            segment.ResultDocCount += bulkInserted;
+
+            int dupeCount = ex.WriteErrors.Count(e => e.Code == 11000);
+            if (dupeCount > 0)
+            {
+                Interlocked.Add(ref _skippedCount, dupeCount);
+                segment.ResultDocCount += dupeCount;
+            }
+
+            int otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
+            if (otherErrors > 0)
+            {
+                Interlocked.Add(ref _failureCount, otherErrors);
+                _log.WriteLine(
+                    $"Document copy encountered errors for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]",
+                    LogType.Error);
+                LogErrors(
+                    ex.WriteErrors.Where(e => e.Code != 11000).ToList(),
+                    $"segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]"
+                );
+            }
+        }
+
+        private async Task<long> ProcessMissingDocuments(
+            List<BsonDocument> sourceDocuments,
+            List<BsonValue> documentIds,
+            MigrationChunk migrationChunk,
+            bool isWriteSimulated,
+            CancellationToken cancellationToken,
+            List<BsonDocument> missingDocuments)
+        {
+            long foundMissingCount = 0;
+            
+            _log.WriteLine($"Processing {documentIds.Count} individual documents as bulk insert failed.");
+
+            var targetFilter = Builders<BsonDocument>.Filter.In("_id", documentIds);
+            var existingTargetDocs = await _targetCollection.Find(targetFilter)
+                .Project(Builders<BsonDocument>.Projection.Include("_id"))
+                .ToListAsync(cancellationToken);
+
+            var existingIds = new HashSet<BsonValue>(existingTargetDocs.Select(doc => doc["_id"]));
+
+            _log.WriteLine($"Count before loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
+            
+            foreach (var sourceDoc in sourceDocuments)
+            {
+                _log.ShowInMonitor("Processing document with _id : " + sourceDoc["_id"].ToString());
+                if (cancellationToken.IsCancellationRequested)
+                    break;
+
+                if (!sourceDoc.Contains("_id"))
+                    continue;
+
+                var idValue = sourceDoc["_id"];
+
+                if (!existingIds.Contains(idValue))
+                {
+                    missingDocuments.Add(sourceDoc);
+                    foundMissingCount++;
+                    
+                    if (!isWriteSimulated)
+                    {
+                        await InsertMissingDocument(sourceDoc, idValue, migrationChunk);
+                    }
+                }
+            }
+            
+            _log.WriteLine($"Count after loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
+            
+            return foundMissingCount;
+        }
+
+        private async Task InsertMissingDocument(BsonDocument sourceDoc, BsonValue idValue, MigrationChunk migrationChunk)
+        {
+            try
+            {
+                await _targetCollection.InsertOneAsync(sourceDoc, cancellationToken: CancellationToken.None);
+                Interlocked.Increment(ref _successCount);
+                Interlocked.Decrement(ref _failureCount);
+                UpdateSegmentResultCount(migrationChunk);
+            }
+            catch (MongoDuplicateKeyException)
+            {
+                // Document was inserted by another process, skip
+                Interlocked.Increment(ref _skippedCount);
+                Interlocked.Decrement(ref _failureCount);
+                UpdateSegmentResultCount(migrationChunk);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Failed to insert missing document with _id: {idValue}. Error: {ex.Message}", LogType.Error);
+                Interlocked.Increment(ref _failureCount);
             }
         }
     }
