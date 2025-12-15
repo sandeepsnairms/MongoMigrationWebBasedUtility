@@ -26,6 +26,7 @@ namespace OnlineMongoMigrationProcessor
         private string _mongoDumpOutputFolder = Path.Combine(Helper.GetWorkingFolder(), "mongodump");
         private static readonly SemaphoreSlim _uploadLock = new(1, 1);
         private OrderedUniqueList<string> _migrationUnitsPendingUpload = new OrderedUniqueList<string>();
+        private bool _uploadLockAcquired = false; // Track if we currently hold the upload lock
 
         // Worker pool references (shared across all processors via coordinator)
         private WorkerPoolManager? _dumpPool;
@@ -1269,13 +1270,17 @@ namespace OnlineMongoMigrationProcessor
                 {
                     return; // Prevent concurrent uploads
                 }
+                _uploadLockAcquired = true; // Mark that we acquired the lock
             }
 
             // Don't restart processing if controlled pause was requested
             if (MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine($"Upload skipped for {migrationUnitId} - controlled pause is active",LogType.Debug);
-                try { _uploadLock.Release(); } catch { }
+                if (_uploadLockAcquired)
+                {
+                    try { _uploadLock.Release(); _uploadLockAcquired = false; } catch { }
+                }
                 return;
             }
 
@@ -1307,7 +1312,10 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"Release Upload lock for {key}", LogType.Verbose);
                 // Always release the upload lock if we acquired it
-                try { _uploadLock.Release(); } catch { }
+                if (_uploadLockAcquired)
+                {
+                    try { _uploadLock.Release(); _uploadLockAcquired = false; } catch { }
+                }
             }
         }
 
@@ -1615,13 +1623,19 @@ namespace OnlineMongoMigrationProcessor
             // Clear error tracking
             while (_chunkErrors.TryTake(out _)) { }
             
-            try
+            // Only try to release the upload lock if this instance acquired it
+            if (_uploadLockAcquired)
             {
-                _uploadLock.Release(); // reset the flag
-            }
-            catch
-            {
-                // Do nothing, just reset the flag
+                try
+                {
+                    _uploadLock.Release();
+                    _uploadLockAcquired = false;
+                    _log.WriteLine("Released upload lock during stop");
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"Failed to release upload lock: {ex.Message}", LogType.Debug);
+                }
             }
             
             // Call base implementation
