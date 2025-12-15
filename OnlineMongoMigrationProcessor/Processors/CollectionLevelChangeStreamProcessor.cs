@@ -4,6 +4,7 @@ using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -21,8 +22,8 @@ namespace OnlineMongoMigrationProcessor
 
         private MongoClient _changeStreamMongoClient;
 
-        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
-            : base(log, sourceClient, targetClient, muCache, config, syncBack)
+        public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
+            : base(log, sourceClient, targetClient, muCache, config, syncBack, migrationWorker)
         {
             // Initialize the change stream client based on syncBack mode
             var mj = MigrationJobContext.CurrentlyActiveJob;
@@ -47,10 +48,25 @@ namespace OnlineMongoMigrationProcessor
             LogProcessingConfiguration(sortedKeys.Count);
 
             long loops = 0;
+            long emptyLoops = 0;
+            DateTime lastResumeTokenCheck = DateTime.MinValue;
 
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 var totalKeys = sortedKeys.Count;
+
+                // Handle empty sortedKeys case
+                if (totalKeys == 0)
+                {
+                    var result = await HandleEmptyCollectionKeys(emptyLoops, lastResumeTokenCheck, token);
+                    sortedKeys = result.sortedKeys;
+                    emptyLoops = result.emptyLoops;
+                    lastResumeTokenCheck = result.lastResumeTokenCheck;
+                    continue;
+                }
+
+                // Reset empty loops counter when we have collections to process
+                emptyLoops = ResetEmptyLoopsCounterIfNeeded(emptyLoops, totalKeys);
 
                 while (index < totalKeys && !token.IsCancellationRequested && !ExecutionCancelled)
                 {
@@ -79,6 +95,7 @@ namespace OnlineMongoMigrationProcessor
                 if (loops==1||loops % 4 == 0)
                 {
                     _ = InitializeResumeTokensForUnsetUnitsAsync(token);
+                    lastResumeTokenCheck = DateTime.UtcNow;
                 }
 
                 //static collections resume tokens need adjustment
@@ -88,6 +105,44 @@ namespace OnlineMongoMigrationProcessor
                 index = 0;
                 sortedKeys = GetSortedCollectionKeys();
             }
+        }
+
+        private async Task<(List<string> sortedKeys, long emptyLoops, DateTime lastResumeTokenCheck)> HandleEmptyCollectionKeys(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
+        {
+            emptyLoops++;
+            _log.ShowInMonitor($"{_syncBackPrefix}No collections with resume tokens found (empty loop #{emptyLoops}). Waiting {_config.ChangeStreamBatchDurationMin} seconds before rechecking.");
+            
+            lastResumeTokenCheck = await CheckAndInitializeResumeTokensIfNeeded(emptyLoops, lastResumeTokenCheck, token);
+            
+            // Wait for ChangeStreamBatchDurationMin before checking again
+            await Task.Delay(_config.ChangeStreamBatchDurationMin * 1000, token);
+            
+            // Recheck for collections with resume tokens
+            var sortedKeys = GetSortedCollectionKeys();
+            return (sortedKeys, emptyLoops, lastResumeTokenCheck);
+        }
+
+        private async Task<DateTime> CheckAndInitializeResumeTokensIfNeeded(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
+        {
+            // Check if we should initialize resume tokens (every 10 loops or every 10 minutes)
+            TimeSpan timeSinceLastCheck = DateTime.UtcNow - lastResumeTokenCheck;
+            if (emptyLoops % 10 == 0 || timeSinceLastCheck.TotalMinutes >= 10)
+            {
+                _log.ShowInMonitor($"{_syncBackPrefix}Attempting to initialize resume tokens for unset units (empty loops: {emptyLoops}, time since last check: {timeSinceLastCheck.TotalMinutes:F1} min)");
+                await InitializeResumeTokensForUnsetUnitsAsync(token);
+                return DateTime.UtcNow;
+            }
+            return lastResumeTokenCheck;
+        }
+
+        private long ResetEmptyLoopsCounterIfNeeded(long emptyLoops, int totalKeys)
+        {
+            if (emptyLoops > 0)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Resuming normal processing with {totalKeys} collection(s) after {emptyLoops} empty loops", LogType.Info);
+                return 0;
+            }
+            return emptyLoops;
         }
        
 
@@ -1035,7 +1090,17 @@ namespace OnlineMongoMigrationProcessor
                     {
                         flushedCount = flushedCount + accumulatedChangesInColl.TotalChangesCount;
                         _log.WriteLine($"{_syncBackPrefix}Flushing accumulated changes - Count: {accumulatedChangesInColl.TotalChangesCount} exceeds max: {_config.ChangeStreamMaxDocsInBatch} for {collectionKey}", LogType.Debug);
-                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl,false);
+                        
+                        try
+                        {
+                            await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl, false);
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error during flush for {collectionKey}: {ex.Message}", LogType.Error);
+                            StopJob($"CRITICAL error during flush: {ex.Message}");
+                            throw; // Re-throw to stop processing
+                        }
                         //changeCount = 0; // Reset change count after flush  
                     }
 
@@ -1122,7 +1187,17 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 flushedCount = flushedCount + accumulatedChangesInColl.TotalChangesCount;
                                 _log.WriteLine($"{_syncBackPrefix}Flushing accumulated changes - Count: {accumulatedChangesInColl.TotalChangesCount} exceeds max: {_config.ChangeStreamMaxDocsInBatch} for {collectionKey}", LogType.Debug);
-                                await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl,false);
+                                
+                                try
+                                {
+                                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl, false);
+                                }
+                                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                                {
+                                    _log.WriteLine($"{_syncBackPrefix}CRITICAL error during flush for {collectionKey}: {ex.Message}", LogType.Error);
+                                    StopJob($"CRITICAL error during flush: {ex.Message}");
+                                    throw; // Re-throw to stop processing
+                                }
                                 //changeCount = 0; // Reset change count after flush  
                             }
 
@@ -1144,7 +1219,22 @@ namespace OnlineMongoMigrationProcessor
                 finally
                 {
                     readStopwatch.Stop();
-                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl,false);
+                    
+                    try
+                    {
+                        await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl, false);
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL error during final flush for {collectionKey}: {ex.Message}", LogType.Error);
+                        StopJob($"CRITICAL error during final flush: {ex.Message}");
+                        throw; // Re-throw to stop processing
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Error during final flush for {collectionKey}: {ex.Message}", LogType.Error);
+                        // Don't throw non-critical errors from finally block
+                    }
                 }
             }
             return true;
@@ -1168,7 +1258,16 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Final batch processing - Events: {eventCounter} Total: {accumulatedChangesInColl.TotalChangesCount}, Inserts: {accumulatedChangesInColl.DocsToBeInserted.Count}, Updates: {accumulatedChangesInColl.DocsToBeUpdated.Count}, Deletes: {accumulatedChangesInColl.DocsToBeDeleted.Count}", LogType.Debug);
                 }
 
-                await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl, isFinalFlush);
+                try
+                {
+                    await FlushPendingChangesAsync(mu, targetCollection, accumulatedChangesInColl, isFinalFlush);
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                {
+                    _log.WriteLine($"{_syncBackPrefix}CRITICAL error during flush in ProcessWatchFinallyAsync for {collectionKey}: {ex.Message}", LogType.Error);
+                    StopJob($"CRITICAL error in ProcessWatchFinallyAsync: {ex.Message}");
+                    throw; // Re-throw to stop processing
+                }
 
                 mu.CSUpdatesInLastBatch = eventCounter; 
                 mu.CSNormalizedUpdatesInLastBatch = (long)(eventCounter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));

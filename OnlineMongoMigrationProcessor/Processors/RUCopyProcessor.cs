@@ -7,6 +7,7 @@ using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Partitioner;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -34,8 +35,8 @@ namespace OnlineMongoMigrationProcessor.Processors
         private static readonly TimeSpan BatchDuration = TimeSpan.FromSeconds(60);
         private static readonly object _processingLock = new object();
 
-        public RUCopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
-           : base(log, sourceClient, config)
+        public RUCopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+           : base(log, sourceClient, config, migrationWorker)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }

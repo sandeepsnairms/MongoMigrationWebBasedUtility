@@ -8,6 +8,7 @@ using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Partitioner;
 using OnlineMongoMigrationProcessor.Processors;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -267,21 +268,21 @@ namespace OnlineMongoMigrationProcessor.Workers
             switch (MigrationJobContext.CurrentlyActiveJob.JobType)
             {
                 case JobType.MongoDriver:
-                    _migrationProcessor = new CopyProcessor(_log, _sourceClient!, _config);
+                    _migrationProcessor = new CopyProcessor(_log, _sourceClient!, _config, this);
                     _log.WriteLine("CopyProcessor created for MongoDriver job type", LogType.Verbose);
                     break;
                 case JobType.DumpAndRestore:
-                    _migrationProcessor = new DumpRestoreProcessor(_log,_sourceClient!, _config);
+                    _migrationProcessor = new DumpRestoreProcessor(_log,_sourceClient!, _config, this);
                     _migrationProcessor.MongoToolsFolder = _toolsLaunchFolder;
                     _log.WriteLine("DumpRestoreProcessor created for DumpAndRestore job type", LogType.Verbose);
                     break;
                 case JobType.RUOptimizedCopy:
-            _migrationProcessor = new RUCopyProcessor(_log, _sourceClient!, _config);
+            _migrationProcessor = new RUCopyProcessor(_log, _sourceClient!, _config, this);
                     _log.WriteLine("RUCopyProcessor created for RUOptimizedCopy job type", LogType.Verbose);
                     break;
                 default:
                     _log.WriteLine($"Unknown JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}. Defaulting to MongoDriver.", LogType.Error);
-            _migrationProcessor = new CopyProcessor(_log, _sourceClient!, _config);
+            _migrationProcessor = new CopyProcessor(_log, _sourceClient!, _config, this);
                     break;
             }
             _migrationProcessor.ProcessRunning = true;
@@ -1214,7 +1215,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             _migrationProcessor = null;
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
-            _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!);
+            _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!, this);
             _migrationProcessor.ProcessRunning = true;
             JobStarting = false;
             var dummyUnit = new MigrationUnit(MigrationJobContext.CurrentlyActiveJob,"", "", new List<MigrationChunk>());

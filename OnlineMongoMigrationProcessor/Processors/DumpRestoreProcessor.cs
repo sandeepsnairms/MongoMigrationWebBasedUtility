@@ -95,8 +95,8 @@ namespace OnlineMongoMigrationProcessor
             return acquired;
         }
 
-        public DumpRestoreProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
-            : base(log,  sourceClient, config)
+        public DumpRestoreProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+            : base(log,  sourceClient, config, migrationWorker)
         {
             _jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? throw new InvalidOperationException("Job ID cannot be null");
             

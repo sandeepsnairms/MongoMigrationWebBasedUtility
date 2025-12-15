@@ -5,6 +5,7 @@ using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -27,8 +28,8 @@ namespace OnlineMongoMigrationProcessor
 
 
         private bool _monitorAllCollections = false;
-        public ServerLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
-            : base(log, sourceClient, targetClient, muCache, config, syncBack)
+        public ServerLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
+            : base(log, sourceClient, targetClient, muCache, config, syncBack, migrationWorker)
         {
             _uniqueCollectionKeys = new OrderedUniqueList<string>();
         }
@@ -213,7 +214,16 @@ namespace OnlineMongoMigrationProcessor
                             break;
                     }
 
-                    await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                    try
+                    {
+                        await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                    }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync (3.x path): {ex.Message}", LogType.Error);
+                        StopJob($"CRITICAL error in BulkProcessAllChangesAsync (3.x): {ex.Message}");
+                        throw; // Re-throw to stop processing
+                    }
 
                 }
                 else
@@ -245,7 +255,17 @@ namespace OnlineMongoMigrationProcessor
                                 break;
 
                         }
-                        await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                        
+                        try
+                        {
+                            await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync (4.x+ path): {ex.Message}", LogType.Error);
+                            StopJob($"CRITICAL error in BulkProcessAllChangesAsync (4.x+): {ex.Message}");
+                            throw; // Re-throw to stop processing
+                        }
                     }
                 }
             }
@@ -263,7 +283,18 @@ namespace OnlineMongoMigrationProcessor
                 try
                 {
                     if (accumulatedChangesInColl != null)
-                        await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                    {
+                        try
+                        {
+                            await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                        }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error during final BulkProcessAllChangesAsync: {ex.Message}", LogType.Error);
+                            StopJob($"CRITICAL error in final BulkProcessAllChangesAsync: {ex.Message}");
+                            throw; // Re-throw to stop processing
+                        }
+                    }
 
                 }
                 catch (Exception ex)
@@ -422,8 +453,16 @@ namespace OnlineMongoMigrationProcessor
                                 _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write", LogType.Debug);
                             }
                         }
+                        catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                        {
+                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error in BulkProcessAllChangesAsync for {collectionKey}: {ex.Message}", LogType.Error);
+                            StopJob($"CRITICAL error processing {collectionKey}: {ex.Message}");
+                            throw; // Re-throw to stop processing
+                        }
                         catch (Exception ex)
                         {
+                            _log.WriteLine($"{_syncBackPrefix}Error processing changes for {collectionKey}: {ex.Message}", LogType.Error);
+                            throw; // Re-throw to ensure error is handled upstream
                         }
 
                     }

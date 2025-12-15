@@ -34,8 +34,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <param name="sourceDatabaseName">Source database name</param>
         /// <param name="sourceCollectionName">Source collection name</param>
         /// <param name="documentKeys">Collection of document keys from change stream delete events</param>
+        /// <param name="operationType">Type of operation (delete, insert, update)</param>
         /// <returns>Number of successfully stored documents</returns>
-        public async Task<int> StoreDocumentKeysAsync(string sourceDatabaseName, string sourceCollectionName, IEnumerable<BsonDocument> documentKeys)
+        public async Task<int> StoreDocumentKeysAsync(string sourceDatabaseName, string sourceCollectionName, IEnumerable<BsonDocument> documentKeys, string operationType = "delete")
         {
             try
             {
@@ -47,6 +48,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 {
                     ["_id"] = ObjectId.GenerateNewId(), // Use generated ObjectId for temp collection
                     ["documentKey"] = documentKey,
+                    ["operationType"] = operationType,
                     ["createdAt"] = DateTime.UtcNow
                 }).ToList();
 
@@ -56,7 +58,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
 
                 await tempCollection.InsertManyAsync(tempDocuments, new InsertManyOptions { IsOrdered = false });
-                _log.ShowInMonitor($"Stored {tempDocuments.Count} document keys for aggressive change stream delete in temp collection {tempCollectionName}");
+                _log.ShowInMonitor($"Stored {tempDocuments.Count} document keys for aggressive change stream {operationType} in temp collection {tempCollectionName}");
                 return tempDocuments.Count;
             }
             catch (Exception ex)
@@ -207,6 +209,241 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 _log.WriteLine($"Error processing stored deletes for {sourceDatabaseName}.{sourceCollectionName}: {ex.Message}", LogType.Error);
                 return 0;
             }
+        }
+
+        /// <summary>
+        /// Applies all stored insert and update operations after bulk copy completion.
+        /// Reads documents from source collection and applies them to target.
+        /// </summary>
+        /// <param name="sourceDatabaseName">Source database name</param>
+        /// <param name="sourceCollectionName">Source collection name</param>
+        /// <param name="sourceClient">Source MongoDB client to read documents from</param>
+        /// <returns>Tuple with counts of (inserted, updated, skipped) documents</returns>
+        public async Task<(long Inserted, long Updated, long Skipped)> ApplyStoredChangesAsync(string sourceDatabaseName, string sourceCollectionName, MongoClient sourceClient)
+        {
+            try
+            {
+                var tempDb = _targetClient.GetDatabase(_jobId);
+                var tempCollectionName = $"{sourceDatabaseName}_{sourceCollectionName}";
+                var tempCollection = tempDb.GetCollection<BsonDocument>(tempCollectionName);
+
+                // Check if temp collection exists
+                var collectionNames = await tempDb.ListCollectionNamesAsync();
+                var collectionList = await collectionNames.ToListAsync();
+                if (!collectionList.Contains(tempCollectionName))
+                {
+                    return (0, 0, 0);
+                }
+
+                // Get source and target collections
+                var sourceDb = sourceClient.GetDatabase(sourceDatabaseName);
+                var sourceCollection = sourceDb.GetCollection<BsonDocument>(sourceCollectionName);
+                var targetDb = _targetClient.GetDatabase(sourceDatabaseName);
+                var targetCollection = targetDb.GetCollection<BsonDocument>(sourceCollectionName);
+
+                long totalInserted = 0;
+                long totalUpdated = 0;
+                long totalSkipped = 0;
+                const int pageSize = 1000;
+                const int operationBatchSize = 100;
+
+                // Process inserts and updates (skip deletes as they're handled by DeleteStoredDocsAsync)
+                var filter = Builders<BsonDocument>.Filter.In("operationType", new[] { "insert", "update" });
+                
+                int pageNumber = 0;
+                while (true)
+                {
+                    var skip = pageNumber * pageSize;
+                    
+                    // Get a page of stored document keys
+                    var storedKeysPage = await tempCollection
+                        .Find(filter)
+                        .Skip(skip)
+                        .Limit(pageSize)
+                        .ToListAsync();
+
+                    if (storedKeysPage.Count == 0)
+                    {
+                        break;
+                    }
+
+                    _log.ShowInMonitor($"Processing page {pageNumber + 1} with {storedKeysPage.Count} stored changes for {sourceDatabaseName}.{sourceCollectionName}");
+
+                    // Group by operation type
+                    var insertKeys = storedKeysPage
+                        .Where(doc => doc.GetValue("operationType", "").AsString == "insert" && doc.Contains("documentKey"))
+                        .Select(doc => doc["documentKey"].AsBsonDocument)
+                        .ToList();
+
+                    var updateKeys = storedKeysPage
+                        .Where(doc => doc.GetValue("operationType", "").AsString == "update" && doc.Contains("documentKey"))
+                        .Select(doc => doc["documentKey"].AsBsonDocument)
+                        .ToList();
+
+                    // Read documents from source and process inserts
+                    if (insertKeys.Count > 0)
+                    {
+                        var insertDocs = await ReadDocumentsFromSourceAsync(sourceCollection, insertKeys);
+                        var (inserted, skipped) = await ProcessStoredInsertsAsync(targetCollection, insertDocs, operationBatchSize, sourceDatabaseName, sourceCollectionName, pageNumber);
+                        totalInserted += inserted;
+                        totalSkipped += skipped;
+                    }
+
+                    // Read documents from source and process updates
+                    if (updateKeys.Count > 0)
+                    {
+                        var updateDocs = await ReadDocumentsFromSourceAsync(sourceCollection, updateKeys);
+                        var (updated, skipped) = await ProcessStoredUpdatesAsync(targetCollection, updateDocs, operationBatchSize, sourceDatabaseName, sourceCollectionName, pageNumber);
+                        totalUpdated += updated;
+                        totalSkipped += skipped;
+                    }
+
+                    pageNumber++;
+                }
+
+                _log.WriteLine($"Applied stored changes for {sourceDatabaseName}.{sourceCollectionName}: {totalInserted} inserted, {totalUpdated} updated, {totalSkipped} skipped");
+
+                return (totalInserted, totalUpdated, totalSkipped);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error applying stored changes for {sourceDatabaseName}.{sourceCollectionName}: {ex.Message}", LogType.Error);
+                return (0, 0, 0);
+            }
+        }
+
+        private async Task<List<BsonDocument>> ReadDocumentsFromSourceAsync(
+            IMongoCollection<BsonDocument> sourceCollection,
+            List<BsonDocument> documentKeys)
+        {
+            try
+            {
+                // Extract _id values from document keys
+                var ids = documentKeys
+                    .Where(key => key.Contains("_id"))
+                    .Select(key => key["_id"])
+                    .ToList();
+
+                if (ids.Count == 0)
+                {
+                    return new List<BsonDocument>();
+                }
+
+                // Read documents from source
+                var filter = Builders<BsonDocument>.Filter.In("_id", ids);
+                var documents = await sourceCollection.Find(filter).ToListAsync();
+
+                return documents;
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error reading documents from source: {ex.Message}", LogType.Error);
+                return new List<BsonDocument>();
+            }
+        }
+
+        private async Task<(long Inserted, long Skipped)> ProcessStoredInsertsAsync(
+            IMongoCollection<BsonDocument> targetCollection,
+            List<BsonDocument> documents,
+            int batchSize,
+            string databaseName,
+            string collectionName,
+            int pageNumber)
+        {
+            long totalInserted = 0;
+            long totalSkipped = 0;
+
+            for (int i = 0; i < documents.Count; i += batchSize)
+            {
+                var batch = documents.Skip(i).Take(batchSize).ToList();
+                var insertModels = batch.Select(doc =>
+                {
+                    var id = doc["_id"];
+                    if (id.IsObjectId)
+                        doc["_id"] = id.AsObjectId;
+                    return new InsertOneModel<BsonDocument>(doc);
+                }).ToList();
+
+                if (insertModels.Count > 0)
+                {
+                    try
+                    {
+                        var result = await targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
+                        totalInserted += result.InsertedCount;
+                        _log.ShowInMonitor($"Inserted {result.InsertedCount} documents into {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        totalInserted += ex.Result?.InsertedCount ?? 0;
+                        var duplicateErrors = ex.WriteErrors.Count(e => e.Code == 11000);
+                        totalSkipped += duplicateErrors;
+                        
+                        var otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
+                        if (otherErrors > 0)
+                        {
+                            _log.WriteLine($"Insert errors for {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1}): {otherErrors} non-duplicate errors", LogType.Error);
+                        }
+                    }
+                }
+            }
+
+            return (totalInserted, totalSkipped);
+        }
+
+        private async Task<(long Updated, long Skipped)> ProcessStoredUpdatesAsync(
+            IMongoCollection<BsonDocument> targetCollection,
+            List<BsonDocument> documents,
+            int batchSize,
+            string databaseName,
+            string collectionName,
+            int pageNumber)
+        {
+            long totalUpdated = 0;
+            long totalSkipped = 0;
+
+            // Group by _id and take the latest (last in the list for each _id)
+            var deduplicatedDocs = documents
+                .GroupBy(doc => doc["_id"].ToString())
+                .Select(g => g.Last())
+                .ToList();
+
+            for (int i = 0; i < deduplicatedDocs.Count; i += batchSize)
+            {
+                var batch = deduplicatedDocs.Skip(i).Take(batchSize).ToList();
+                var updateModels = batch.Select(doc =>
+                {
+                    var id = doc["_id"];
+                    if (id.IsObjectId)
+                        id = id.AsObjectId;
+                    
+                    var filter = Builders<BsonDocument>.Filter.Eq("_id", id);
+                    return new ReplaceOneModel<BsonDocument>(filter, doc) { IsUpsert = true };
+                }).ToList();
+
+                if (updateModels.Count > 0)
+                {
+                    try
+                    {
+                        var result = await targetCollection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
+                        totalUpdated += result.ModifiedCount + result.Upserts.Count;
+                        _log.ShowInMonitor($"Updated {result.ModifiedCount + result.Upserts.Count} documents in {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        totalUpdated += (ex.Result?.ModifiedCount ?? 0) + (ex.Result?.Upserts?.Count ?? 0);
+                        var duplicateErrors = ex.WriteErrors.Count(e => e.Code == 11000);
+                        totalSkipped += duplicateErrors;
+                        
+                        var otherErrors = ex.WriteErrors.Count(e => e.Code != 11000);
+                        if (otherErrors > 0)
+                        {
+                            _log.WriteLine($"Update errors for {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1}): {otherErrors} non-duplicate errors", LogType.Error);
+                        }
+                    }
+                }
+            }
+
+            return (totalUpdated, totalSkipped);
         }
 
         /// <summary>

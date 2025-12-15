@@ -94,6 +94,326 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             return "Transient error";
         }
 
+        #region Change Stream Processing Helpers
+
+        /// <summary>
+        /// Initializes aggressive change stream helper if needed
+        /// </summary>
+        private static AggressiveChangeStreamHelper? InitializeAggressiveHelper(
+            bool isAggressive, 
+            bool isAggressiveComplete, 
+            MongoClient? targetClient, 
+            Log log, 
+            string jobId)
+        {
+            if (isAggressive && !isAggressiveComplete && targetClient != null)
+            {
+                return new AggressiveChangeStreamHelper(targetClient, log, jobId);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Stores document keys for aggressive change stream processing during bulk copy
+        /// Returns (shouldSkipNormalProcessing, failureCount)
+        /// </summary>
+        private static async Task<(bool ShouldSkip, int FailureCount)> StoreDocumentKeysForAggressiveMode<TMigration>(
+            bool isAggressive,
+            bool isAggressiveComplete,
+            AggressiveChangeStreamHelper? aggressiveHelper,
+            bool isSimulatedRun,
+            IEnumerable<BsonDocument> documentKeys,
+            string databaseName,
+            string collectionName,
+            string operationType,
+            TMigration mu,
+            CounterDelegate<TMigration> incrementCounter,
+            ChangeStreamOperationType csOperationType,
+            Log log,
+            string logPrefix)
+        {
+            if (!isAggressive || isAggressiveComplete || aggressiveHelper == null || isSimulatedRun)
+            {
+                return (false, 0);
+            }
+
+            if (documentKeys == null || !documentKeys.Any())
+            {
+                return (true, 0); // Still skip normal processing
+            }
+
+            try
+            {
+                int storedCount = await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, operationType);
+                incrementCounter(mu, CounterType.Processed, csOperationType, storedCount);
+                return (true, 0); // Skip normal processing, no failures
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"{logPrefix} Error storing {operationType} document keys for aggressive change stream: {ex.Message}", LogType.Error);
+                return (true, 1); // Skip normal processing, 1 failure
+            }
+        }
+
+        /// <summary>
+        /// Executes bulk write operation with retry logic for transient errors
+        /// </summary>
+        private static async Task<(bool Success, long ProcessedCount)> ExecuteBulkWriteWithRetry<TModel>(
+            IMongoCollection<BsonDocument> collection,
+            List<TModel> models,
+            string operationName,
+            Log log,
+            string logPrefix,
+            bool isSimulatedRun,
+            Func<BulkWriteResult<BsonDocument>, long> getCountFunc) where TModel : WriteModel<BsonDocument>
+        {
+            if (!models.Any())
+            {
+                return (true, 0);
+            }
+
+            int maxRetries = 10;
+            int retryDelayMs = 500;
+            long processedCount = 0;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    if (!isSimulatedRun)
+                    {
+                        var result = await collection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
+                        processedCount = getCountFunc(result);
+                    }
+                    else
+                    {
+                        processedCount = models.Count;
+                    }
+                    return (true, processedCount);
+                }
+                catch (MongoBulkWriteException<BsonDocument>)
+                {
+                    // Let MongoBulkWriteException bubble up to caller for specialized handling
+                    throw;
+                }
+                catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
+                {
+                    if (attempt < maxRetries)
+                    {
+                        int delay = retryDelayMs * (int)Math.Pow(2, attempt);
+                        log.WriteLine($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...", LogType.Warning);
+                        await Task.Delay(delay);
+                    }
+                    else
+                    {
+                        log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. ", LogType.Error);
+                        throw new InvalidOperationException(
+                            $"CRITICAL: Unable to process {operationName} batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent deadlock.");
+                    }
+                }
+                catch (Exception ex) when (IsTransientException(ex))
+                {
+                    if (attempt < maxRetries)
+                    {
+                        int delay = retryDelayMs * (int)Math.Pow(2, attempt);
+                        string errorType = GetTransientErrorType(ex);
+                        log.WriteLine($"{logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms... Error: {ex.Message}", LogType.Warning);
+                        await Task.Delay(delay);
+                    }
+                    else
+                    {
+                        log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}.Batch size: {models.Count} documents.", LogType.Error);
+                        throw new InvalidOperationException(
+                            $"CRITICAL: Unable to process {operationName} batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent errors. Error: {ex.Message}");
+                    }
+                }
+            }
+
+            return (false, 0);
+        }
+
+        /// <summary>
+        /// Handles BulkWriteException with duplicate key errors
+        /// </summary>
+        private static (long ProcessedCount, int Failures) HandleBulkWriteException<TMigration>(
+            MongoBulkWriteException<BsonDocument> ex,
+            TMigration mu,
+            CounterDelegate<TMigration> incrementCounter,
+            ChangeStreamOperationType operationType,
+            Log log,
+            string logPrefix,
+            string collectionFullName,
+            Func<BulkWriteResult<BsonDocument>, long> getCountFunc)
+        {
+            long processedCount = getCountFunc(ex.Result);
+            int failures = 0;
+
+            var duplicateKeyErrors = ex.WriteErrors.Where(err => err.Code == 11000).ToList();
+            incrementCounter(mu, CounterType.Skipped, operationType, duplicateKeyErrors.Count);
+
+            var otherErrors = ex.WriteErrors.Where(err => err.Code != 11000).ToList();
+            if (otherErrors.Any())
+            {
+                failures = otherErrors.Count;
+                log.WriteLine($"{logPrefix} {operationType} BulkWriteException (non-duplicate errors) in {collectionFullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
+            }
+            else if (duplicateKeyErrors.Count > 0)
+            {
+                log.ShowInMonitor($"{logPrefix} Skipped {duplicateKeyErrors.Count} duplicate key {operationType}s in {collectionFullName}");
+            }
+
+            return (processedCount, failures);
+        }
+
+        /// <summary>
+        /// Executes bulk write operation for updates with retry logic, returning both modified and upsert counts
+        /// </summary>
+        private static async Task<(bool Success, long ModifiedCount, long UpsertCount)> ExecuteBulkWriteWithRetryForUpdates(
+            IMongoCollection<BsonDocument> collection,
+            List<ReplaceOneModel<BsonDocument>> models,
+            Log log,
+            string logPrefix,
+            bool isSimulatedRun)
+        {
+            if (!models.Any())
+            {
+                return (true, 0, 0);
+            }
+
+            int maxRetries = 10;
+            int retryDelayMs = 500;
+
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                try
+                {
+                    if (!isSimulatedRun)
+                    {
+                        var result = await collection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
+                        return (true, result.ModifiedCount, result.Upserts.Count);
+                    }
+                    else
+                    {
+                        return (true, models.Count, 0);
+                    }
+                }
+                catch (MongoBulkWriteException<BsonDocument>)
+                {
+                    // Let it bubble up to caller for specialized handling
+                    throw;
+                }
+                catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
+                {
+                    if (attempt < maxRetries)
+                    {
+                        int delay = retryDelayMs * (int)Math.Pow(2, attempt);
+                        log.WriteLine($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...", LogType.Warning);
+                        await Task.Delay(delay);
+                    }
+                    else
+                    {
+                        log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. Batch size: {models.Count} documents. ", LogType.Error);
+                        throw new InvalidOperationException(
+                            $"CRITICAL: Unable to process update batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent deadlock.");
+                    }
+                }
+                catch (Exception ex) when (IsTransientException(ex))
+                {
+                    if (attempt < maxRetries)
+                    {
+                        int delay = retryDelayMs * (int)Math.Pow(2, attempt);
+                        string errorType = GetTransientErrorType(ex);
+                        log.WriteLine($"{logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms... Error: {ex.Message}", LogType.Warning);
+                        await Task.Delay(delay);
+                    }
+                    else
+                    {
+                        log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. Batch size: {models.Count} documents. ", LogType.Error);
+                        throw new InvalidOperationException(
+                            $"CRITICAL: Unable to process update batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent errors.");
+                    }
+                }
+            }
+
+            return (false, 0, 0);
+        }
+
+        /// <summary>
+        /// Handles BulkWriteException for updates with special duplicate key retry logic
+        /// </summary>
+        private static async Task<(long UpdateCount, long UpsertCount, int Failures)> HandleUpdateBulkWriteException<TMigration>(
+            MongoBulkWriteException<BsonDocument> ex,
+            IMongoCollection<BsonDocument> collection,
+            List<ReplaceOneModel<BsonDocument>> updateModels,
+            TMigration mu,
+            CounterDelegate<TMigration> incrementCounter,
+            Log log,
+            string logPrefix)
+        {
+            long updateCount = ex.Result?.ModifiedCount ?? 0;
+            long upsertCount = ex.Result?.Upserts?.Count ?? 0;
+            int failures = 0;
+
+            var duplicateKeyErrors = ex.WriteErrors
+                .Where(err => err.Code == 11000)
+                .ToList();
+
+            incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, duplicateKeyErrors.Count);
+
+            // Log non-duplicate key errors
+            var otherErrors = ex.WriteErrors
+                .Where(err => err.Code != 11000)
+                .ToList();
+
+            failures += otherErrors.Count;
+
+            if (otherErrors.Any())
+            {
+                log.WriteLine($"{logPrefix} Update BulkWriteException (non-duplicate errors) in {collection.CollectionNamespace.FullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
+            }
+
+            // Handle duplicate key errors by attempting individual operations
+            if (duplicateKeyErrors.Any())
+            {
+                log.ShowInMonitor($"{logPrefix} Handling {duplicateKeyErrors.Count} duplicate key errors for updates in {collection.CollectionNamespace.FullName}");
+
+                // Process failed operations individually
+                foreach (var error in duplicateKeyErrors)
+                {
+                    try
+                    {
+                        // Try to find the corresponding update model and retry as update without upsert
+                        var failedModel = updateModels[error.Index];
+                        if (failedModel is ReplaceOneModel<BsonDocument> replaceModel)
+                        {
+                            // Try update without upsert first
+                            var updateResult = await collection.ReplaceOneAsync(replaceModel.Filter, replaceModel.Replacement, new ReplaceOptions { IsUpsert = false });
+                            if (updateResult.ModifiedCount > 0)
+                            {
+                                updateCount++;
+                            }
+                            else
+                            {
+                                // Document might not exist, but we can't upsert due to unique constraint
+                                // This is expected in some scenarios - count as skipped
+                                incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, 1);
+                            }
+                        }
+                    }
+                    catch (Exception retryEx)
+                    {
+                        failures++;
+                        log.ShowInMonitor($"{logPrefix} Individual retry failed for update in {collection.CollectionNamespace.FullName}: {retryEx.Message}");
+                    }
+                }
+            }
+
+            return (updateCount, upsertCount, failures);
+        }
+
+        #endregion
+
+
         public static BsonValue GetIdRangeMin(BsonDocument? filter)
         {
             if (filter == null)
@@ -1525,11 +1845,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string collectionName = collection.CollectionNamespace.CollectionName;
 
             // Initialize aggressive change stream helper if needed
-            AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && !isAggressiveComplete && targetClient != null)
-            {
-                aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
-            }
+            var aggressiveHelper = InitializeAggressiveHelper(isAggressive, isAggressiveComplete, targetClient, log, jobId);
 
             // Insert operations
             foreach (var batch in events.Chunk(batchSize))
@@ -1537,28 +1853,23 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 // Deduplicate inserts by _id to avoid duplicate key errors within the same batch
                 var deduplicatedInserts = batch
                     .Where(e => e.FullDocument != null && e.FullDocument.Contains("_id"))
-                    .GroupBy(e => e.DocumentKey.ToJson()) //use document key instead of _id
-                    .Select(g => g.First()) // Take the first occurrence of each document
+                    .GroupBy(e => e.DocumentKey.ToJson())
+                    .Select(g => g.First())
                     .ToList();
 
-                //log all ids inbatch as CSV
-                //var idsInBatch = deduplicatedInserts
-                //    .Select(e => e.FullDocument["_id"].ToString())
-                //    .ToList();
-                //log.WriteLine($"{logPrefix} Processing {deduplicatedInserts.Count} inserts (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
-
-                // Remove from temp collection if aggressive mode is enabled
-                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
+                // Handle aggressive change stream scenario - store document keys instead of inserting
+                var (shouldSkipInsert, insertFailures) = await StoreDocumentKeysForAggressiveMode(
+                    isAggressive, isAggressiveComplete, aggressiveHelper, isSimulatedRun,
+                    deduplicatedInserts.Where(e => e.DocumentKey != null).Select(e => e.DocumentKey).ToList(),
+                    databaseName, collectionName, "insert",
+                    mu, incrementCounter, ChangeStreamOperationType.Insert,
+                    log, logPrefix);
+                
+                failures += insertFailures;
+                
+                if (shouldSkipInsert)
                 {
-                    var documentKeysToRemove = deduplicatedInserts
-                        .Where(insertEvent => insertEvent.DocumentKey != null)
-                        .Select(insertEvent => insertEvent.DocumentKey)
-                        .ToList();
-
-                    if (documentKeysToRemove.Count > 0)
-                    {
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeysToRemove);
-                    }
+                    continue; // Skip normal insert processing
                 }
 
                 var insertModels = deduplicatedInserts
@@ -1574,112 +1885,26 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     })
                     .ToList();
 
-                long insertCount = 0;
-                
-                // Retry logic for transient errors (deadlocks, timeouts, network issues) - 10 attempts with exponential backoff
-                int maxRetries = 10;
-                int retryDelayMs = 500;
-                bool successfullyProcessed = false;
-                
-                for (int attempt = 0; attempt <= maxRetries; attempt++)
+                try
                 {
-                    try
-                    {
-                        if (insertModels.Any())
-                        {
-                            if (!isSimulatedRun)
-                            {
-                                var result = await collection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
-                                insertCount = result.InsertedCount;
-                            }
-                            else
-                            {
-                                // In simulated run, count what would have been inserted
-                                insertCount = insertModels.Count;
-                            }
-                        }
-                        successfullyProcessed = true;
-                        break; // Success - exit retry loop
-                    }
-                    catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
-                    {
-                        if (attempt < maxRetries)
-                        {
-                            // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s
-                            int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                            log.WriteLine($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                            
-                            // Throw a critical exception to stop the entire job
-                            throw new InvalidOperationException(
-                                $"CRITICAL: Unable to process insert batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent deadlock. " +
-                                $"Data loss prevention requires job termination. Please investigate database locks and retry the migration.");
-                        }
-                    }
-                    catch (Exception ex) when (IsTransientException(ex))
-                    {
-                        if (attempt < maxRetries)
-                        {
-                            // Exponential backoff for transient errors (timeouts, connection issues)
-                            int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                            string errorType = GetTransientErrorType(ex);
-                            log.WriteLine($"{logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms... Error: {ex.Message}", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {insertModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                            
-                            // Throw a critical exception to stop the entire job
-                            throw new InvalidOperationException(
-                                $"CRITICAL: Unable to process insert batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent errors. " +
-                                $"Data loss prevention requires job termination. Error: {ex.Message}");
-                        }
-                    }
-                    catch (MongoBulkWriteException<BsonDocument> ex)
-                    {
-                        insertCount = ex.Result?.InsertedCount ?? 0;
+                    var (success, insertCount) = await ExecuteBulkWriteWithRetry(
+                        collection, insertModels, "insert", log, logPrefix, isSimulatedRun, 
+                        result => result.InsertedCount);
 
-                        var duplicateKeyErrors = ex.WriteErrors
-                            .Where(err => err.Code == 11000)
-                            .ToList();
-
-                        incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, duplicateKeyErrors.Count);
-
-                        // Log non-duplicate key errors for inserts
-                        var otherErrors = ex.WriteErrors
-                            .Where(err => err.Code != 11000)
-                            .ToList();
-
-                        if (otherErrors.Any())
-                        {
-                            failures += otherErrors.Count;
-                            log.WriteLine($"{logPrefix} Insert BulkWriteException (non-duplicate errors) in {collection.CollectionNamespace.FullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
-                        }
-                        else if (duplicateKeyErrors.Count > 0)
-                        {
-                            log.ShowInMonitor($"{logPrefix} Skipped {duplicateKeyErrors.Count} duplicate key inserts in {collection.CollectionNamespace.FullName}");
-                        }
-                        
-                        successfullyProcessed = true;
-                        break; // Exit retry loop after handling BulkWriteException
+                    if (success)
+                    {
+                        incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
                     }
                 }
-                
-                // Count processed documents only if successfully processed
-                if (successfullyProcessed)
+                catch (MongoBulkWriteException<BsonDocument> ex)
                 {
+                    var (insertCount, batchFailures) = HandleBulkWriteException(
+                        ex, mu, incrementCounter, ChangeStreamOperationType.Insert, 
+                        log, logPrefix, collection.CollectionNamespace.FullName, 
+                        result => result?.InsertedCount ?? 0);
+
                     incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
+                    failures += batchFailures;
                 }
             }
             return failures; // Return the count of failures encountered during processing
@@ -1706,11 +1931,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string collectionName = collection.CollectionNamespace.CollectionName;
 
             // Initialize aggressive change stream helper if needed
-            AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && !isAggressiveComplete && targetClient != null)
-            {
-                aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
-            }
+            var aggressiveHelper = InitializeAggressiveHelper(isAggressive, isAggressiveComplete, targetClient, log, jobId);
 
             // Update operations
             foreach (var batch in events.Chunk(batchSize))
@@ -1722,19 +1943,22 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     .Select(g => g.OrderByDescending(e => e.ClusterTime ?? new BsonTimestamp(0, 0)).First()) // Take the latest update for each document
                     .ToList();
 
-                // Remove from temp collection if aggressive mode is enabled
-                if (isAggressive  && isAggressiveComplete && aggressiveHelper != null)
+                // Handle aggressive change stream scenario - store document keys instead of updating
+                var (shouldSkipUpdate, updateFailures) = await StoreDocumentKeysForAggressiveMode(
+                    isAggressive, isAggressiveComplete, aggressiveHelper, isSimulatedRun,
+                    groupedUpdates.Where(e => e.DocumentKey != null).Select(e => e.DocumentKey).ToList(),
+                    databaseName, collectionName, "update",
+                    mu, incrementCounter, ChangeStreamOperationType.Update,
+                    log, logPrefix);
+                
+                failures += updateFailures;
+                
+                if (shouldSkipUpdate)
                 {
-                    var documentKeysToRemove = groupedUpdates
-                        .Where(updateEvent => updateEvent.DocumentKey != null)
-                        .Select(updateEvent => updateEvent.DocumentKey)
-                        .ToList();
-
-                    if (documentKeysToRemove.Count > 0)
-                    {
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeysToRemove);
-                    }
+                    continue; // Skip normal update processing
                 }
+
+                // Normal update processing (when not in aggressive mode or when bulk copy is complete)
 
                 var updateModels = groupedUpdates
                     .Select(e =>
@@ -1756,148 +1980,30 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 long updateCount = 0;
                 long upsertCount = 0;
                 
-                // Retry logic for transient errors (deadlocks, timeouts, network issues) - 10 attempts with exponential backoff
-                int maxRetries = 10;
-                int retryDelayMs = 500;
-                bool successfullyProcessed = false;
-                
-                for (int attempt = 0; attempt <= maxRetries; attempt++)
+                try
                 {
-                    try
+                    var (success, modifiedCount, upserts) = await ExecuteBulkWriteWithRetryForUpdates(
+                        collection, updateModels, log, logPrefix, isSimulatedRun);
+
+                    if (success)
                     {
-                        if (updateModels.Any())
-                        {
-                            if (!isSimulatedRun)
-                            {
-                                var result = await collection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
-                                updateCount = result.ModifiedCount;
-                                upsertCount = result.Upserts.Count;
-                            }
-                            else
-                            {
-                                // In simulated run, count what would have been updated
-                                updateCount = updateModels.Count;
-                            }
-                        }
-                        successfullyProcessed = true;
-                        break; // Success - exit retry loop
-                    }
-                    catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
-                    {
-                        if (attempt < maxRetries)
-                        {
-                            // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s
-                            int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                            log.WriteLine($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                            
-                            // Throw a critical exception to stop the entire job
-                            throw new InvalidOperationException(
-                                $"CRITICAL: Unable to process update batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent deadlock. " +
-                                $"Data loss prevention requires job termination. Please investigate database locks and retry the migration.");
-                        }
-                    }
-                    catch (Exception ex) when (IsTransientException(ex))
-                    {
-                        if (attempt < maxRetries)
-                        {
-                            // Exponential backoff for transient errors (timeouts, connection issues)
-                            int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                            string errorType = GetTransientErrorType(ex);
-                            log.WriteLine($"{logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms... Error: {ex.Message}", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                            log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                         $"Cannot proceed as this would result in DATA LOSS. Batch size: {updateModels.Count} documents. " +
-                                         $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                            
-                            // Throw a critical exception to stop the entire job
-                            throw new InvalidOperationException(
-                                $"CRITICAL: Unable to process update batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent errors. " +
-                                $"Data loss prevention requires job termination. Error: {ex.Message}");
-                        }
-                    }
-                    catch (MongoBulkWriteException<BsonDocument> ex)
-                    {
-                        updateCount = ex.Result?.ModifiedCount ?? 0;
-                        upsertCount = ex.Result?.Upserts?.Count ?? 0;
-
-                        var duplicateKeyErrors = ex.WriteErrors
-                            .Where(err => err.Code == 11000)
-                            .ToList();
-
-                        incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, duplicateKeyErrors.Count);
-
-                        // Log non-duplicate key errors
-                        var otherErrors = ex.WriteErrors
-                            .Where(err => err.Code != 11000)
-                            .ToList();
-
-                        failures += otherErrors.Count;
-
-                        if (otherErrors.Any())
-                        {
-                            log.WriteLine($"{logPrefix} Update BulkWriteException (non-duplicate errors) in {collection.CollectionNamespace.FullName}: {string.Join(", ", otherErrors.Select(e => e.Message))}");
-                        }
-
-                        // Handle duplicate key errors by attempting individual operations
-                        if (duplicateKeyErrors.Any())
-                        {
-                            log.ShowInMonitor($"{logPrefix} Handling {duplicateKeyErrors.Count} duplicate key errors for updates in {collection.CollectionNamespace.FullName}");
-
-                            // Process failed operations individually
-                            foreach (var error in duplicateKeyErrors)
-                            {
-                                try
-                                {
-                                    // Try to find the corresponding update model and retry as update without upsert
-                                    var failedModel = updateModels[error.Index];
-                                    if (failedModel is ReplaceOneModel<BsonDocument> replaceModel)
-                                    {
-                                        // Try update without upsert first
-                                        var updateResult = await collection.ReplaceOneAsync(replaceModel.Filter, replaceModel.Replacement, new ReplaceOptions { IsUpsert = false });
-                                        if (updateResult.ModifiedCount > 0)
-                                        {
-                                            updateCount++;
-                                        }
-                                        else
-                                        {
-                                            // Document might not exist, but we can't upsert due to unique constraint
-                                            // This is expected in some scenarios - count as skipped
-                                            incrementCounter(mu, CounterType.Skipped, ChangeStreamOperationType.Update, 1);
-                                        }
-                                    }
-                                }
-                                catch (Exception retryEx)
-                                {
-                                    failures++;
-                                    log.ShowInMonitor($"{logPrefix} Individual retry failed for update in {collection.CollectionNamespace.FullName}: {retryEx.Message}");
-                                }
-                            }
-                        }
-                        
-                        successfullyProcessed = true;
-                        break; // Exit retry loop after handling BulkWriteException
+                        updateCount = modifiedCount;
+                        upsertCount = upserts;
                     }
                 }
-                
-                // Count processed documents only if successfully processed
-                if (successfullyProcessed)
+                catch (MongoBulkWriteException<BsonDocument> ex)
                 {
-                    // Upserts are inserts, not updates - count them separately
-                    incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
-                    incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)upsertCount);
+                    var (modifiedCount, upserts, batchFailures) = await HandleUpdateBulkWriteException(
+                        ex, collection, updateModels, mu, incrementCounter, log, logPrefix);
+                    
+                    updateCount = modifiedCount;
+                    upsertCount = upserts;
+                    failures += batchFailures;
                 }
+                
+                // Upserts are inserts, not updates - count them separately
+                incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
+                incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)upsertCount);
             }
             return failures; // Return the count of failures encountered during processing
         }
@@ -1934,11 +2040,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string collectionName = collection.CollectionNamespace.CollectionName;
 
             // Initialize aggressive change stream helper if needed
-            AggressiveChangeStreamHelper? aggressiveHelper = null;
-            if (isAggressive && !isAggressiveComplete && targetClient != null)
-            {
-                aggressiveHelper = new AggressiveChangeStreamHelper(targetClient, log, jobId);
-            }
+            var aggressiveHelper = InitializeAggressiveHelper(isAggressive, isAggressiveComplete, targetClient, log, jobId);
 
             // Delete operations
             foreach (var batch in events.Chunk(batchSize))
@@ -1957,163 +2059,84 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 //    .ToList();
                 //log.WriteLine($"{logPrefix} Processing {deduplicatedDeletes.Count} deletes (deduplicated from {batch.Length}) with _ids: {string.Join(", ", idsInBatch)} in {collection.CollectionNamespace.FullName}");
 
-                // Handle aggressive change stream scenario
-                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null && !isSimulatedRun)
+                // Handle aggressive change stream scenario - store document keys instead of deleting
+                var (shouldSkipDelete, deleteFailures) = await StoreDocumentKeysForAggressiveMode(
+                    isAggressive, isAggressiveComplete, aggressiveHelper, isSimulatedRun,
+                    deduplicatedDeletes.Where(e => e.DocumentKey != null).Select(e => e.DocumentKey).ToList(),
+                    databaseName, collectionName, "delete",
+                    mu, incrementCounter, ChangeStreamOperationType.Delete,
+                    log, logPrefix);
+                
+                failures += deleteFailures;
+                
+                if (shouldSkipDelete)
                 {
-                    // Store document keys in temporary collection instead of deleting (batch operation)
-                    var documentKeysToStore = deduplicatedDeletes
-                        .Where(deleteEvent => deleteEvent.DocumentKey != null)
-                        .Select(deleteEvent => deleteEvent.DocumentKey)
-                        .ToList();
-
-                    if (documentKeysToStore.Count > 0)
+                    continue; // Skip normal delete processing, move to next batch
+                }
+                // Normal delete processing
+                var deleteModels = deduplicatedDeletes
+                    .Select(e =>
                     {
                         try
                         {
-                            int storedCount = await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeysToStore);
-                            // Count as processed for tracking purposes
-                            incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, storedCount);
-                        }
-                        catch (Exception ex)
-                        {
-                            failures++;
-                            log.WriteLine($"{logPrefix} Error storing delete document keys for aggressive change stream: {ex.Message}", LogType.Error);
-                        }
-                    }
-                }
-                else
-                {
-                    // Normal delete processing
-                    var deleteModels = deduplicatedDeletes
-                        .Select(e =>
-                        {
-                            try
+                            if (!e.DocumentKey.Contains("_id"))
                             {
-                                if (!e.DocumentKey.Contains("_id"))
-                                {
-                                    log.WriteLine($"{logPrefix} Delete event missing _id in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
-                                    return null;
-                                }
-
-                                var id = e.DocumentKey.GetValue("_id", null);
-                                if (id == null)
-                                {
-                                    log.WriteLine($"{logPrefix} _id is null in DocumentKey in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
-                                    return null;
-                                }
-
-                                if (id.IsObjectId)
-                                    id = id.AsObjectId;
-
-                                var filter = BuildFilterFromDocumentKey(e.DocumentKey);
-                                return new DeleteOneModel<BsonDocument>(filter);
-                            }
-                            catch (Exception dex)
-                            {
-                                log.WriteLine($"{logPrefix} Error building delete model in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}, Error: {dex.Message}");
+                                log.WriteLine($"{logPrefix} Delete event missing _id in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
                                 return null;
                             }
-                        })
-                        .Where(model => model != null)
-                        .ToList();
 
-                    if (deleteModels.Any())
-                    {
-                        // Retry logic for transient errors (deadlocks, timeouts, network issues) - 10 attempts with exponential backoff
-                        int maxRetries = 10;
-                        int retryDelayMs = 500;
-                        bool successfullyProcessed = false;
-                        long deletedCount = 0;
-                        
-                        for (int attempt = 0; attempt <= maxRetries; attempt++)
-                        {
-                            try
+                            var id = e.DocumentKey.GetValue("_id", null);
+                            if (id == null)
                             {
-                                if (!isSimulatedRun)
-                                {
+                                log.WriteLine($"{logPrefix} _id is null in DocumentKey in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}");
+                                return null;
+                            }
 
-                                    var result = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
-                                    deletedCount = result.DeletedCount;
-                                }
-                                else
-                                {
-                                    // In simulated run, count what would have been deleted
-                                    deletedCount = deleteModels.Count;
-                                }
-                                successfullyProcessed = true;
-                                break; // Success - exit retry loop
-                            }
-                            catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
-                            {
-                                if (attempt < maxRetries)
-                                {
-                                    // Exponential backoff: 500ms, 1s, 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s
-                                    int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                                    log.WriteLine($"{logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms...", LogType.Warning);
-                                    await Task.Delay(delay);
-                                }
-                                else
-                                {
-                                    // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                                    log.WriteLine($"{logPrefix}Deadlock persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
-                                                 $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                                    
-                                    // Throw a critical exception to stop the entire job
-                                    throw new InvalidOperationException(
-                                        $"CRITICAL: Unable to process delete batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent deadlock. " +
-                                        $"Data loss prevention requires job termination. Please investigate database locks and retry the migration.");
-                                }
-                            }
-                            catch (Exception ex) when (IsTransientException(ex))
-                            {
-                                if (attempt < maxRetries)
-                                {
-                                    // Exponential backoff for transient errors (timeouts, connection issues)
-                                    int delay = retryDelayMs * (int)Math.Pow(2, attempt);
-                                    string errorType = GetTransientErrorType(ex);
-                                    log.WriteLine($"{logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{maxRetries} after {delay}ms... Error: {ex.Message}", LogType.Warning);
-                                    await Task.Delay(delay);
-                                }
-                                else
-                                {
-                                    // CRITICAL: Max retries exceeded - This will cause data loss, so we must stop the job
-                                    log.WriteLine($"{logPrefix}Transient error persisted after {maxRetries} retries for {collection.CollectionNamespace.FullName}. " +
-                                                 $"Cannot proceed as this would result in DATA LOSS. Batch size: {deleteModels.Count} documents. " +
-                                                 $"JOB MUST BE STOPPED AND INVESTIGATED!", LogType.Error);
-                                    
-                                    // Throw a critical exception to stop the entire job
-                                    throw new InvalidOperationException(
-                                        $"CRITICAL: Unable to process delete batch for {collection.CollectionNamespace.FullName} after {maxRetries} retry attempts due to persistent errors. " +
-                                        $"Data loss prevention requires job termination. Error: {ex.Message}");
-                                }
-                            }
-                            catch (MongoBulkWriteException<BsonDocument> ex)
-                            {
-                                // Count successful deletes even when some fail
-                                deletedCount = ex.Result?.DeletedCount ?? 0;
+                            if (id.IsObjectId)
+                                id = id.AsObjectId;
 
-                                // Log errors that are not "document not found" (which is expected)
-                                var significantErrors = ex.WriteErrors
-                                    .Where(err => !err.Message.Contains("not found") && err.Code != 11000)
-                                    .ToList();
-
-                                if (significantErrors.Any())
-                                {
-                                    failures += significantErrors.Count;
-                                    log.WriteLine($"{logPrefix} Bulk delete error in {collection.CollectionNamespace.FullName}: {string.Join(", ", significantErrors.Select(e => e.Message))}");
-                                }
-                                
-                                successfullyProcessed = true;
-                                break; // Exit retry loop after handling BulkWriteException
-                            }
+                            var filter = BuildFilterFromDocumentKey(e.DocumentKey);
+                            return new DeleteOneModel<BsonDocument>(filter);
                         }
-                        
-                        // Count processed documents only if successfully processed
-                        if (successfullyProcessed)
+                        catch (Exception dex)
+                        {
+                            log.WriteLine($"{logPrefix} Error building delete model in {collection.CollectionNamespace.FullName}: {e.DocumentKey.ToJson()}, Error: {dex.Message}");
+                            return null;
+                        }
+                    })
+                    .Where(model => model != null)
+                    .ToList();
+
+                if (deleteModels.Any())
+                {
+                    try
+                    {
+                        var (success, deletedCount) = await ExecuteBulkWriteWithRetry(
+                            collection, deleteModels, "delete", log, logPrefix, isSimulatedRun,
+                            result => result.DeletedCount);
+
+                        if (success)
                         {
                             incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)deletedCount);
                         }
+                    }
+                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    {
+                        // Count successful deletes even when some fail
+                        long deletedCount = ex.Result?.DeletedCount ?? 0;
+
+                        // Log errors that are not "document not found" (which is expected for deletes)
+                        var significantErrors = ex.WriteErrors
+                            .Where(err => !err.Message.Contains("not found") && err.Code != 11000)
+                            .ToList();
+
+                        if (significantErrors.Any())
+                        {
+                            failures += significantErrors.Count;
+                            log.WriteLine($"{logPrefix} Bulk delete error in {collection.CollectionNamespace.FullName}: {string.Join(", ", significantErrors.Select(e => e.Message))}");
+                        }
+
+                        incrementCounter(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)deletedCount);
                     }
                 }
             }

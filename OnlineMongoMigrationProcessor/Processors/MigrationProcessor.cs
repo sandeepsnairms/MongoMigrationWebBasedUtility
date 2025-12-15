@@ -4,6 +4,7 @@ using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 
@@ -21,6 +22,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
         protected bool _postUploadCSProcessing = false;        
         protected Log _log;
+        protected MigrationWorker? _migrationWorker;
 
         public bool ProcessRunning { get; set; }
         // Add this property to the MigrationProcessor class
@@ -37,13 +39,14 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
         }
 
-        protected MigrationProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
+        protected MigrationProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
         {
             _log = log;
             _sourceClient = sourceClient;
             _targetClient = null;
             _config = config;
-            _cts = new CancellationTokenSource();            
+            _cts = new CancellationTokenSource();
+            _migrationWorker = migrationWorker;
         }
 
         public void StopProcessing(bool updateStatus = true)
@@ -118,7 +121,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 // Ensure _sourceClient is not null before using it
                 if (_changeStreamProcessor == null && _sourceClient != null)
 #pragma warning disable CS8604 // Possible null reference argument.
-                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, MigrationJobContext.MigrationUnitsCache, _config);
+                    _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient, MigrationJobContext.MigrationUnitsCache, _config, false, _migrationWorker);
 #pragma warning restore CS8604 // Possible null reference argument.
 
                 if (_changeStreamProcessor != null)
@@ -166,7 +169,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     // Ensure _sourceClient is not null before using it
                     if (_changeStreamProcessor == null && _sourceClient != null)
-                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, MigrationJobContext.MigrationUnitsCache, _config);
+                        _changeStreamProcessor = new MongoChangeStreamProcessor(_log, _sourceClient, _targetClient!, MigrationJobContext.MigrationUnitsCache, _config, false, _migrationWorker);
 
                     var _ = _changeStreamProcessor?.RunCSPostProcessingAsync(_cts);
                 }

@@ -14,8 +14,8 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-        public CopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
-            : base(log, sourceClient, config)
+        public CopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+            : base(log, sourceClient, config, migrationWorker)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }

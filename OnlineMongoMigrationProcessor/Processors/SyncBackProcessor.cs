@@ -3,6 +3,7 @@ using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,8 +18,8 @@ namespace OnlineMongoMigrationProcessor.Processors
     internal class SyncBackProcessor : MigrationProcessor
     {
 
-        public SyncBackProcessor(Log log, MongoClient sourceClient, MigrationSettings config)
-           : base(log, sourceClient, config)
+        public SyncBackProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+           : base(log, sourceClient, config, migrationWorker)
         {
             // Constructor body can be empty or contain initialization logic if needed
         }
@@ -84,7 +85,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
             _changeStreamProcessor = null;
-            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, MigrationJobContext.MigrationUnitsCache, _config, true);
+            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, MigrationJobContext.MigrationUnitsCache, _config, true, _migrationWorker);
 
             _cts=new CancellationTokenSource();
 

@@ -137,6 +137,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         _log.WriteLine($"{_logPrefix}[DEBUG] Completed batch {batchIndex} processing for {collection.CollectionNamespace}: success={batchResult.Success}, processed={batchResult.Processed}, failures={batchResult.Failures}", LogType.Debug);
                         return batchResult;
                     }
+                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+                    {
+                        // CRITICAL errors must propagate to stop the entire job
+                        _log.WriteLine($"{_logPrefix}CRITICAL error in batch {batchIndex} for {collection.CollectionNamespace}: {ex.Message}", LogType.Error);
+                        throw; // Re-throw to stop the job
+                    }
                     catch (Exception ex)
                     {
                         _log.WriteLine($"{_logPrefix}Exception in batch {batchIndex} processing for {collection.CollectionNamespace}: {ex}", LogType.Error);
@@ -657,91 +663,49 @@ namespace OnlineMongoMigrationProcessor.Helpers
             bool isSimulatedRun)
         {
             var result = new WriteResult { Success = true };
+            var writeStopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            foreach (var batch in events.Chunk(batchSize))
+            try
             {
-                var deduplicatedDeletes = batch
-                    .GroupBy(e => e.DocumentKey.ToJson())
-                    .Select(g => g.First())
-                    .ToList();
+                // Use the refactored MongoHelper.ProcessDeletesAsync which includes aggressive mode handling
+                int failures = await MongoHelper.ProcessDeletesAsync(
+                    mu,
+                    collection,
+                    events,
+                    counterDelegate,
+                    _log,
+                    _logPrefix,
+                    batchSize,
+                    isAggressive,
+                    isAggressiveComplete,
+                    string.Empty, // jobId - not needed as aggressiveHelper is passed
+                    null, // targetClient - not needed as aggressiveHelper is passed
+                    isSimulatedRun);
 
-                var deleteModels = deduplicatedDeletes
-                    .Select(e =>
-                    {
-                        var filter = Builders<BsonDocument>.Filter.Eq("_id", e.DocumentKey["_id"]);
-                        return new DeleteOneModel<BsonDocument>(filter);
-                    })
-                    .ToList();
-
-                // Retry loop with exponential backoff
-                var writeStopwatch = System.Diagnostics.Stopwatch.StartNew();
-                try
+                if (failures > 0)
                 {
-                    for (int attempt = 0; attempt <= MAX_RETRIES; attempt++)
-                    {
-                        try
-                        {
-                            if (deleteModels.Any())
-                            {
-                                long deleteCount = 0;
-                                
-                                if (!isSimulatedRun)
-                                {
-                                    var writeResult = await collection.BulkWriteAsync(deleteModels, new BulkWriteOptions { IsOrdered = false });
-                                    deleteCount = writeResult.DeletedCount;
-                                }
-                                else
-                                {
-                                    deleteCount = deleteModels.Count;
-                                }
-                                
-                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Delete, (int)deleteCount);
-                                result.Processed += (int)deleteCount;
-                            }
-                            break; // Success - exit retry loop
-                        }
-                        catch (MongoCommandException cmdEx) when (cmdEx.Message.Contains("Could not acquire lock") || cmdEx.Message.Contains("deadlock"))
-                    {
-                        if (attempt < MAX_RETRIES)
-                        {
-                            int delay = CalculateRetryDelay(attempt);
-                            _log.WriteLine($"{_logPrefix}Deadlock detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{MAX_RETRIES} after {delay}ms...", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            string errorMsg = $"CRITICAL: Unable to process delete batch for {collection.CollectionNamespace.FullName} after {MAX_RETRIES} retry attempts due to persistent deadlock.";
-                            _log.WriteLine($"{_logPrefix}{errorMsg}", LogType.Error);
-                            result.Success = false;
-                            result.Errors.Add(errorMsg);
-                            throw new InvalidOperationException(errorMsg);
-                        }
-                    }
-                    catch (Exception ex) when (IsTransientException(ex))
-                    {
-                        if (attempt < MAX_RETRIES)
-                        {
-                            int delay = CalculateRetryDelay(attempt);
-                            string errorType = GetTransientErrorType(ex);
-                            _log.WriteLine($"{_logPrefix}{errorType} detected for {collection.CollectionNamespace.FullName}. Retry {attempt + 1}/{MAX_RETRIES} after {delay}ms... Error: {ex.Message}", LogType.Warning);
-                            await Task.Delay(delay);
-                        }
-                        else
-                        {
-                            string errorMsg = $"CRITICAL: Unable to process delete batch for {collection.CollectionNamespace.FullName} after {MAX_RETRIES} retry attempts. Error: {ex.Message}";
-                            _log.WriteLine($"{_logPrefix}{errorMsg}", LogType.Error);
-                            result.Success = false;
-                            result.Errors.Add(errorMsg);
-                            throw new InvalidOperationException(errorMsg);
-                        }
-                    }
-                    }
+                    result.Failures += failures;
+                    _log.WriteLine($"{_logPrefix}ProcessDeletesAsync reported {failures} failures", LogType.Debug);
                 }
-                finally
-                {
-                    writeStopwatch.Stop();
-                    result.WriteLatencyMS += writeStopwatch.ElapsedMilliseconds;
-                }
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
+            {
+                // Critical error - propagate up
+                result.Success = false;
+                result.Errors.Add(ex.Message);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                result.Success = false;
+                result.Failures++;
+                result.Errors.Add($"Delete processing error: {ex.Message}");
+                _log.WriteLine($"{_logPrefix}Error processing deletes: {ex.Message}", LogType.Error);
+            }
+            finally
+            {
+                writeStopwatch.Stop();
+                result.WriteLatencyMS += writeStopwatch.ElapsedMilliseconds;
             }
 
             return result;

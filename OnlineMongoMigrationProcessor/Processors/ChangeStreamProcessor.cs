@@ -3,6 +3,7 @@ using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -34,6 +35,8 @@ namespace OnlineMongoMigrationProcessor
         protected bool _isCSProcessing = false;
         protected Log _log;
 
+        // Reference to MigrationWorker for coordinated shutdown
+        protected MigrationWorker? _migrationWorker;
        
         // Resume token cache - used by collection-level processors to track individual collection resume tokens
         // Server-level processors don't need this as they use MigrationJob properties directly for global tokens
@@ -68,6 +71,36 @@ namespace OnlineMongoMigrationProcessor
         private bool _disposed = false;
         protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
 
+        /// <summary>
+        /// Stops the job immediately by setting flags and calling the migration worker's stop method
+        /// </summary>
+        protected void StopJob(string reason)
+        {
+            _log.WriteLine($"{_syncBackPrefix}StopJob called - Reason: {reason}", LogType.Error);
+            
+            // Set flags to stop processing loops
+            StopProcessing = true;
+            ExecutionCancelled = true;
+            
+            // Call the MigrationWorker's stop migration to coordinate shutdown
+            try
+            {
+                if (_migrationWorker is not null)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Requesting immediate job termination via MigrationWorker", LogType.Error);
+                    _migrationWorker.StopMigration();
+                }
+                else
+                {
+                    _log.WriteLine($"{_syncBackPrefix}MigrationWorker reference is null, cannot coordinate shutdown", LogType.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"{_syncBackPrefix}Error calling MigrationWorker.StopMigration: {ex.Message}", LogType.Error);
+            }
+        }
+
         public bool ExecutionCancelled { 
             get => _executionCancelled; 
             set 
@@ -82,7 +115,7 @@ namespace OnlineMongoMigrationProcessor
         private bool _executionCancelled = false;
 
 
-        public ChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient,  ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false)
+        public ChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient,  ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
         {
             _log = log;
             _sourceClient = sourceClient;
@@ -90,6 +123,7 @@ namespace OnlineMongoMigrationProcessor
             MigrationJobContext.MigrationUnitsCache= muCache;
             _config = config;
             _syncBack = syncBack;
+            _migrationWorker = migrationWorker;
             if (_syncBack)
                 _syncBackPrefix = "SyncBack: ";
 
@@ -492,6 +526,27 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"Processing aggressive change stream cleanup for {mu.DatabaseName}.{mu.CollectionName}");
 
+                // First, apply stored inserts and updates
+                var (inserted, updated, skipped) = await aggressiveHelper.ApplyStoredChangesAsync(mu.DatabaseName, mu.CollectionName, _sourceClient);
+                
+                if (inserted > 0 || updated > 0)
+                {
+                    // Update counters
+                    if (!_syncBack)
+                    {
+                        mu.CSDocsInserted += inserted;
+                        mu.CSDocsUpdated += updated;
+                    }
+                    else
+                    {
+                        mu.SyncBackDocsInserted += inserted;
+                        mu.SyncBackDocsUpdated += updated;
+                    }
+
+                    _log.WriteLine($"Aggressive change stream applied changes for {mu.DatabaseName}.{mu.CollectionName}: {inserted} inserted, {updated} updated, {skipped} skipped");
+                }
+
+                // Then, process deletes
                 long deletedCount = await aggressiveHelper.DeleteStoredDocsAsync(mu.DatabaseName, mu.CollectionName);
 
                 // Mark cleanup as completed
@@ -640,139 +695,7 @@ namespace OnlineMongoMigrationProcessor
 
             return shouldUpdateUI;
         }
-        /*
-        protected async Task WaitForPendingChnagesAsync(Dictionary<string, AccumulatedChangesTracker> accumulatedChangesPerCollection)
-        {
-            //count pending changes in accumulated changes tracker across keys in batch
-            long pendingChanges = 0;
-            bool loop = true;
-            int counter = 1;
-            while (loop)
-            {
-                foreach (var c in accumulatedChangesPerCollection.Values)
-                {
-                    var count = c.DocsToBeDeleted.Count + c.DocsToBeInserted.Count + c.DocsToBeUpdated.Count;
-                    pendingChanges += count;
-                }
-                if (pendingChanges > _config.ChangeStreamMaxDocsInBatch * 10)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Pending changes exceeded limit -  Round {counter} pausing for {counter}seconds,  PendingChanges: {pendingChanges}, Limit: {_config.ChangeStreamMaxDocsInBatch * 5}", LogType.Warning);
-                    Thread.Sleep(1000 * counter);//sleep for some time
-                    loop = true;
-                    counter++;
-                }
-                else
-                {
-                    loop = false;
-                }
-            }
-
-        }
-
-        #region Critical Failure Tracking - Common for Server and Collection Level
-
-        /// <summary>
-        /// Check for critical failures and throw if detected
-        /// Should be called at the start of main processing loops
-        /// </summary>
-        protected void CheckForCriticalFailure()
-        {
-            if (_criticalFailureDetected && _criticalFailureException != null)
-            {
-                _log.WriteLine($"{_syncBackPrefix}CRITICAL: Background task failure detected. Stopping processing.", LogType.Error);
-                throw _criticalFailureException;
-            }
-        }
-
-        /// <summary>
-        /// Track a background task and monitor for critical failures
-        /// Use this instead of fire-and-forget to maintain exception visibility
-        /// </summary>
-        protected void TrackBackgroundTask(Task task)
-        {
-            
-            try
-            {
-                var monitoredTask = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await task;
-                    }
-                    catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
-                    {
-                        _criticalFailureDetected = true;
-                        _criticalFailureException = ex;
-                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure in background task. Job must terminate. Error: {ex.Message}", LogType.Error);
-                    }
-                    catch (AggregateException aex) when (aex.InnerExceptions.Any(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL")))
-                    {
-                        var criticalEx = aex.InnerExceptions.First(e => e is InvalidOperationException ioe && ioe.Message.Contains("CRITICAL"));
-                        _criticalFailureDetected = true;
-                        _criticalFailureException = criticalEx;
-                        _log.WriteLine($"{_syncBackPrefix}CRITICAL failure (from AggregateException) in background task. Job must terminate. Error: {criticalEx.Message}", LogType.Error);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.WriteLine($"{_syncBackPrefix}Non-critical exception in background task. Error: {ex.Message}", LogType.Error);
-                    }
-                });
-
-                _backgroundProcessingTasks.Add(monitoredTask);
-                PruneCompletedBackgroundTasks();
-            }
-            catch
-            {
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// Prune completed background tasks to prevent memory leak
-        /// </summary>
-        protected void PruneCompletedBackgroundTasks()
-        {
-            var activeTasks = new ConcurrentBag<Task>();
-            foreach (var task in _backgroundProcessingTasks)
-            {
-                if (!task.IsCompleted)
-                {
-                    activeTasks.Add(task);
-                }
-            }
-            
-            _backgroundProcessingTasks.Clear();
-            foreach (var task in activeTasks)
-            {
-                _backgroundProcessingTasks.Add(task);
-            }
-        }
-
-        /// <summary>
-        /// Wait for all background tasks to complete and check for critical failures
-        /// Should be called during shutdown
-        /// </summary>
-        protected async Task WaitForBackgroundTasksAndCheckFailures()
-        {
-            if (_backgroundProcessingTasks.Count > 0)
-            {
-                _log.WriteLine($"{_syncBackPrefix}Waiting for {_backgroundProcessingTasks.Count} background processing tasks to complete", LogType.Debug);
-                try
-                {
-                    await Task.WhenAll(_backgroundProcessingTasks);
-                    _log.WriteLine($"{_syncBackPrefix}All background processing tasks completed successfully", LogType.Verbose);
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}Error waiting for background tasks: {ex.Message}", LogType.Error);
-                }
-            }
-
-            CheckForCriticalFailure();
-        }
-
-        #endregion
-		*/
+        
         #region IDisposable Implementation
         
         public void Dispose()
