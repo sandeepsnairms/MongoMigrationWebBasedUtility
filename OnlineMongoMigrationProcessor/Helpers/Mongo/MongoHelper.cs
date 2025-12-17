@@ -915,7 +915,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
         }
 
-    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, CancellationToken cts, bool fromChangeStreamStartedOn )
+    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, CancellationToken cts, bool fromOrgin)
     {
         int retryCount = 0;
         bool isSucessful = false;
@@ -934,15 +934,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
                     // Initialize with safe defaults; will be overridden below
                     var options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
-
-                    if(fromChangeStreamStartedOn)
-                    {
-                        var start = (mu.ChangeStreamStartedOn ?? DateTime.UtcNow).ToUniversalTime();
-                        log.WriteLine($"Resetting change stream start time token for {mu.DatabaseName}.{mu.CollectionName} to {start} (UTC)");
-                        var bsonTimestamp = ConvertToBsonTimestamp(start);
-                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
-                    }
-
+                                        
                     if (resetCS)
                     {
                         if (!string.IsNullOrEmpty(mu.OriginalResumeToken))
@@ -984,12 +976,21 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                 log.WriteLine($"Collection-level change stream resume token for {mu.DatabaseName}.{mu.CollectionName} already set", LogType.Debug);
                                 return;
                             }
+                            if (fromOrgin && string.IsNullOrEmpty(mu.OriginalResumeToken))
+                            {
+                                if (mu.CSLastChecked==null || mu.CSLastChecked == DateTime.MinValue)
+                                {
+                                    mu.CSLastChecked = mu.ChangeStreamStartedOn.Value;
+                                }
+
+                                var start = (mu.CSLastChecked ?? DateTime.UtcNow).ToUniversalTime();                                
+                                var bsonTimestamp = ConvertToBsonTimestamp(start);
+                                options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                                resetCS = true; //reusing existing varibale
+                            }
+
                         }
 
-                        options = new ChangeStreamOptions
-                        {
-                            FullDocument = ChangeStreamFullDocumentOption.UpdateLookup
-                        };
                     }
 
                     //new way to get resume token
@@ -1074,7 +1075,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         return;
     }
 
-    private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool resetCS, int seconds, CancellationToken manualCts, bool useServerLevel = false)
+    private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool forced, int seconds, CancellationToken manualCts, bool useServerLevel = false)
     {
         var pipeline = new BsonDocument[] { };
         if (job.JobType == JobType.RUOptimizedCopy)
@@ -1136,7 +1137,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         // Use linkedCts.Token instead of cts.Token to respect both timeout and manual cancellation
                         if (await cursor.MoveNextAsync(linkedCts.Token))
                         {
-                            if (!resetCS && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(mu.OriginalResumeToken)))
+                            if (!forced && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(mu.OriginalResumeToken)))
                             {
                                 var resumeTokenJson = cursor.GetResumeToken().ToJson();
 
@@ -1162,8 +1163,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         foreach (var change in cursor.Current)
                         {
                             //if bulk load is complete, no point in continuing to watch
-                            // Use the local resetCS variable captured at method start, not mu.ResetChangeStream
-                            if ((mu.RestoreComplete || job.IsSimulatedRun) && mu.DumpComplete && !resetCS)
+                            if ((mu.RestoreComplete || job.IsSimulatedRun) && mu.DumpComplete && !forced)
                                 return;
 
 
@@ -1182,7 +1182,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                 if (migrationUnit != null && Helper.IsMigrationUnitValid(migrationUnit))
                                 {
                                     // Use common function for server-level resume token setting
-                                    SetResumeTokenProperties(job, change, resetCS, databaseName, collectionName);
+                                    SetResumeTokenProperties(job, change, forced, databaseName, collectionName);
                                     log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
                                     // Exit immediately after first change detected
                                     return;
@@ -1191,7 +1191,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                             else
                             {
                                 // Use common function for collection-level resume token setting
-                                SetResumeTokenProperties(mu, change, resetCS);
+                                SetResumeTokenProperties(mu, change, forced);
 
                                 log.WriteLine($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}", LogType.Verbose);
 

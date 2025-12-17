@@ -1,6 +1,12 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
+using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Processors;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -10,12 +16,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using OnlineMongoMigrationProcessor.Models;
-using OnlineMongoMigrationProcessor.Processors;
-using OnlineMongoMigrationProcessor.Workers;
-using OnlineMongoMigrationProcessor.Helpers.Mongo;
-using OnlineMongoMigrationProcessor.Helpers.JobManagement;
-using OnlineMongoMigrationProcessor.Context;
+using System.Xml.Linq;
 using ZstdSharp.Unsafe;
 
 // CS4014: Use explicit discards for intentional fire-and-forget tasks.
@@ -516,6 +517,7 @@ namespace OnlineMongoMigrationProcessor
 
                         if (_downloadManifest.TryAdd(contextId, context))
                         {
+                            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName}[{i}] added to download manifest", LogType.Verbose);
                             addedCount++;
                         }
                     }
@@ -533,6 +535,36 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        private string GetDumpFilePath(MigrationUnit mu, int chunkIndex, bool overwrite = false)
+        {
+            string folder = PrepareDumpFolder(mu.DatabaseName, mu.CollectionName);
+            return GetDumpFilePath(mu.DatabaseName, mu.CollectionName, chunkIndex, overwrite);
+        }
+
+        private string GetDumpFilePath(string databaseName, string collectionName, int chunkIndex, bool overwrite=false)
+        {
+            string folder = PrepareDumpFolder(databaseName, collectionName);
+            // Get dump folder and file path                        
+            string dumpFilePath = Path.Combine(folder, $"{chunkIndex}.bson");
+            if (overwrite)
+            {
+                //Ensure previous dump file(if any) is removed before fresh dump
+                if(File.Exists(dumpFilePath))
+                {
+                    try { File.Delete(dumpFilePath); } catch { }
+                }
+            }
+
+            return dumpFilePath;
+        }
+
+        private bool CheckDumpDownloaded(MigrationUnit mu, int chunkIndex)
+        {
+            string dumpFilePath = GetDumpFilePath(mu, chunkIndex);
+            return File.Exists(dumpFilePath);
+        }
+
         /// <summary>
         /// Prepares the restore manifest for a migration unit
         /// </summary>
@@ -541,36 +573,51 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 int addedCount = 0;
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
-            {
-                var chunk = mu.MigrationChunks[i];
-
-                // Only add if downloaded but not restored
-                if (chunk.IsDownloaded == true && chunk.IsUploaded != true)
+                string folder = PrepareDumpFolder(mu.DatabaseName, mu.CollectionName);
+                for (int i = 0; i < mu.MigrationChunks.Count; i++)
                 {
-                    string contextId = $"{mu.Id}_{i}";
+                    var chunk = mu.MigrationChunks[i];
 
-                    if (!_uploadManifest.ContainsKey(contextId))
+                    // Only add if downloaded but not restored
+                    if (chunk.IsDownloaded == true && chunk.IsUploaded != true)
                     {
-                        var context = new DumpRestoreProcessContext
-                        {
-                            Id = contextId,
-                            MigrationUnit = mu,
-                            ChunkIndex = i,
-                            State = ProcessState.Pending,
-                            QueuedAt = DateTime.UtcNow,
-                            RetryCount = 0,
-                            SourceConnectionString = sourceConnectionString,
-                            TargetConnectionString = targetConnectionString
-                        };
+                        string contextId = $"{mu.Id}_{i}";
 
-                        if (_uploadManifest.TryAdd(contextId, context))
+                        if (!_uploadManifest.ContainsKey(contextId))
                         {
-                            addedCount++;
+                            var context = new DumpRestoreProcessContext
+                            {
+                                Id = contextId,
+                                MigrationUnit = mu,
+                                ChunkIndex = i,
+                                State = ProcessState.Pending,
+                                QueuedAt = DateTime.UtcNow,
+                                RetryCount = 0,
+                                SourceConnectionString = sourceConnectionString,
+                                TargetConnectionString = targetConnectionString
+                            };                            
+
+                            // Validate dump file exists
+                            if (!ValidateDumpFileExists(context))
+                            {
+                                // Get dump folder and file path                        
+                                string dumpFilePath = GetDumpFilePath(mu, i);
+                                _log.WriteLine($"Dump file missing for restore context {contextId} at {dumpFilePath}. Marking chunk as not downloaded.", LogType.Warning);
+                                mu.MigrationChunks[i].IsDownloaded = false;
+                                mu.DumpComplete = false;
+
+                                MigrationJobContext.SaveMigrationUnit(mu, true);
+                                continue;
+                            }
+
+                            if (_uploadManifest.TryAdd(contextId, context))
+                            {
+                                _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName}[{i}] added to restore manifest", LogType.Verbose);
+                                addedCount++;
+                            }
                         }
                     }
                 }
-            }
 
                 if (addedCount > 0)
                 {
@@ -758,8 +805,8 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 // Prepare dump environment
-                string folder = PrepareDumpFolder(dbName, colName);
-                string dumpFilePath = PrepareDumpFilePath(folder, chunkIndex);
+                //string folder = PrepareDumpFolder(dbName, colName);
+                string dumpFilePath = GetDumpFilePath(dbName, colName, chunkIndex,true);
 
                 // Build dump arguments with query
                 var dumpArgs = await BuildDumpArgumentsAsync(
@@ -819,18 +866,18 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Prepares the dump file path and removes any existing file
         /// </summary>
-        private string PrepareDumpFilePath(string folder, int chunkIndex)
-        {
-            var dumpFilePath = Path.Combine(folder, $"{chunkIndex}.bson");
+        //private string PrepareDumpFilePath(string folder, int chunkIndex)
+        //{
+        //    var dumpFilePath = Path.Combine(folder, $"{chunkIndex}.bson");
             
-            // Ensure previous dump file (if any) is removed before fresh dump
-            if (File.Exists(dumpFilePath))
-            {
-                try { File.Delete(dumpFilePath); } catch { }
-            }
+        //    // Ensure previous dump file (if any) is removed before fresh dump
+        //    if (File.Exists(dumpFilePath))
+        //    {
+        //        try { File.Delete(dumpFilePath); } catch { }
+        //    }
 
-            return dumpFilePath;
-        }
+        //    return dumpFilePath;
+        //}
 
         /// <summary>
         /// Builds complete dump arguments including query filters
@@ -891,6 +938,17 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private void HandleDumpSuccess(DumpRestoreProcessContext context)
         {
+            if(CheckDumpDownloaded(context.MigrationUnit, context.ChunkIndex) == false)
+            {
+                if (!MigrationJobContext.ControlledPauseRequested)
+                {
+                    _log?.WriteLine($"Dump file not found after dump for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Warning);
+                    HandleDownloadFailure(context, TaskResult.Retry);
+                }
+                return;
+            }
+            _log.WriteLine($"Dump file verified for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Verbose);
+
             var mu = context.MigrationUnit;
             int chunkIndex = context.ChunkIndex;
 
@@ -1060,49 +1118,55 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 // Get dump folder and file path
-                string folder = PrepareDumpFolder(dbName, colName);
-                string dumpFilePath = Path.Combine(folder, $"{chunkIndex}.bson");
+                var dumpFilePath = GetDumpFilePath(dbName, colName, chunkIndex);
+
 
                 // Validate dump file exists
-                if (!ValidateDumpFileExists(context, dumpFilePath))
+                if (!ValidateDumpFileExists(context))
                 {
-                    return;
-                }
+                    _log.WriteLine($"Dump file missing before executing restore at {dumpFilePath}. Marking chunk as not downloaded.", LogType.Warning);
+                    context.MigrationUnit.MigrationChunks[chunkIndex].IsDownloaded = false;
+                    context.MigrationUnit.DumpComplete = false;
+                    HandleRestoreFailure(context, TaskResult.Retry);
 
-                // Build restore arguments
-                var restoreArgs = BuildRestoreArguments(
-                    context.MigrationUnit,
-                    chunkIndex,
-                    context.TargetConnectionString,
-                    dbName,
-                    colName
-                );
-
-                // Execute restore
-                bool success = await ExecuteRestoreProcessAsync(
-                    context.MigrationUnit,
-                    chunkIndex,
-                    restoreArgs.args,
-                    restoreArgs.docCount,
-                    dumpFilePath
-                );
-
-                if (success)
-                {
-                    await HandleRestoreSuccessAsync(context, folder, dumpFilePath);
-                    _log?.WriteLine($"Coordinator: Completed restore {dbName}.{colName}[{chunkIndex}]", LogType.Debug);
                 }
                 else
                 {
-                    // Check if already uploaded (idempotency)
-                    if (context.MigrationUnit.MigrationChunks[chunkIndex].IsUploaded == true)
+                    // Build restore arguments
+                    var restoreArgs = BuildRestoreArguments(
+                        context.MigrationUnit,
+                        chunkIndex,
+                        context.TargetConnectionString,
+                        dbName,
+                        colName
+                    );
+
+                    // Execute restore
+                    bool success = await ExecuteRestoreProcessAsync(
+                        context.MigrationUnit,
+                        chunkIndex,
+                        restoreArgs.args,
+                        restoreArgs.docCount,
+                        dumpFilePath
+                    );
+
+                    if (success)
                     {
-                        MigrationJobContext.SaveMigrationUnit(context.MigrationUnit, false);
-                        HandleRestoreSuccess(context);
+                        await HandleRestoreSuccessAsync(context, dumpFilePath);
+                        _log?.WriteLine($"Coordinator: Completed restore {dbName}.{colName}[{chunkIndex}]", LogType.Debug);
                     }
                     else
                     {
-                        HandleRestoreFailure(context, TaskResult.Retry);
+                        // Check if already uploaded (idempotency)
+                        if (context.MigrationUnit.MigrationChunks[chunkIndex].IsUploaded == true)
+                        {
+                            MigrationJobContext.SaveMigrationUnit(context.MigrationUnit, false);
+                            HandleRestoreSuccess(context);
+                        }
+                        else
+                        {
+                            HandleRestoreFailure(context, TaskResult.Retry);
+                        }
                     }
                 }
             }
@@ -1158,8 +1222,9 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Validates that the dump file exists before attempting restore
         /// </summary>
-        private bool ValidateDumpFileExists(DumpRestoreProcessContext context, string dumpFilePath)
+        private bool ValidateDumpFileExists(DumpRestoreProcessContext context)
         {
+            var dumpFilePath = GetDumpFilePath(context.MigrationUnit, context.ChunkIndex);
             if (!File.Exists(dumpFilePath))
             {
                 var mu = context.MigrationUnit;
@@ -1175,8 +1240,7 @@ namespace OnlineMongoMigrationProcessor
 
                 HandleRestoreFailure(context, TaskResult.Canceled);
                 return false;
-            }
-
+            }            
             return true;
         }
 
@@ -1277,7 +1341,7 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Handles successful restore completion with validation
         /// </summary>
-        private async Task HandleRestoreSuccessAsync(DumpRestoreProcessContext context, string folder, string dumpFilePath)
+        private async Task HandleRestoreSuccessAsync(DumpRestoreProcessContext context, string dumpFilePath)
         {
             var mu = context.MigrationUnit;
             int chunkIndex = context.ChunkIndex;
@@ -1382,6 +1446,7 @@ namespace OnlineMongoMigrationProcessor
                 if (File.Exists(dumpFilePath))
                 {
                     File.Delete(dumpFilePath);
+                    _log?.WriteLine($"Deleted dump file {dumpFilePath} after successful restore", LogType.Verbose);
                 }
             }
             catch (Exception ex)
@@ -1394,7 +1459,7 @@ namespace OnlineMongoMigrationProcessor
         /// Handles successful restore completion
         /// </summary>
         private void HandleRestoreSuccess(DumpRestoreProcessContext context)
-        {
+        {           
             var mu = context.MigrationUnit;
             int chunkIndex = context.ChunkIndex;
 
@@ -1418,6 +1483,10 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private void HandleDownloadFailure(DumpRestoreProcessContext context, TaskResult result, Exception? ex = null)
         {
+
+            if (MigrationJobContext.ControlledPauseRequested)
+                return;
+
             try
             {
                 context.LastError = ex;
@@ -1428,7 +1497,7 @@ namespace OnlineMongoMigrationProcessor
             if (context.RetryCount >= MaxRetries || result == TaskResult.Abort)
             {
                 context.State = ProcessState.Failed;
-                _log.WriteLine($"Download failed permanently: {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Error);
+                _log.WriteLine($"Max retries for download complete : {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Error);
 
                 // Trigger controlled pause for manual intervention
                 MigrationJobContext.ControlledPauseRequested = true;
@@ -1461,7 +1530,7 @@ namespace OnlineMongoMigrationProcessor
             if (context.RetryCount >= MaxRetries || result == TaskResult.Abort)
             {
                 context.State = ProcessState.Failed;
-                _log.WriteLine($"Restore failed permanently: {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Error);
+                _log.WriteLine($"Max retries for restore complete: {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}]", LogType.Error);
 
                 // Trigger controlled pause
                 MigrationJobContext.ControlledPauseRequested = true;
@@ -1516,8 +1585,6 @@ namespace OnlineMongoMigrationProcessor
             {
                 string muId = tracker.MigrationUnit.Id;
                 string targetConnectionString = string.Empty;
-
-                
 
                 // Mark migration unit as complete
                 tracker.MigrationUnit.DumpComplete = true;

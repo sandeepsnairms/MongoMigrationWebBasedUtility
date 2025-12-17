@@ -34,6 +34,8 @@ namespace OnlineMongoMigrationProcessor
         public double CSAvgReadLatencyInMS { get; set; }
         public double CSAvgWriteLatencyInMS { get; set; }
 
+        public DateTime? CSLastChecked { get; set; }
+
         public DateTime CursorUtcTimestamp { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
         public double DumpPercent { get; set; }

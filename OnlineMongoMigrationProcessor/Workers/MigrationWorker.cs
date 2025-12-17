@@ -399,7 +399,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         try
                         {
                             _log.WriteLine($"[ASYNC] Starting SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,false);
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,true);
                             _log.WriteLine($"[ASYNC] Completed SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                         }
                         catch (Exception ex)

@@ -110,35 +110,38 @@ namespace OnlineMongoMigrationProcessor
         private async Task<(List<string> sortedKeys, long emptyLoops, DateTime lastResumeTokenCheck)> HandleEmptyCollectionKeys(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
         {
             emptyLoops++;
-            _log.ShowInMonitor($"{_syncBackPrefix}No collections with resume tokens found (empty loop #{emptyLoops}). Waiting {_config.ChangeStreamBatchDurationMin} seconds before rechecking.");
-            
-            lastResumeTokenCheck = await CheckAndInitializeResumeTokensIfNeeded(emptyLoops, lastResumeTokenCheck, token);
-            
-            // Wait for ChangeStreamBatchDurationMin before checking again
-            await Task.Delay(_config.ChangeStreamBatchDurationMin * 1000, token);
+
+            var loopDurationSec=Math.Max(60, _config.ChangeStreamBatchDurationMin);
+            _log.ShowInMonitor($"{_syncBackPrefix}No collections with resume tokens found (empty loop #{emptyLoops}). Waiting {loopDurationSec} seconds before rechecking.");
+
+            _ = InitializeResumeTokensForUnsetUnitsAsync(token);
+            //lastResumeTokenCheck = await CheckAndInitializeResumeTokensIfNeeded(emptyLoops, lastResumeTokenCheck, token);
+
+            // Wait for loopDurationSec before checking again
+            await Task.Delay(loopDurationSec * 1000, token);
             
             // Recheck for collections with resume tokens
             var sortedKeys = GetSortedCollectionKeys();
             return (sortedKeys, emptyLoops, lastResumeTokenCheck);
         }
 
-        private async Task<DateTime> CheckAndInitializeResumeTokensIfNeeded(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
-        {
-            // Check if we should initialize resume tokens (every 10 loops or every 10 minutes)
-            TimeSpan timeSinceLastCheck = DateTime.UtcNow - lastResumeTokenCheck;
-            if (emptyLoops % 10 == 0 || timeSinceLastCheck.TotalMinutes >= 10)
-            {                
-                await InitializeResumeTokensForUnsetUnitsAsync(token);
-                return DateTime.UtcNow;
-            }
-            return lastResumeTokenCheck;
-        }
+        //private async Task<DateTime> CheckAndInitializeResumeTokensIfNeeded(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
+        //{
+        //    // Check if we should initialize resume tokens (every 10 loops or every 10 minutes)
+        //    TimeSpan timeSinceLastCheck = DateTime.UtcNow - lastResumeTokenCheck;
+        //    if (emptyLoops % 10 == 0 || timeSinceLastCheck.TotalMinutes >= 10)
+        //    {                
+        //        _= InitializeResumeTokensForUnsetUnitsAsync(token);
+        //        return DateTime.UtcNow;
+        //    }
+        //    return lastResumeTokenCheck;
+        //}
 
         private long ResetEmptyLoopsCounterIfNeeded(long emptyLoops, int totalKeys)
         {
             if (emptyLoops > 0)
             {
-                _log.WriteLine($"{_syncBackPrefix}Resuming normal processing with {totalKeys} collection(s) after {emptyLoops} empty loops", LogType.Info);
+                _log.WriteLine($"{_syncBackPrefix}Resuming processing with {totalKeys} collection(s) after {emptyLoops} empty loops", LogType.Info);
                 return 0;
             }
             return emptyLoops;
@@ -278,7 +281,7 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task ExecuteBatchTasks(List<Task> tasks, List<string> collectionProcessed, int seconds)
         {
-            _log.WriteLine($"{_syncBackPrefix}Processing change streams for collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
+            _log.WriteLine($"{_syncBackPrefix}Processing change streams for {collectionProcessed.Count} collections: {string.Join(", ", collectionProcessed)}, collections without a resume token have been skipped. Batch Duration {seconds} seconds", LogType.Info);
 
             try
             {
@@ -809,6 +812,9 @@ namespace OnlineMongoMigrationProcessor
 
                 try
 				{
+                    //last time chnage stream was checked
+                    mu.CSLastChecked=DateTime.UtcNow;
+
                     var sucess = await MongoSafeTaskExecutor.ExecuteAsync(
                     async (ct) =>
                     {
@@ -819,14 +825,14 @@ namespace OnlineMongoMigrationProcessor
                         IChangeStreamCursor<ChangeStreamDocument<BsonDocument>>? cursor = null;
                         try
                         {
-                    // 1. Create cursor
-                        cursor = await CreateChangeStreamCursorAsync(
-                            changeStreamCollection,
-                            pipelineArray,
-                            options,
-                            ct,
-                            collectionKey
-                        );                            if (cursor == null)
+                            // 1. Create cursor
+                                cursor = await CreateChangeStreamCursorAsync(
+                                    changeStreamCollection,
+                                    pipelineArray,
+                                    options,
+                                    ct,
+                                    collectionKey
+                                );                            if (cursor == null)
                             {
                                 _log.WriteLine($"{_syncBackPrefix}Cursor is null for {collectionKey}", LogType.Debug);
                                 return false;
@@ -1314,7 +1320,7 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                _log.WriteLine($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.", LogType.Info);
+                _log.ShowInMonitor($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.");
             }
 
             var bsonDoc = BsonDocument.Parse(documentId);
