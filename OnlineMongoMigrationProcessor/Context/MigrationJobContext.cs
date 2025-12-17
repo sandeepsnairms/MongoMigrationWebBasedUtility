@@ -68,11 +68,11 @@ namespace OnlineMongoMigrationProcessor.Context
                 {
                     return _cachedCurrentlyActiveJob;
                 }
-                
-                // Otherwise, fetch from GetMigrationJob and cache it
+
+                // Otherwise, fetch from LoadMigrationJob and cache it
                 if (!string.IsNullOrEmpty(ActiveMigrationJobId))
                 {
-                    _cachedCurrentlyActiveJob = GetMigrationJob(ActiveMigrationJobId);
+                    _cachedCurrentlyActiveJob = LoadMigrationJob(ActiveMigrationJobId);
                     MigrationUnitsCache=new ActiveMigrationUnitsCache();
                     return _cachedCurrentlyActiveJob;
                 }
@@ -155,7 +155,8 @@ namespace OnlineMongoMigrationProcessor.Context
             }
             JobList.Persist();
         }
-        public static MigrationJob? GetMigrationJob(string jobId)
+
+        private static MigrationJob? LoadMigrationJob(string jobId)
         {
             if (MigrationJobs.ContainsKey(jobId))
             {
@@ -169,9 +170,9 @@ namespace OnlineMongoMigrationProcessor.Context
 
                     var json = Store.ReadDocument(filePath);
                     var loadedObject = JsonConvert.DeserializeObject<MigrationJob>(json);
-                    if(loadedObject == null)
+                    if (loadedObject == null)
                         return null;
-                    MigrationJobs[jobId]= loadedObject;
+                    MigrationJobs[jobId] = loadedObject;
                     return loadedObject;
                 }
                 catch
@@ -179,6 +180,14 @@ namespace OnlineMongoMigrationProcessor.Context
                     return null;
                 }
             }
+        }
+
+        public static MigrationJob? GetMigrationJob(string jobId)
+        {
+            if(jobId==ActiveMigrationJobId && CurrentlyActiveJob!=null)
+                return CurrentlyActiveJob;
+
+            return LoadMigrationJob(jobId);
         }
 
         public static List<MigrationJob>  PopulateMigrationJobs(List<string> ids)

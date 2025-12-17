@@ -466,7 +466,29 @@ namespace OnlineMongoMigrationProcessor
             return true;
         }
 
-        public static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
+        public static bool  AddMigrationUnits(List<MigrationUnit> unitsToAdd, MigrationJob job, Log log=null)
+        {
+            var newUnits = unitsToAdd
+                .Where(mu => !job.MigrationUnitBasics
+                .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
+                .ToList();
+
+            if (newUnits.Count > 0)
+            {
+                if(log!=null)
+                    log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
+
+                foreach (var mu in newUnits)
+                {
+                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    AddMigrationUnit(mu,job);
+                }
+                MigrationJobContext.SaveMigrationJob(job);
+            }
+            return true;
+        }
+
+        private static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
         {
             if (job == null)
             {

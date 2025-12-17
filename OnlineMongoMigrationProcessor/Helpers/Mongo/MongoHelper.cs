@@ -2105,6 +2105,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         }
                     })
                     .Where(model => model != null)
+                    .Cast<DeleteOneModel<BsonDocument>>()
                     .ToList();
 
                 if (deleteModels.Any())

@@ -268,8 +268,6 @@
         {
             if (_selectedMigrationJob == null)
             {
-                //var jobList = JobManager.GetJobList();
-
                 // Store connection strings if provided
                 if (!string.IsNullOrEmpty(sourceConnectionString))
                     MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;

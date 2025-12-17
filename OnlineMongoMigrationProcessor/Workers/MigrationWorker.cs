@@ -127,12 +127,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                 MigrationJobContext.ControlledPauseRequested = false; // Reset controlled pause flag
                 MigrationJobContext.MigrationUnitsCache = null;
                 
-                // Stop all percentage timers to prevent interference with new jobs
-                ProcessExecutor.StopAllPercentageTimers();
-                
                 // Clear the centralized cache when stopping
                 MigrationJobContext.ClearCurrentlyActiveJobCache();
-                
+
+                // Stop percentage timer
+                PercentageUpdater.StopPercentageTimer();
+
                 _log.WriteLine("StopMigration completed - all resources released", LogType.Verbose);
             }
             catch { }
@@ -962,6 +962,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return false;
             }
 
+            // Stop and Clear existing percentage timer
+            PercentageUpdater.StopPercentageTimer();
+
             StopMigration();
             ProcessRunning = true;
             MigrationJobContext.ControlledPauseRequested = false;
@@ -1022,21 +1025,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 sourceConnectionString, 
                 MigrationJobContext.CurrentlyActiveJob.AllCollectionsUseObjectId);
 
-            var newUnits = unitsToAdd
-                .Where(mu => !MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics
-                .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
-                .ToList();
-
-            if (newUnits.Count > 0)
-            {
-                _log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
-                foreach (var mu in newUnits)
-                {
-                    MigrationJobContext.SaveMigrationUnit(mu, false);
-                    Helper.AddMigrationUnit(mu, MigrationJobContext.CurrentlyActiveJob);
-                }
-                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-            }
+            Helper.AddMigrationUnits(unitsToAdd, MigrationJobContext.CurrentlyActiveJob, _log);
         }
 
         private async Task<bool> EnsureMongoToolsAvailableAsync()

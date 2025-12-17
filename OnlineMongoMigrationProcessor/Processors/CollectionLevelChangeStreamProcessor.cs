@@ -127,8 +127,7 @@ namespace OnlineMongoMigrationProcessor
             // Check if we should initialize resume tokens (every 10 loops or every 10 minutes)
             TimeSpan timeSinceLastCheck = DateTime.UtcNow - lastResumeTokenCheck;
             if (emptyLoops % 10 == 0 || timeSinceLastCheck.TotalMinutes >= 10)
-            {
-                _log.ShowInMonitor($"{_syncBackPrefix}Attempting to initialize resume tokens for unset units (empty loops: {emptyLoops}, time since last check: {timeSinceLastCheck.TotalMinutes:F1} min)");
+            {                
                 await InitializeResumeTokensForUnsetUnitsAsync(token);
                 return DateTime.UtcNow;
             }

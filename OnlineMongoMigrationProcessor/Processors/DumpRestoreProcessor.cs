@@ -182,6 +182,8 @@ namespace OnlineMongoMigrationProcessor
                 int workersToSpawnNow = Math.Min(workersToSpawn, _dumpQueue.Count);
                 string collectionKey = $"{_currentDbName}.{_currentColName}";
                 
+
+
                 _log.WriteLine($"Spawning {workersToSpawnNow} new dump worker(s) immediately for {collectionKey}");
                 
                 for (int i = 0; i < workersToSpawnNow; i++)
@@ -462,7 +464,10 @@ namespace OnlineMongoMigrationProcessor
             }
             
             _log.WriteLine($"Starting parallel dump of {sortedChunks.Count} chunks with {_dumpPool!.MaxWorkers} workers");
-            
+
+            //start percentage tracker
+            PercentageUpdater.AddToPercentageTracker(mu.Id, false, _log);
+
             // Store context for dynamic worker spawning
             _currentCollection = collection;
             _currentFolder = folder;
@@ -614,8 +619,8 @@ namespace OnlineMongoMigrationProcessor
                     break;
                 }
 
-                    _log.WriteLine($"Worker {workerId} dumping chunk {workItem.ChunkIndex}");
-                    
+                    _log.WriteLine($"Worker {workerId} dumping chunk {workItem.ChunkIndex}");                    
+
                     double initialPercent = ((double)100 / workItem.MigrationUnit.MigrationChunks.Count) * workItem.ChunkIndex;
                     double contributionFactor = 1.0 / workItem.MigrationUnit.MigrationChunks.Count;
                     
@@ -1192,7 +1197,7 @@ namespace OnlineMongoMigrationProcessor
             // when resuming a CurrentlyActiveJob, check if post-upload change stream processing is already in progress
             if (CheckChangeStreamAlreadyProcessingAsync(ctx))
                 return TaskResult.Success;
-
+                        
 
             //invoke upload for chunks that are already dumped
             _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
@@ -1252,7 +1257,6 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{dbName}.{colName} added to upload queue.");
 
-                //MigrationUnitsPendingUpload.AddOrUpdate($"{mu.DatabaseName}.{mu.CollectionName}", mu);
                 _migrationUnitsPendingUpload.Add(mu.Id);
                 _ = Task.Run(() => Upload(mu.Id, ctx.TargetConnectionString), _cts.Token);
             }            
@@ -1503,7 +1507,10 @@ namespace OnlineMongoMigrationProcessor
 
             // Always use parallel restore infrastructure (supports dynamic worker scaling)
             _log.WriteLine($"Starting restore with {_restorePool!.MaxWorkers} worker(s)");
-            
+
+            //start percentage tracker
+            PercentageUpdater.AddToPercentageTracker(mu.Id, true, _log);
+
             var result = ParallelRestoreChunksAsync(
                 mu,
                 folder,
@@ -1609,7 +1616,8 @@ namespace OnlineMongoMigrationProcessor
             if (!MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine("Hard stop - killing active processes");
-                KillAllActiveProcesses();
+                KillAllActiveProcesses();               
+
             }            
             
             // Dispose worker pools (handles semaphores and blocker tasks)
@@ -1664,6 +1672,8 @@ namespace OnlineMongoMigrationProcessor
 
                 // Initialize processor context (parity with CopyProcessor)
                 var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
+
+                try { _uploadLock.Release(); _uploadLockAcquired = false; } catch { }
 
                 return new StartProcessInitResult
                 {
@@ -1956,9 +1966,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 skipFinalize = ValidateRestoredChunkDocumentCount(mu, chunkIndex, targetConnectionString, dbName, colName);
             }
-            
+
             // mongorestore doesn't report on doc count sometimes. hence we need to calculate based on targetCount percent
-            mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = docCount - (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount + mu.MigrationChunks[chunkIndex].SkippedAsDuplicateCount);
+            if (mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount ==0)            
+                mu.MigrationChunks[chunkIndex].RestoredSuccessDocCount = docCount - (mu.MigrationChunks[chunkIndex].RestoredFailedDocCount );
+
             _log.WriteLine($"{dbName}.{colName}[{chunkIndex}] uploader processing completed");
 
             if (!skipFinalize)
@@ -2016,7 +2028,7 @@ namespace OnlineMongoMigrationProcessor
         private Task<TaskResult> FinalizeRestoreChunk(MigrationUnit mu, int chunkIndex, string folder)
         {
             mu.MigrationChunks[chunkIndex].IsUploaded = true;
-            MigrationJobContext.SaveMigrationUnit(mu, false);
+            MigrationJobContext.SaveMigrationUnit(mu, true);
 
             try
             {
