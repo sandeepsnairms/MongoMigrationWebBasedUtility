@@ -643,63 +643,76 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-            // Get available worker capacity
-            int availableWorkers = _dumpPool.CurrentAvailable;
-            int totalWorkers = _dumpPool.MaxWorkers;
-            int busyWorkers = totalWorkers - availableWorkers;
-            
-            int totalPending = _downloadManifest.Count(kvp => kvp.Value.State == ProcessState.Pending);
-            int totalProcessing = _downloadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
-            int totalInManifest = _downloadManifest.Count;
-            
-            _log?.WriteLine($"[ProcessPendingDumps] Pool: {busyWorkers}/{totalWorkers} busy, {availableWorkers} available | Manifest: {totalPending} pending, {totalProcessing} processing, {totalInManifest} total", LogType.Debug);
-            
-            if (availableWorkers <= 0)
-            {
-                _log?.WriteLine($"[ProcessPendingDumps] No workers available - all {totalWorkers} workers busy", LogType.Debug);
-                return; // No workers available
-            }
-
-            // Find pending dump contexts (not already processing)
-            var pendingContexts = _downloadManifest.Values
-                .Where(ctx => ctx.State == ProcessState.Pending)
-                .OrderBy(ctx => ctx.QueuedAt)
-                .Take(availableWorkers)
-                .ToList();
-
-            _log?.WriteLine($"[ProcessPendingDumps] Found {pendingContexts.Count} pending contexts to process (capacity: {availableWorkers})", LogType.Debug);
-
-            int spawned = 0;
-            foreach (var context in pendingContexts)
-            {
-                // Try to acquire a worker slot
-                if (_dumpPool.TryAcquire())
+                // Check for controlled pause before spawning any workers
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
-                    //initating timer for status  tracking
-                    PercentageUpdater.AddToPercentageTracker(context.MigrationUnit.Id, false, _log);
-
-                    // Mark as processing
-                    context.State = ProcessState.Processing;
-                    context.StartedAt = DateTime.UtcNow;
-                    spawned++;
-
-                    _log?.WriteLine($"[ProcessPendingDumps] Spawning dump worker for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}] (worker {spawned}/{availableWorkers})", LogType.Debug);
-
-                    // Spawn worker task
-                    var cancellationToken = _processCts?.Token ?? CancellationToken.None;
-                    _ = Task.Run(async () => await ProcessChunkForDownload(context), cancellationToken);
+                    _log?.WriteLine("[ProcessPendingDumps] Controlled pause detected - skipping dump processing", LogType.Debug);
+                    return;
                 }
-                else
-                {
-                    _log?.WriteLine($"[ProcessPendingDumps] Failed to acquire worker slot after spawning {spawned} workers - stopping", LogType.Debug);
-                    break; // No more workers available
-                }
-            }
+
+                // Get available worker capacity
+                int availableWorkers = _dumpPool.CurrentAvailable;
+                int totalWorkers = _dumpPool.MaxWorkers;
+                int busyWorkers = totalWorkers - availableWorkers;
             
-            if (spawned > 0)
-            {
-                _log?.WriteLine($"[ProcessPendingDumps] Successfully spawned {spawned} dump worker(s)", LogType.Debug);
-            }
+                int totalPending = _downloadManifest.Count(kvp => kvp.Value.State == ProcessState.Pending);
+                int totalProcessing = _downloadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
+                int totalInManifest = _downloadManifest.Count;
+            
+                _log?.WriteLine($"[ProcessPendingDumps] Pool: {busyWorkers}/{totalWorkers} busy, {availableWorkers} available | Manifest: {totalPending} pending, {totalProcessing} processing, {totalInManifest} total", LogType.Debug);
+            
+                if (availableWorkers <= 0)
+                {
+                    _log?.WriteLine($"[ProcessPendingDumps] No workers available - all {totalWorkers} workers busy", LogType.Debug);
+                    return; // No workers available
+                }
+
+                // Find pending dump contexts (not already processing)
+                var pendingContexts = _downloadManifest.Values
+                    .Where(ctx => ctx.State == ProcessState.Pending)
+                    .OrderBy(ctx => ctx.QueuedAt)
+                    .Take(availableWorkers)
+                    .ToList();
+
+                _log?.WriteLine($"[ProcessPendingDumps] Found {pendingContexts.Count} pending contexts to process (capacity: {availableWorkers})", LogType.Debug);
+
+                int spawned = 0;
+                foreach (var context in pendingContexts)
+                {
+                    // Check for controlled pause before spawning any workers
+                    if (MigrationJobContext.ControlledPauseRequested)
+                    {
+                        _log?.WriteLine("[ProcessPendingDumps] Controlled pause detected - skipping dump processing", LogType.Debug);
+                        return;
+                    }
+                    // Try to acquire a worker slot
+                    if (_dumpPool.TryAcquire())
+                    {
+                        //initating timer for status  tracking
+                        PercentageUpdater.AddToPercentageTracker(context.MigrationUnit.Id, false, _log);
+
+                        // Mark as processing
+                        context.State = ProcessState.Processing;
+                        context.StartedAt = DateTime.UtcNow;
+                        spawned++;
+
+                        _log?.WriteLine($"[ProcessPendingDumps] Spawning dump worker for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}] (worker {spawned}/{availableWorkers})", LogType.Debug);
+
+                        // Spawn worker task
+                        var cancellationToken = _processCts?.Token ?? CancellationToken.None;
+                        _ = Task.Run(async () => await ProcessChunkForDownload(context), cancellationToken);
+                    }
+                    else
+                    {
+                        _log?.WriteLine($"[ProcessPendingDumps] Failed to acquire worker slot after spawning {spawned} workers - stopping", LogType.Debug);
+                        break; // No more workers available
+                    }
+                }
+            
+                if (spawned > 0)
+                {
+                    _log?.WriteLine($"[ProcessPendingDumps] Successfully spawned {spawned} dump worker(s)", LogType.Debug);
+                }
             }
             catch (Exception ex)
             {
@@ -720,63 +733,76 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-            // Get available worker capacity
-            int availableWorkers = _restorePool.CurrentAvailable;
-            int totalWorkers = _restorePool.MaxWorkers;
-            int busyWorkers = totalWorkers - availableWorkers;
-            
-            int totalPending = _uploadManifest.Count(kvp => kvp.Value.State == ProcessState.Pending);
-            int totalProcessing = _uploadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
-            int totalInManifest = _uploadManifest.Count;
-            
-            _log?.WriteLine($"[ProcessPendingRestores] Pool: {busyWorkers}/{totalWorkers} busy, {availableWorkers} available | Manifest: {totalPending} pending, {totalProcessing} processing, {totalInManifest} total", LogType.Debug);
-            
-            if (availableWorkers <= 0)
-            {
-                _log?.WriteLine($"[ProcessPendingRestores] No workers available - all {totalWorkers} workers busy", LogType.Debug);
-                return; // No workers available
-            }
-
-            // Find pending restore contexts (not already processing)
-            var pendingContexts = _uploadManifest.Values
-                .Where(ctx => ctx.State == ProcessState.Pending)
-                .OrderBy(ctx => ctx.QueuedAt)
-                .Take(availableWorkers)
-                .ToList();
-
-            _log?.WriteLine($"[ProcessPendingRestores] Found {pendingContexts.Count} pending contexts to process (capacity: {availableWorkers})", LogType.Debug);
-
-            int spawned = 0;
-            foreach (var context in pendingContexts)
-            {
-                // Try to acquire a worker slot
-                if (_restorePool.TryAcquire())
-            {
-                    //initating timer for status  tracking
-                    PercentageUpdater.AddToPercentageTracker(context.MigrationUnit.Id, true, _log);
-
-                    // Mark as processing
-                    context.State = ProcessState.Processing;
-                    context.StartedAt = DateTime.UtcNow;
-                    spawned++;
-
-                    _log?.WriteLine($"[ProcessPendingRestores] Spawning restore worker for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}] (worker {spawned}/{availableWorkers})", LogType.Debug);
-
-                    // Spawn worker task
-                    var cancellationToken = _processCts?.Token ?? CancellationToken.None;
-                    _ = Task.Run(async () => await ProcessChunkForRestore(context), cancellationToken);
-                }
-                else
+                // Check for controlled pause before spawning any workers
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log?.WriteLine($"[ProcessPendingRestores] Failed to acquire worker slot after spawning {spawned} workers - stopping", LogType.Debug);
-                    break; // No more workers available
+                    _log?.WriteLine("[ProcessPendingRestores] Controlled pause detected - skipping restore processing", LogType.Debug);
+                    return;
                 }
-            }
+
+                // Get available worker capacity
+                int availableWorkers = _restorePool.CurrentAvailable;
+                int totalWorkers = _restorePool.MaxWorkers;
+                int busyWorkers = totalWorkers - availableWorkers;
             
-            if (spawned > 0)
-            {
-                _log?.WriteLine($"[ProcessPendingRestores] Successfully spawned {spawned} restore worker(s)", LogType.Debug);
-            }
+                int totalPending = _uploadManifest.Count(kvp => kvp.Value.State == ProcessState.Pending);
+                int totalProcessing = _uploadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
+                int totalInManifest = _uploadManifest.Count;
+            
+                _log?.WriteLine($"[ProcessPendingRestores] Pool: {busyWorkers}/{totalWorkers} busy, {availableWorkers} available | Manifest: {totalPending} pending, {totalProcessing} processing, {totalInManifest} total", LogType.Debug);
+            
+                if (availableWorkers <= 0)
+                {
+                    _log?.WriteLine($"[ProcessPendingRestores] No workers available - all {totalWorkers} workers busy", LogType.Debug);
+                    return; // No workers available
+                }
+
+                // Find pending restore contexts (not already processing)
+                var pendingContexts = _uploadManifest.Values
+                    .Where(ctx => ctx.State == ProcessState.Pending)
+                    .OrderBy(ctx => ctx.QueuedAt)
+                    .Take(availableWorkers)
+                    .ToList();
+
+                _log?.WriteLine($"[ProcessPendingRestores] Found {pendingContexts.Count} pending contexts to process (capacity: {availableWorkers})", LogType.Debug);
+
+                int spawned = 0;
+                foreach (var context in pendingContexts)
+                {
+                    // Check for controlled pause before spawning any workers
+                    if (MigrationJobContext.ControlledPauseRequested)
+                    {
+                        _log?.WriteLine("[ProcessPendingRestores] Controlled pause detected - skipping restore processing", LogType.Debug);
+                        return;
+                    }
+                    // Try to acquire a worker slot
+                    if (_restorePool.TryAcquire())
+                    {
+                        //initating timer for status  tracking
+                        PercentageUpdater.AddToPercentageTracker(context.MigrationUnit.Id, true, _log);
+
+                        // Mark as processing
+                        context.State = ProcessState.Processing;
+                        context.StartedAt = DateTime.UtcNow;
+                        spawned++;
+
+                        _log?.WriteLine($"[ProcessPendingRestores] Spawning restore worker for {context.MigrationUnit.DatabaseName}.{context.MigrationUnit.CollectionName}[{context.ChunkIndex}] (worker {spawned}/{availableWorkers})", LogType.Debug);
+
+                        // Spawn worker task
+                        var cancellationToken = _processCts?.Token ?? CancellationToken.None;
+                        _ = Task.Run(async () => await ProcessChunkForRestore(context), cancellationToken);
+                    }
+                    else
+                    {
+                        _log?.WriteLine($"[ProcessPendingRestores] Failed to acquire worker slot after spawning {spawned} workers - stopping", LogType.Debug);
+                        break; // No more workers available
+                    }
+                }
+            
+                if (spawned > 0)
+                {
+                    _log?.WriteLine($"[ProcessPendingRestores] Successfully spawned {spawned} restore worker(s)", LogType.Debug);
+                }
             }
             catch (Exception ex)
             {
