@@ -446,7 +446,8 @@ namespace OnlineMongoMigrationProcessor
                                 MigrationJobContext.CurrentlyActiveJob,
                                 mu,
                                 30,
-                                token);
+                                token,
+                                true);
                         }
                         catch (Exception ex)
                         {

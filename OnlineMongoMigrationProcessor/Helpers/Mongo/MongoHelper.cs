@@ -915,7 +915,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
         }
 
-    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, CancellationToken cts)
+    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, CancellationToken cts, bool fromChangeStreamStartedOn )
     {
         int retryCount = 0;
         bool isSucessful = false;
@@ -934,6 +934,14 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
                     // Initialize with safe defaults; will be overridden below
                     var options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+
+                    if(fromChangeStreamStartedOn)
+                    {
+                        var start = (mu.ChangeStreamStartedOn ?? DateTime.UtcNow).ToUniversalTime();
+                        log.WriteLine($"Resetting change stream start time token for {mu.DatabaseName}.{mu.CollectionName} to {start} (UTC)");
+                        var bsonTimestamp = ConvertToBsonTimestamp(start);
+                        options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
+                    }
 
                     if (resetCS)
                     {

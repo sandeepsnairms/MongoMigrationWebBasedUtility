@@ -384,7 +384,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 //if reset CS need to get the latest CS resume token synchronously
                 _log.WriteLine($"Resetting change stream for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
                 _log.WriteLine($"Synchronous resume token setup initiated (30s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
-                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, _cts);
+                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, _cts,false);
                 _log.WriteLine($"Synchronous resume token setup completed for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
             }
             else
@@ -399,7 +399,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         try
                         {
                             _log.WriteLine($"[ASYNC] Starting SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts);
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,false);
                             _log.WriteLine($"[ASYNC] Completed SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                         }
                         catch (Exception ex)
@@ -519,7 +519,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                                 _log.WriteLine($"Setting up server-level change stream resume token for job {MigrationJobContext.CurrentlyActiveJob.Id}.");
                                 _ = Task.Run(async () =>
                                 {
-                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts);
+                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,false);
                                 });
 
                                 serverLevelResumeTokenSet = true;
@@ -855,7 +855,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         if (await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                         {
-                            processor.AddCollectionToChangeStreamQueue(migrationUnit.Id, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
+                            processor.AddCollectionToChangeStreamQueue(migrationUnit.Id);
                             _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Verbose);
                             
                         }
@@ -874,7 +874,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                     }
                 }
-                processor.RunChangeStreamProcessorForAllCollections(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
+                processor.RunChangeStreamProcessorForAllCollections();
                 _log.WriteLine("Change stream processor started for all collections", LogType.Debug);
 
                 return TaskResult.Success;
@@ -971,7 +971,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _activeJobId = MigrationJobContext.CurrentlyActiveJob.Id;
             Console.WriteLine($"_activeJobId: {_activeJobId}");
             MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
-
+                
             InitializeLogging();
             LoadConfig();
             

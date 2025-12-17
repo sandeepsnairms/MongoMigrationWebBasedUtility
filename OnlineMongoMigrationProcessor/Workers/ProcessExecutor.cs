@@ -95,7 +95,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (!string.IsNullOrEmpty(args.Data))
                     {
                         outputBuffer.AppendLine(args.Data);
-                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}");
+                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}", LogType.Debug);
                     }
                 };
 
@@ -112,7 +112,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _process.Start();
                 int processId = _process.Id;
                 onProcessStarted?.Invoke(processId);
-                _log.WriteLine($"{processType} process started: PID {processId} for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]");
+                _log.WriteLine($"{processType} process started: PID {processId} for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]", LogType.Debug);
 
                 if (processType == "MongoDump")
                 {
@@ -285,7 +285,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                     {
-                        _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}]: {Helper.RedactPii(data)}");
+                        _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}]: {Helper.RedactPii(data)}",LogType.Verbose);
                     }
                     else
                     {
@@ -325,16 +325,33 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public (int RestoredCount, int FailedCount, double percentage) ExtractRestoreCounts(string input)
         {
-            // Regular expressions to capture the counts
+            // Old formats
             var restoredMatch = Regex.Match(input, @"(\d+)\s+document\(s\)\s+restored\s+successfully");
             var failedMatch = Regex.Match(input, @"(\d+)\s+document\(s\)\s+failed\s+to\s+restore");
 
-            // Extract counts with default value of 0 if no match
+            // Extract counts with default value of 0
             int restoredCount = restoredMatch.Success ? int.Parse(restoredMatch.Groups[1].Value) : 0;
             int failedCount = failedMatch.Success ? int.Parse(failedMatch.Groups[1].Value) : 0;
 
-            double percentage=0;
-            if (restoredCount==0 && failedCount==0)
+            // 🔁 Fallback to NEW format only if old format gave nothing
+            if (restoredCount == 0 && failedCount == 0)
+            {
+                var newFormatMatch = Regex.Match(
+                    input,
+                    @"\((\d+)\s+documents,\s+(\d+)\s+failures\)"
+                );
+
+                if (newFormatMatch.Success)
+                {
+                    restoredCount = int.Parse(newFormatMatch.Groups[1].Value);
+                    failedCount = int.Parse(newFormatMatch.Groups[2].Value);
+                }
+            }
+
+            double percentage = 0;
+
+            // Keep your existing percentage logic
+            if (restoredCount == 0 && failedCount == 0)
             {
                 var match = Regex.Match(input, @"\(([\d.]+)%\)");
 
