@@ -966,8 +966,8 @@ namespace OnlineMongoMigrationProcessor
                 args,
                 dumpFilePath,
                 _processCts?.Token ?? CancellationToken.None,
-                onProcessStarted: null,
-                onProcessEnded: null
+                onProcessStarted: pid => MigrationJobContext.ActiveDumpProcessIds.Add(pid),
+                onProcessEnded: pid => MigrationJobContext.ActiveDumpProcessIds.Remove(pid)
             ), _processCts?.Token ?? CancellationToken.None);
 
             return success;
@@ -1387,8 +1387,8 @@ namespace OnlineMongoMigrationProcessor
                 args,
                 dumpFilePath,
                 _processCts?.Token ?? CancellationToken.None,
-                onProcessStarted: null,
-                onProcessEnded: null
+                onProcessStarted: pid => MigrationJobContext.ActiveRestoreProcessIds.Add(pid),
+                onProcessEnded: pid => MigrationJobContext.ActiveRestoreProcessIds.Remove(pid)
             ), _processCts?.Token ?? CancellationToken.None);
 
             return success;

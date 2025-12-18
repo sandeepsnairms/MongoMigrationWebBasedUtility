@@ -965,11 +965,19 @@ namespace OnlineMongoMigrationProcessor.Workers
             // Stop and Clear existing percentage timer
             PercentageUpdater.StopPercentageTimer();
 
+            // StopMigration handles cleanup of previous job
             StopMigration();
             ProcessRunning = true;
-            MigrationJobContext.ControlledPauseRequested = false;
+            
+            // Reset all static state and kill leftover processes
+            MigrationJobContext.ResetJobState(_log);
+            
             _activeJobId = MigrationJobContext.CurrentlyActiveJob.Id;
             Console.WriteLine($"_activeJobId: {_activeJobId}");
+            
+            // Reset WorkerPoolCoordinator for the new job
+            WorkerPoolCoordinator.Reset(_activeJobId, _log);
+            
             MigrationJobContext.MigrationUnitsCache = new ActiveMigrationUnitsCache();
                 
             InitializeLogging();

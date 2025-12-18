@@ -20,13 +20,64 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static ActiveMigrationUnitsCache MigrationUnitsCache { get; set; }
 
-        // Thread-safe process ID tracking for parallel execution
+        // Track OS process IDs for mongodump and mongorestore to enable cleanup
         public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public static List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
 
         public static string ActiveMigrationJobId { get; set; }
 
         public static bool ControlledPauseRequested { get; set; } = false;
+
+        /// <summary>
+        /// Resets static state for a new job. Call this when starting a new migration job
+        /// to prevent state from previous jobs from interfering.
+        /// Kills any leftover mongodump/mongorestore processes from previous jobs.
+        /// </summary>
+        public static void ResetJobState(Log log = null)
+        {
+            // Kill any leftover processes from previous job
+            KillTrackedProcesses(log);
+            
+            // Clear the lists
+            ActiveDumpProcessIds.Clear();
+            ActiveRestoreProcessIds.Clear();
+            ControlledPauseRequested = false;
+        }
+        
+        /// <summary>
+        /// Kills all tracked mongodump and mongorestore processes.
+        /// </summary>
+        private static void KillTrackedProcesses(Log log = null)
+        {
+            int killedCount = 0;
+            
+            foreach (int pid in ActiveDumpProcessIds.Concat(ActiveRestoreProcessIds))
+            {
+                try
+                {
+                    var process = System.Diagnostics.Process.GetProcessById(pid);
+                    if (!process.HasExited)
+                    {
+                        process.Kill(entireProcessTree: true);
+                        killedCount++;
+                        log?.WriteLine($"Killed leftover process PID {pid}", LogType.Verbose);
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    // Process doesn't exist anymore - that's fine
+                }
+                catch (Exception ex)
+                {
+                    log?.WriteLine($"Error killing process {pid}: {ex.Message}", LogType.Verbose);
+                }
+            }
+            
+            if (killedCount > 0)
+            {
+                log?.WriteLine($"Killed {killedCount} leftover mongodump/mongorestore processes", LogType.Verbose);
+            }
+        }
 
         private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
         private static readonly Dictionary<string, string> _targetConnectionStrings = new();
