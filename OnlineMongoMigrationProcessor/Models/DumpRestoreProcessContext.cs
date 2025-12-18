@@ -9,7 +9,7 @@ namespace OnlineMongoMigrationProcessor.Models
     public class DumpRestoreProcessContext
     {
         public string Id { get; set; } = string.Empty; // Format: "{MU.Id}_{ChunkIndex}"
-        public MigrationUnit MigrationUnit { get; set; } = null!;
+        public string MigrationUnitId { get; set; } = string.Empty;
         public int ChunkIndex { get; set; }
         public ProcessState State { get; set; }
         public DateTime QueuedAt { get; set; }

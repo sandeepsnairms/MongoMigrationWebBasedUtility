@@ -23,9 +23,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         private readonly object _processLock = new object();
         private CancellationToken _cancellationToken;
         
-
-        private Func<bool>? _isControlledPauseRequested;
-        
         public ProcessExecutor(Log log)
         {
             _log = log;
@@ -46,7 +43,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// <param name="cancellationToken">Cancellation token for graceful shutdown.</param>
         /// <param name="onProcessStarted">Callback when process starts with PID.</param>
         /// <param name="onProcessEnded">Callback when process ends with PID.</param>
-        /// <param name="isControlledPauseRequested">Function to check if controlled pause is requested.</param>
         /// <returns>True if the process completed successfully, otherwise false.</returns>
         public bool Execute(
             MigrationUnit mu,
@@ -60,11 +56,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             string outputFilePath,
             CancellationToken cancellationToken,
             Action<int>? onProcessStarted = null,
-            Action<int>? onProcessEnded = null,
-            Func<bool>? isControlledPauseRequested = null)
+            Action<int>? onProcessEnded = null)
         {
             _cancellationToken = cancellationToken;
-            _isControlledPauseRequested = isControlledPauseRequested;
             string processType = exePath.ToLower().Contains("restore") ? "MongoRestore" : "MongoDump";
 
 
@@ -166,32 +160,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         onProcessEnded?.Invoke(processId);
                         return false;
-                    }
-                    
-                    // Check for controlled pause - kill MongoDump immediately, wait for MongoRestore
-                    if (_isControlledPauseRequested?.Invoke() == true)
-                    {
-                        if (processType == "MongoDump")
-                        {
-                            try
-                            {
-                                _process.Kill(entireProcessTree: true);
-                                _log.WriteLine($"{processType} process {processId} terminated due to controlled pause.");
-                            }
-                            catch (Exception ex)
-                            {
-                                _log.WriteLine($"Error killing process {processId}: {Helper.RedactPii(ex.Message)}", LogType.Error);
-                            }
-
-                            onProcessEnded?.Invoke(processId);
-                            string key = $"{mu.DatabaseName}.{mu.CollectionName}.{processType}";
-                            return false;
-                        }
-                        else // MongoRestore - wait for completion
-                        {
-                            //_log.WriteLine($"{processType} process {processId} waiting to complete due to controlled pause...");
-                            // Continue waiting for restore to finish naturally
-                        }
                     }
                 }
 

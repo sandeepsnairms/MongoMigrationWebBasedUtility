@@ -388,7 +388,7 @@
     </nav>
 }
 
-@if(!_isLoadingCollections)
+@if(!_isLoadingCollections && (IsPauseEnabled() || IsResumeEnabled()))
 {
     <div class="d-flex align-items-center mb-3 mt-4">
         <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections" disabled="@_isLoadingCollections">Update Collections</button>
