@@ -272,6 +272,88 @@ namespace OnlineMongoMigrationProcessor.Persistence
             }
         }
 
+        public override int GetLogCount(string id)
+        {
+            EnsureInitialized();
+            if (string.IsNullOrWhiteSpace(id))
+                return 0;
+            
+            try
+            {
+                var normalizedId = NormalizeIdForMongo(id);
+                var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedId);
+                var count = (int)_logCollection!.CountDocuments(filter);
+                return count;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        public override byte[] DownloadLogsPaginated(string id, int skip, int take)
+        {
+            EnsureInitialized();
+            if (string.IsNullOrWhiteSpace(id))
+                return Array.Empty<byte>();
+            
+            try
+            {
+                var normalizedId = NormalizeIdForMongo(id);
+                var filter = Builders<BsonDocument>.Filter.Eq("JobId", normalizedId);
+                var sort = Builders<BsonDocument>.Sort.Ascending("_id");
+                
+                // Use StringBuilder to stream format directly without loading all docs into a list
+                var sb = new System.Text.StringBuilder();
+                
+                // Stream process documents using ForEachAsync to avoid loading all into memory at once
+                // Skip and Limit are applied on the server side before any data is transferred
+                using (var cursor = _logCollection!.Find(filter).Sort(sort).Skip(skip).Limit(take).ToCursor())
+                {
+                    while (cursor.MoveNext())
+                    {
+                        // Process each batch as it arrives, don't accumulate
+                        foreach (var doc in cursor.Current)
+                        {
+                            try
+                            {
+                                LogType logType = Enum.Parse<LogType>(doc.GetValue("Type").AsString);
+                                
+                                char typeChar = logType switch
+                                {
+                                    LogType.Error => 'E',
+                                    LogType.Warning => 'W',
+                                    LogType.Info => 'I',
+                                    LogType.Message => 'L',
+                                    LogType.Debug => 'D',
+                                    LogType.Verbose => 'V',
+                                    _ => '?'
+                                };
+                                
+                                DateTime dateTime = doc.GetValue("Datetime").ToUniversalTime();
+                                string dateTimeStr = dateTime.ToString("MM/dd/yyyy HH:mm:ss");
+                                string message = doc.GetValue("Message").AsString;
+                                
+                                sb.AppendLine($"{typeChar}|{dateTimeStr}|{message}");
+                            }
+                            catch (Exception docEx)
+                            {
+                                // Log individual document parsing errors but continue
+                                Helper.LogToFile($"[DocumentDBPersistence] Error parsing log document: {docEx.Message}", "DocumentDBPersistence.txt");
+                            }
+                        }
+                    }
+                }
+                
+                return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                Helper.LogToFile($"[DocumentDBPersistence] Error downloading paginated logs for {id}: {ex.Message}", "DocumentDBPersistence.txt");
+                return Array.Empty<byte>();
+            }
+        }
+
         public override byte[] DownloadLogsAsJsonBytes(string Id, int topEntries = 20, int bottomEntries = 230)
         {
             EnsureInitialized();

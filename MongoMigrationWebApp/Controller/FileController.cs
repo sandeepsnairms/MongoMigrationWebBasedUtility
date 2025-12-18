@@ -76,4 +76,37 @@ public class FileController : ControllerBase
 
         return File(fileBytes, contentType, $"{migrationUnitId}.json");
     }
+
+    [HttpGet("download/log/{Id}/count")]
+    public IActionResult GetLogCount(string Id)
+    {
+        try
+        {
+            Log log = new Log();
+            int count = log.GetLogCount(Id);
+            return Ok(new { count = count });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("download/log/{Id}/page/{pageNumber}/{pageSize}")]
+    public IActionResult DownloadLogPage(string Id, int pageNumber, int pageSize)
+    {
+        try
+        {
+            // Calculate skip/take for pagination
+            int skip = (pageNumber - 1) * pageSize;
+            
+            var fileBytes = new Log().DownloadLogsPaginated(Id, skip, pageSize);
+            var contentType = "application/octet-stream";
+            return File(fileBytes, contentType, $"{Id}_page_{pageNumber}.txt");
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
 }

@@ -168,6 +168,29 @@
                             Simulation Mode (No Writes to Target)
                         </label>
                     </div>
+                    <div class="mb-3">
+                        <label for="enableParallelProcessing" class="form-label" title="Enable parallel processing for dump and restore operations to improve migration performance. Only applicable for MongoDump and MongoRestore migration tool.">
+                            <input type="checkbox" id="enableParallelProcessing" disabled="@(!NewMode || jobType != JobType.DumpAndRestore)" @bind="enableParallelProcessing" @bind:after="OnEnableParallelProcessingChanged" />
+                            Enable Parallel Processing
+                        </label>
+                    </div>
+                    @if (enableParallelProcessing && jobType == JobType.DumpAndRestore)
+                    {
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="maxDumpWorkers" class="form-label" title="Number of parallel mongodump processes. Leave empty for auto-calculation.">Dump Workers</label>
+                                <input type="number" id="maxDumpWorkers" class="form-control" @bind="maxDumpWorkers" min="1" max="16" placeholder="@($"Auto ({defaultDumpWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                            <div class="col-md-4">
+                                <label for="maxRestoreWorkers" class="form-label" title="Number of parallel mongorestore processes. Leave empty for auto-calculation.">Restore Workers</label>
+                                <input type="number" id="maxRestoreWorkers" class="form-control" @bind="maxRestoreWorkers" min="1" max="16" placeholder="@($"Auto ({defaultRestoreWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                            <div class="col-md-4">
+                                <label for="maxInsertionWorkers" class="form-label" title="Number of insertion threads per mongorestore process. Leave empty for auto-calculation.">Insertion Workers</label>
+                                <input type="number" id="maxInsertionWorkers" class="form-control" @bind="maxInsertionWorkers" min="1" max="16" placeholder="@($"Auto ({defaultInsertionWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                        </div>
+                    }
                 </div>
 
                 @if(ShowWarning())
@@ -229,6 +252,13 @@
     private bool allCollectionsUseObjectId = false; // if all collections use ObjectId for the _id field
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
+    private bool enableParallelProcessing = true; // Enable parallel processing for dump and restore operations
+    private int? maxDumpWorkers = null; // Max parallel dump processes
+    private int? maxRestoreWorkers = null; // Max parallel restore processes
+    private int? maxInsertionWorkers = null; // Max insertion workers per collection
+    private int defaultDumpWorkers = 1; // Default calculated dump workers
+    private int defaultRestoreWorkers = 1; // Default calculated restore workers
+    private int defaultInsertionWorkers = 1; // Default calculated insertion workers
     private LogType logLevel = LogType.Info; // Minimum log level
     private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
     private string name = string.Empty; // Name of the migration job
@@ -263,6 +293,31 @@
     private void SwitchToAdvancedTab()
     {
         activeTab = "Advanced";
+    }
+
+    private void OnEnableParallelProcessingChanged()
+    {
+        if (enableParallelProcessing)
+        {
+            // Calculate default values when enabled
+            CalculateDefaultWorkerCounts();
+        }
+    }
+
+    private void CalculateDefaultWorkerCounts()
+    {
+        // Calculate optimal defaults based on CPU cores
+        int processorCount = Environment.ProcessorCount;
+        
+        // Base calculation: 1 worker per 2.5 cores, minimum 1, maximum 16
+        int baseConcurrency = Math.Max(1, (int)(processorCount / 2.5));
+        baseConcurrency = Math.Min(baseConcurrency, 16);
+        
+        defaultDumpWorkers = baseConcurrency;
+        defaultRestoreWorkers = baseConcurrency;
+        
+        // Insertion workers: half of processor count, capped at 8
+        defaultInsertionWorkers = Math.Max(1, Math.Min(processorCount / 2, 8));
     }
 
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
@@ -383,6 +438,11 @@
             isSimulatedRun = false;
             skipIndexes = false;
             appendMode = true;
+            enableParallelProcessing = true; // Default to enabled
+            maxDumpWorkers = null;
+            maxRestoreWorkers = null;
+            maxInsertionWorkers = null;
+            CalculateDefaultWorkerCounts(); // Calculate defaults on initialization
             logLevel = LogType.Info; // Default to Info
             changeStreamMode = ChangeStreamMode.Delayed;
             SelectedChangeStreamMode = "Delayed"; // Default to Delayed
@@ -413,6 +473,11 @@
             isSimulatedRun = Job?.IsSimulatedRun ?? false;
             skipIndexes = Job?.SkipIndexes ?? false;
             appendMode = Job?.AppendMode ?? false;
+            enableParallelProcessing = Job?.EnableParallelProcessing ?? true;
+            maxDumpWorkers = Job?.MaxParallelDumpProcesses;
+            maxRestoreWorkers = Job?.MaxParallelRestoreProcesses;
+            maxInsertionWorkers = Job?.MaxInsertionWorkersPerCollection;
+            CalculateDefaultWorkerCounts(); // Calculate defaults for display
             logLevel = Job?.LogLevel ?? LogType.Info;
             changeStreamLevel = Job?.ChangeStreamLevel ?? ChangeStreamLevel.Collection;
 
@@ -544,6 +609,13 @@
             IsSimulatedRun = isSimulatedRun,
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
+            EnableParallelProcessing = enableParallelProcessing,
+            MaxParallelDumpProcesses = maxDumpWorkers,
+            MaxParallelRestoreProcesses = maxRestoreWorkers,
+            MaxInsertionWorkersPerCollection = maxInsertionWorkers,
+            CurrentDumpWorkers = maxDumpWorkers ?? defaultDumpWorkers,
+            CurrentRestoreWorkers = maxRestoreWorkers ?? defaultRestoreWorkers,
+            CurrentInsertionWorkers = maxInsertionWorkers ?? defaultInsertionWorkers,
             SyncBackEnabled = (enableSyncBack && cdcMode != CDCMode.Offline && !isSimulatedRun) ? true : false,
             ChangeStreamMode = changeStreamMode,
             ChangeStreamLevel = changeStreamLevel,

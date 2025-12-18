@@ -166,10 +166,15 @@ namespace OnlineMongoMigrationProcessor
             return MigrationJobContext.Store.DownloadLogsAsJsonBytes(id, topEntries, bottomEntries);
         }
 
+        public int GetLogCount(string id)
+        {
+            return MigrationJobContext.Store.GetLogCount(id);
+        }
 
-
-
-
+        public byte[] DownloadLogsPaginated(string id, int skip, int take)
+        {
+            return MigrationJobContext.Store.DownloadLogsPaginated(id, skip, take);
+        }
 
     }
 

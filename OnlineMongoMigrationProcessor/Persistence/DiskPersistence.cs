@@ -376,6 +376,131 @@ namespace OnlineMongoMigrationProcessor.Persistence
             catch { }
         }
 
+        public override int GetLogCount(string id)
+        {
+            var folder = Path.Combine(_storagePath, "migrationlogs");
+            var binPath = Path.Combine(folder, $"{id}.bin");
+            
+            if (!File.Exists(binPath))
+                return 0;
+                
+            int count = 0;
+            try
+            {
+                using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+                
+                while (fs.Position < fs.Length)
+                {
+                    try
+                    {
+                        if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                            break;
+                            
+                        int msgLen = br.ReadInt32();
+                        if (msgLen <= 0 || msgLen > 1_000_000)
+                            break;
+                            
+                        long bytesToSkip = msgLen + 1 + 8;
+                        if (br.BaseStream.Position + bytesToSkip > br.BaseStream.Length)
+                            break;
+                            
+                        br.BaseStream.Seek(bytesToSkip, SeekOrigin.Current);
+                        count++;
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                return 0;
+            }
+            
+            return count;
+        }
+
+        public override byte[] DownloadLogsPaginated(string id, int skip, int take)
+        {
+            var folder = Path.Combine(_storagePath, "migrationlogs");
+            var binPath = Path.Combine(folder, $"{id}.bin");
+            var logBucket = new LogBucket { Logs = new List<LogObject>() };
+            var offsets = new List<long>();
+
+            if (!File.Exists(binPath))
+                return Array.Empty<byte>();
+
+            try
+            {
+                using var fs = new FileStream(binPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var br = new BinaryReader(fs);
+
+                // First pass: collect all offsets
+                while (fs.Position < fs.Length)
+                {
+                    long offset = fs.Position;
+                    try
+                    {
+                        if (br.BaseStream.Position + 4 > br.BaseStream.Length)
+                            break;
+
+                        int msgLen = br.ReadInt32();
+                        if (msgLen <= 0 || msgLen > 1_000_000)
+                            break;
+
+                        long bytesToSkip = msgLen + 1 + 8;
+                        if (br.BaseStream.Position + bytesToSkip > br.BaseStream.Length)
+                            break;
+
+                        br.BaseStream.Seek(bytesToSkip, SeekOrigin.Current);
+                        offsets.Add(offset);
+                    }
+                    catch
+                    {
+                        break;
+                    }
+                }
+
+                // Apply skip/take pagination
+                var selectedOffsets = offsets.Skip(skip).Take(take).ToList();
+
+                // Second pass: read selected entries
+                foreach (var offset in selectedOffsets)
+                {
+                    fs.Position = offset;
+                    var log = TryReadLogEntry(br);
+                    if (log != null)
+                        logBucket.Logs!.Add(log);
+                }
+            }
+            catch (Exception ex)
+            {
+                Helper.LogToFile($"Error reading paginated logs: {ex.Message}", "DiskPersistence.txt");
+            }
+
+            // Format logs
+            var sb = new System.Text.StringBuilder();
+            foreach (var log in logBucket.Logs)
+            {
+                char typeChar = log.Type switch
+                {
+                    LogType.Error => 'E',
+                    LogType.Warning => 'W',
+                    LogType.Info => 'I',
+                    LogType.Message => 'L',
+                    LogType.Debug => 'D',
+                    LogType.Verbose => 'V',
+                    _ => '?'
+                };
+                string dateTime = log.Datetime.ToString("MM/dd/yyyy HH:mm:ss");
+                sb.AppendLine($"{typeChar}|{dateTime}|{log.Message}");
+            }
+            
+            return System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+        }
+
         public override byte[] DownloadLogsAsJsonBytes(string id, int topEntries = 20, int bottomEntries = 230)
         {
             var folder = Path.Combine(_storagePath, "migrationlogs");

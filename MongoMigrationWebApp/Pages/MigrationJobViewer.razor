@@ -553,6 +553,11 @@ else if (@_showLogBackupFile)
     private string _logBackupFile = string.Empty;
     private MigrationUnitBasic? _selectedMigrationUnit;
 
+    // Paginated download fields
+    private bool _showPaginatedDownloadDialog = false;
+    private int _logEntryCount = 0;
+    private const int LOG_THRESHOLD = 10000; // Threshold for paginated download
+
     // Loading spinner state for collection loading
     private bool _isLoadingCollections = false;
 
@@ -1043,7 +1048,21 @@ else if (@_showLogBackupFile)
         {
             return;
         }
-        await Downloader(JobId, JobId);
+        
+        // First check log count
+        _logEntryCount = await GetLogCount(JobId);
+        
+        if (_logEntryCount > LOG_THRESHOLD)
+        {
+            // Show paginated download dialog
+            _showPaginatedDownloadDialog = true;
+            StateHasChanged();
+        }
+        else
+        {
+            // Direct download for small files
+            await Downloader(JobId, JobId);
+        }
     }
 
     private async Task DownloadMigrationUnit(MigrationUnitBasic mu)
@@ -1092,6 +1111,31 @@ else if (@_showLogBackupFile)
         {
             await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
         }
+    }
+
+    private async Task<int> GetLogCount(string jobId)
+    {
+        try
+        {
+            var url = $"/api/File/download/log/{jobId}/count";
+            var response = await HttpClient.GetAsync(url);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var result = System.Text.Json.JsonSerializer.Deserialize<LogCountResponse>(content);
+                return result?.count ?? 0;
+            }
+        }
+        catch { }
+        
+        return 0;
+    }
+
+    private void ClosePaginatedDownloadDialog()
+    {
+        _showPaginatedDownloadDialog = false;
+        StateHasChanged();
     }
 
 
@@ -1673,5 +1717,19 @@ else if (@_showLogBackupFile)
         _refreshTimer?.Dispose();
         _refreshTimer = null;
     }
+
+    // Response model for log count API
+    public class LogCountResponse
+    {
+        public int count { get; set; }
+    }
+}
+
+@if (_showPaginatedDownloadDialog)
+{
+    <PaginatedDownloadDialog 
+        TotalEntries="_logEntryCount" 
+        JobId="@JobId"
+        OnClose="ClosePaginatedDownloadDialog" />
 }
 

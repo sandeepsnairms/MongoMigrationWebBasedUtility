@@ -67,6 +67,22 @@ namespace OnlineMongoMigrationProcessor.Persistence
         public abstract void PushLogEntry(string JobId,LogObject logObj);
 
         /// <summary>
+        /// Gets the total count of log entries for a given job ID
+        /// </summary>
+        /// <param name="id">Job ID to count logs for</param>
+        /// <returns>Total number of log entries</returns>
+        public abstract int GetLogCount(string id);
+
+        /// <summary>
+        /// Downloads a specific page of logs using skip/take pagination
+        /// </summary>
+        /// <param name="id">Job ID to download logs for</param>
+        /// <param name="skip">Number of log entries to skip</param>
+        /// <param name="take">Number of log entries to take</param>
+        /// <returns>Byte array containing formatted logs</returns>
+        public abstract byte[] DownloadLogsPaginated(string id, int skip, int take);
+
+        /// <summary>
         /// Deletes all log entries for a given JobId
         /// </summary>
         /// <param name="jobId">Job ID to delete logs for</param>

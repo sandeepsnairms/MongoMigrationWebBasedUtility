@@ -222,6 +222,12 @@ namespace MongoMigrationWebApp.Service
             return log.ReadLogFile(id, out fileName) ?? new LogBucket { Logs = new List<LogObject>() };
         }
 
+        public int GetLogCount(string jobId)
+        {
+            Log log = new Log();
+            return log.GetLogCount(jobId);
+        }
+
         #endregion
 
         #region Migration Worker Management
