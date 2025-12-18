@@ -1047,7 +1047,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
                 catch (Exception ex) when (ex is MongoExecutionTimeoutException || ex is TimeoutException)
                 {
-                    log.WriteLine($"Timeout when setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Debug);
+                    log.WriteLine($"Timeout when setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}",LogType.Debug);
                 }
                 catch (Exception ex)
                 {
@@ -1065,9 +1065,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 finally
                 {
                     if (useServerLevel)
-                        log.WriteLine($"Exiting Server-level SetChangeStreamResumeTokenAsync for job {job.Id}", LogType.Verbose);
+                        log.WriteLine($"Exiting Server-level SetChangeStreamResumeTokenAsync for job {job.Id}", LogType.Debug);
                     else
-                        log.WriteLine($"Exiting Collection-level SetChangeStreamResumeToken for {mu.DatabaseName}.{mu.CollectionName} - ResumeToken: {(!string.IsNullOrEmpty(mu.ResumeToken) ? "SET" : "NOT SET")}, InitialDocReplayed: {mu.InitialDocumenReplayed}", LogType.Verbose);
+                        log.WriteLine($"Exiting Collection-level SetChangeStreamResumeToken for {mu.DatabaseName}.{mu.CollectionName} - ResumeToken: {(!string.IsNullOrEmpty(mu.ResumeToken) ? "SET" : "NOT SET")}, InitialDocReplayed: {mu.InitialDocumenReplayed}", LogType.Debug);
 
                     MigrationJobContext.SaveMigrationUnit(mu, false);
                 }
@@ -1122,7 +1122,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         else
         {
             // Collection-level change stream
-            log.WriteLine($"Setting up collection-level change stream resume token for {mu.DatabaseName}.{mu.CollectionName}",LogType.Debug);
+            MigrationJobContext.AddVerboseLog(($"Setting up collection-level change stream resume token for {mu.DatabaseName}.{mu.CollectionName}"));
             cursor = await collection.WatchAsync<ChangeStreamDocument<BsonDocument>>(pipeline, options, linkedCts.Token);
         }
 
@@ -1193,7 +1193,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                 // Use common function for collection-level resume token setting
                                 SetResumeTokenProperties(mu, change, forced);
 
-                                log.WriteLine($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}", LogType.Verbose);
+                                MigrationJobContext.AddVerboseLog($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}");
 
                                 // Exit immediately after first change detected
                                 return;
@@ -1205,7 +1205,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
                 catch (Exception ex) when (ex is TimeoutException)
                 {
-                    log.WriteLine($"Timeout while watching change stream for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Debug);
+                    MigrationJobContext.AddVerboseLog($"Timeout while watching change stream for {mu.DatabaseName}.{mu.CollectionName}: {ex}");
                 }
                 catch (Exception ex) when (ex is OperationCanceledException)
                 {

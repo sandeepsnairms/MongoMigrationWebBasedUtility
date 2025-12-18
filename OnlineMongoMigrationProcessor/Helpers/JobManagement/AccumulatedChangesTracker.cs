@@ -1,6 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -62,6 +63,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void AddInsert(ChangeStreamDocument<BsonDocument> change)
         {
+            MigrationJobContext.AddVerboseLog($"AccumulatedChangesTracker.AddInsert: collectionKey={_collectionKey}");
             lock (_lock)
             {
                 _totalEventCount++;
@@ -86,6 +88,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void AddUpdate(ChangeStreamDocument<BsonDocument> change)
         {
+            MigrationJobContext.AddVerboseLog($"AccumulatedChangesTracker.AddUpdate: collectionKey={_collectionKey}");
             lock (_lock)
             {
                 _totalEventCount++;

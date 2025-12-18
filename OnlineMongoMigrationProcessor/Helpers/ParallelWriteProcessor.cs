@@ -2,6 +2,7 @@ using MongoDB.Bson;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -26,11 +27,11 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         public ParallelWriteProcessor(Log log, string logPrefix = "")
         {
+            MigrationJobContext.AddVerboseLog($"ParallelWriteProcessor: Constructor called, logPrefix={logPrefix}");
             _log = log;
             _logPrefix = logPrefix;
             _maxThreads = CalculateOptimalThreadCount();
-            
-            _log.WriteLine($"{_logPrefix}ParallelWriteProcessor initialized with {_maxThreads} threads based on system resources", LogType.Debug);
+
         }
 
         /// <summary>
@@ -95,19 +96,18 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Create a combined, ordered sequence of all operations
             var orderedOperations = CreateOrderedOperationSequence(insertEvents, updateEvents, deleteEvents);
             
-            _log.WriteLine($"{_logPrefix}[DEBUG] ParallelWriteProcessor.ProcessWritesAsync started for {collection.CollectionNamespace}: {orderedOperations.Count} total operations, batchSize={batchSize}, maxThreads={_maxThreads}", LogType.Debug);
-            
+                        
             if (!orderedOperations.Any())
             {
-                _log.WriteLine($"{_logPrefix}[DEBUG] No operations to process for {collection.CollectionNamespace}, returning empty result", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"{_logPrefix}No operations to process for {collection.CollectionNamespace}, returning empty result");
                 return result; // No operations to process
             }
 
-            _log.WriteLine($"{_logPrefix}[DEBUG] Processing {orderedOperations.Count} operations across {_maxThreads} threads for {collection.CollectionNamespace.FullName}", LogType.Debug);
+            MigrationJobContext.AddVerboseLog($"{_logPrefix}Processing {orderedOperations.Count} operations across {_maxThreads} threads for {collection.CollectionNamespace.FullName}");
 
             // Partition operations into batches for parallel processing
             var operationBatches = PartitionOperations(orderedOperations, _maxThreads);
-            _log.WriteLine($"{_logPrefix}[DEBUG] Partitioned operations into {operationBatches.Count} batches for {collection.CollectionNamespace}", LogType.Debug);
+            MigrationJobContext.AddVerboseLog($"{_logPrefix}Partitioned operations into {operationBatches.Count} batches for {collection.CollectionNamespace}");
             
             // Process batches in parallel with sequence preservation
             var tasks = new List<Task<WriteResult>>();
@@ -116,13 +116,13 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {
                 var batch = operationBatches[i];
                 var batchIndex = i; // Capture for closure
-                _log.WriteLine($"{_logPrefix}[DEBUG] Creating task for batch {batchIndex} with {batch.Count} operations for {collection.CollectionNamespace}", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"{_logPrefix}Creating task for batch {batchIndex} with {batch.Count} operations for {collection.CollectionNamespace}");
                 
                 var task = Task.Run(async () =>
                 {
                     try
                     {
-                        _log.WriteLine($"{_logPrefix}[DEBUG] Starting batch {batchIndex} processing for {collection.CollectionNamespace}", LogType.Debug);
+                        MigrationJobContext.AddVerboseLog($"{_logPrefix}Starting batch {batchIndex} processing for {collection.CollectionNamespace}");
                         var batchResult = await ProcessBatchWithRetryAsync(
                             mu,
                             collection,
@@ -134,7 +134,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                             jobId,
                             targetClient,
                             isSimulatedRun);
-                        _log.WriteLine($"{_logPrefix}[DEBUG] Completed batch {batchIndex} processing for {collection.CollectionNamespace}: success={batchResult.Success}, processed={batchResult.Processed}, failures={batchResult.Failures}", LogType.Debug);
+                        MigrationJobContext.AddVerboseLog($"{_logPrefix}Completed batch {batchIndex} processing for {collection.CollectionNamespace}: success={batchResult.Success}, processed={batchResult.Processed}, failures={batchResult.Failures}");
                         return batchResult;
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
@@ -165,9 +165,9 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Wait for all batches to complete
             try
             {
-                _log.WriteLine($"{_logPrefix}[DEBUG] Waiting for all {tasks.Count} batch tasks to complete for {collection.CollectionNamespace}", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"{_logPrefix}Waiting for all {tasks.Count} batch tasks to complete for {collection.CollectionNamespace}");
                 var batchResults = await Task.WhenAll(tasks);
-                _log.WriteLine($"{_logPrefix}[DEBUG] All batch tasks completed for {collection.CollectionNamespace}, aggregating results", LogType.Debug);
+
                 
                 // Aggregate results
                 foreach (var batchResult in batchResults)
@@ -183,8 +183,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         result.Errors.AddRange(batchResult.Errors);
                     }
                 }
-                
-                _log.WriteLine($"{_logPrefix}[DEBUG] Result aggregation completed for {collection.CollectionNamespace}: totalProcessed={result.Processed}, totalFailures={result.Failures}, totalSkipped={result.Skipped}, success={result.Success}", LogType.Debug);
+
+                MigrationJobContext.AddVerboseLog($"{_logPrefix}Result aggregation completed for {collection.CollectionNamespace}: totalProcessed={result.Processed}, totalFailures={result.Failures}, totalSkipped={result.Skipped}, success={result.Success}");
                 
                 if (result.Failures > 0)
                 {
@@ -192,7 +192,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 }
                 else
                 {
-                    _log.WriteLine($"{_logPrefix}Parallel processing completed successfully: {result.Processed} processed, {result.Skipped} skipped for {collection.CollectionNamespace.FullName}", LogType.Debug);
+                    MigrationJobContext.AddVerboseLog($"{_logPrefix}Parallel processing completed successfully: {result.Processed} processed, {result.Skipped} skipped for {collection.CollectionNamespace.FullName}");
                 }
             }
             catch (Exception ex)
@@ -202,8 +202,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 _log.WriteLine($"{_logPrefix}Critical error in parallel write processing for {collection.CollectionNamespace.FullName}: {ex}", LogType.Error);
                 throw; // Re-throw to stop the job
             }
-            
-            _log.WriteLine($"{_logPrefix}[DEBUG] ParallelWriteProcessor.ProcessWritesAsync completed for {collection.CollectionNamespace}", LogType.Debug);
+
+            MigrationJobContext.AddVerboseLog($"{_logPrefix}ParallelWriteProcessor.ProcessWritesAsync completed for {collection.CollectionNamespace}");
             return result;
         }
 

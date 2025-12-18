@@ -200,7 +200,7 @@ if (coordinator.IsCoordinatorModeActive)
 
 ### Log Levels
 The coordinator uses these log types:
-- `LogType.Debug`: Timer ticks, worker spawning, detailed state changes
+- `LogType.Verbose`: Timer ticks, worker spawning, detailed state changes
 - `LogType.Info`: Migration unit completion, mode changes
 - `LogType.Warning`: Retry attempts, recoverable errors
 - `LogType.Error`: Permanent failures, critical errors

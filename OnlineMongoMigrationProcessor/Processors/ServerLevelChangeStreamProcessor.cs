@@ -31,6 +31,7 @@ namespace OnlineMongoMigrationProcessor
         public ServerLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
             : base(log, sourceClient, targetClient, muCache, config, syncBack, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog($"ServerLevelChangeStreamProcessor: Constructor called, syncBack={syncBack}");
             _uniqueCollectionKeys = new OrderedUniqueList<string>();
         }
 
@@ -38,6 +39,7 @@ namespace OnlineMongoMigrationProcessor
 
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
+            MigrationJobContext.AddVerboseLog("ServerLevelChangeStreamProcessor.ProcessChangeStreamsAsync: starting");
             long loops = 0;
             bool oplogSuccess = true;
 
@@ -90,6 +92,7 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task WatchServerLevelChangeStream(CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog("ServerLevelChangeStreamProcessor.WatchServerLevelChangeStream: starting");
 
             long counter = 0;
             var accumulatedChangesInColl = new Dictionary<string, AccumulatedChangesTracker>();
@@ -450,7 +453,7 @@ namespace OnlineMongoMigrationProcessor
                                 }
                                 MigrationJobContext.SaveMigrationUnit(migrationUnit,true);
 
-                                _log.WriteLine($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write", LogType.Debug);
+                                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write");
                             }
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))

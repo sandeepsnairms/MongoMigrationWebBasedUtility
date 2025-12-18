@@ -22,6 +22,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// </summary>
         public static void AddToPercentageTracker(string id, bool isRestore, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater.AddToPercentageTracker: id={id}, isRestore={isRestore}");
             _log = log;
             var key= $"{id}_{isRestore}";
             if (!_activeTrackers.Keys.Contains(key)) {
@@ -40,6 +41,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         public static void RemovePercentageTracker(string id, bool isRestore, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater.RemovePercentageTracker: id={id}, isRestore={isRestore}");
             _log = log;
             var key = $"{id}_{isRestore}";
             if (_activeTrackers.Keys.Contains(key))
@@ -124,6 +126,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// </summary>
         public static double CalculateOverallPercentFromAllChunks(MigrationUnit mu, bool isRestore, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater.CalculateOverallPercentFromAllChunks: mu={mu.DatabaseName}.{mu.CollectionName}, isRestore={isRestore}");
             double totalPercent = 0;
             long totalDocs = Helper.GetMigrationUnitDocCount(mu);
 
@@ -190,7 +193,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             }
 
             string operationType = isRestore ? "Restore" : "Dump";
-            log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} {operationType} Total: {totalPercent:F2}%\n{strLog}", LogType.Verbose);
+            MigrationJobContext.AddVerboseLog($"{mu.DatabaseName}.{mu.CollectionName} {operationType} Total: {totalPercent:F2}%\n{strLog}");
             return Math.Min(100, totalPercent);
         }
 

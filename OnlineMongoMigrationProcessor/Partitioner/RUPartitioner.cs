@@ -4,6 +4,7 @@ using Newtonsoft.Json.Linq;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Metrics;
@@ -27,6 +28,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// 
         public List<MigrationChunk> CreatePartitions(Log log, MongoClient sourceClient, string databaseName, string collectionName, CancellationToken _cts, bool isVerificationMode=false)
         {
+            MigrationJobContext.AddVerboseLog($"RUPartitioner.CreatePartitions: database={databaseName}, collection={collectionName}, isVerificationMode={isVerificationMode}");
             _log = log;
 
             var database = sourceClient.GetDatabase(databaseName);
@@ -85,6 +87,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// </summary>
         private List<BsonDocument> GetRUPartitionTokens(BsonTimestamp timestamp)
         {
+            MigrationJobContext.AddVerboseLog($"RUPartitioner.GetRUPartitionTokens: timestamp={timestamp}");
             try
             {
                 var database = _sourceCollection.Database;
@@ -172,6 +175,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
 
         public static BsonDocument UpdateStartAtOperationTime(BsonDocument originalDoc, BsonTimestamp newTimestamp)
         {
+            MigrationJobContext.AddVerboseLog($"RUPartitioner.UpdateStartAtOperationTime: newTimestamp={newTimestamp}");
             if (originalDoc == null) throw new ArgumentNullException(nameof(originalDoc));
 
             // deep clone so original is not mutated

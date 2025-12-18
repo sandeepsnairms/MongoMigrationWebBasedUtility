@@ -24,6 +24,7 @@ namespace OnlineMongoMigrationProcessor
         public DumpRestoreProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
             : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("DumpRestoreProcessor: Constructor called");
             _jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? throw new InvalidOperationException("Job ID cannot be null");            
             
         }
@@ -34,11 +35,12 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private void OnMigrationUnitCompleted(MigrationUnit mu)
         {
-            _log.WriteLine($"Processing completion callback for migration unit {mu.DatabaseName}. {mu.CollectionName}", LogType.Verbose);
+            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.OnMigrationUnitCompleted: mu={mu.DatabaseName}.{mu.CollectionName}");
+            _log.WriteLine($"Processing completion callback for migration unit {mu.DatabaseName}. {mu.CollectionName}", LogType.Debug);
 
             if (MigrationJobContext.ControlledPauseRequested)
             {
-                _log.WriteLine("Controlled pause active - skipping post-processing",LogType.Verbose);
+                _log.WriteLine("Controlled pause active - skipping post-processing",LogType.Debug);
                 return;
             }
 
@@ -59,6 +61,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustDumpWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustDumpWorkers: newCount={newCount}");
             _coordinator.AdjustDumpWorkers(newCount);
         }
 
@@ -67,6 +70,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustRestoreWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustRestoreWorkers: newCount={newCount}");
             _coordinator.AdjustRestoreWorkers(newCount);
         }
 
@@ -75,11 +79,13 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustInsertionWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustInsertionWorkers: newCount={newCount}");
             _coordinator.AdjustInsertionWorkers(newCount);
         }
 
         private void InitializeCoordinator()
         {
+            MigrationJobContext.AddVerboseLog("DumpRestoreProcessor.InitializeCoordinator: initializing coordinator");
             // Create instance coordinator with completion callback
             _coordinator = new MongoDumpRestoreCordinator();
             _coordinator.Initialize(
@@ -89,7 +95,6 @@ namespace OnlineMongoMigrationProcessor
                 onMigrationUnitCompleted: OnMigrationUnitCompleted
             );
 
-            _log.WriteLine("DumpRestoreProcessor initialized with MongoDumpRestoreCordinator",LogType.Debug);
         }
 
         private void PrepareDumpProcess(MigrationUnit mu)
@@ -101,6 +106,7 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.StartProcessAsync: migrationUnitId={migrationUnitId}");
             // Perform initial setup required by MigrationProcessor
             MigrationJobContext.ControlledPauseRequested = false;
             ProcessRunning = true;
@@ -124,7 +130,7 @@ namespace OnlineMongoMigrationProcessor
             // Delegate dump/restore coordination to the coordinator
             _coordinator.StartCoordinatedProcess(ctx);
 
-            _log.WriteLine($"Started coordinated dump/restore processing for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
+            _log.WriteLine($"Started coordinated dump/restore processing for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
 
             //// Fire and forget - monitor completion in background
             //_ = WaitForMigrationUnitCompletionAsync(mu, ctx);
@@ -183,7 +189,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (!MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log.WriteLine($"Invoke RunChangeStreamProcessorForAllCollections.", LogType.Verbose);
+                    _log.WriteLine($"Invoke RunChangeStreamProcessorForAllCollections.", LogType.Debug);
 
                     RunChangeStreamProcessorForAllCollections();
                 }

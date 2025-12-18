@@ -38,11 +38,13 @@ namespace OnlineMongoMigrationProcessor.Processors
         public RUCopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
            : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("RUCopyProcessor: Constructor called");
             // Constructor body can be empty or contain initialization logic if needed
         }
 
         private async Task<TaskResult> ProcessChunksAsync(MigrationUnit mu, ProcessorContext ctx)
         {
+            MigrationJobContext.AddVerboseLog($"RUCopyProcessor.ProcessChunksAsync: mu.Id={mu.Id}, database={ctx.DatabaseName}, collection={ctx.CollectionName}");
             
             // Setup target client and collection
             if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)

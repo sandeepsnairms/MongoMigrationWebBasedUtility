@@ -19,6 +19,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public MigrationUnit GetMigrationUnit(string migrationUnitId)
         {
+            MigrationJobContext.AddVerboseLog($"ActiveMigrationUnitsCache.GetMigrationUnit: migrationUnitId={migrationUnitId}, cacheCount={_migrationUnits.Count}");
             MigrationUnit? mu = null;
 
             if (_migrationUnits.Count > 0)
@@ -38,6 +39,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public  bool UpdateMigrationUnit(MigrationUnit migrationUnit)
         {
+            MigrationJobContext.AddVerboseLog($"ActiveMigrationUnitsCache.UpdateMigrationUnit: migrationUnitId={migrationUnit.Id}");
             var index = _migrationUnits.FindIndex(mu => mu.Id == migrationUnit.Id);
             if (index != -1)
             {
@@ -49,6 +51,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void RemoveMigrationUnit(string migrationUnitId)
         {
+            MigrationJobContext.AddVerboseLog($"ActiveMigrationUnitsCache.RemoveMigrationUnit: migrationUnitId={migrationUnitId}");
             _migrationUnits.RemoveAll(mu => mu.Id == migrationUnitId);
         }
     }

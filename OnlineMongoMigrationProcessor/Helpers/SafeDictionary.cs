@@ -2,6 +2,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using OnlineMongoMigrationProcessor.Context;
 
 
 namespace OnlineMongoMigrationProcessor.Helpers
@@ -14,6 +15,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         public  void AddOrUpdate(TKey key, TValue value)
         {
+            MigrationJobContext.AddVerboseLog($"SafeDictionary.AddOrUpdate: key={key}, currentCount={_dictionary.Count}");
             _dictionary[key] = value; // Adds or updates safely
         }
 

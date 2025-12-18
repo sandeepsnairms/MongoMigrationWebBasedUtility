@@ -43,9 +43,10 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         private static bool ValidateJobId(string jobId, Log log, string operation)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.ValidateJobId: jobId={jobId}, operation={operation}");
             if (_currentJobId != jobId)
             {
-                log.WriteLine($"[Coordinator] WARNING: {operation} for job {jobId} but coordinator is tracking {_currentJobId}", LogType.Error);
+                log.WriteLine($"WARNING: {operation} for job {jobId} but coordinator is tracking {_currentJobId}", LogType.Error);
                 return false;
             }
             return true;
@@ -56,6 +57,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static void Reset(string jobId, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.Reset: jobId={jobId}");
             lock (_lock)
             {
                 // Cleanup previous job if exists
@@ -75,7 +77,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 _activeRestoreWorkers.Clear();
                 _currentJobId = jobId;
                 
-                log?.WriteLine($"[Coordinator] Reset for new job {jobId}", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"Reset for new job {jobId}");
             }
         }
         
@@ -84,6 +86,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static WorkerPoolManager GetOrCreateDumpPool(string jobId, Log log, int initialMaxWorkers)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.GetOrCreateDumpPool: jobId={jobId}, initialMaxWorkers={initialMaxWorkers}");
             lock (_lock)
             {
                 if (_currentJobId != jobId)
@@ -106,6 +109,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static WorkerPoolManager GetOrCreateRestorePool(string jobId, Log log, int initialMaxWorkers)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.GetOrCreateRestorePool: jobId={jobId}, initialMaxWorkers={initialMaxWorkers}");
             lock (_lock)
             {
                 if (_currentJobId != jobId)
@@ -128,6 +132,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static void RegisterDumpWorker(string jobId, string collectionKey, int workerId, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.RegisterDumpWorker: jobId={jobId}, collectionKey={collectionKey}, workerId={workerId}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Attempt to register dump worker"))
@@ -142,7 +147,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 });
                 
                 int totalActive = _activeDumpWorkers.Count(w => !w.IsCompleted);
-                log.WriteLine($"[Coordinator] Registered dump worker: {collectionKey} Worker#{workerId} (Total active: {totalActive})", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"Registered dump worker: {collectionKey} Worker#{workerId} (Total active: {totalActive})");
             }
         }
         
@@ -151,6 +156,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static void RegisterRestoreWorker(string jobId, string collectionKey, int workerId, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.RegisterRestoreWorker: jobId={jobId}, collectionKey={collectionKey}, workerId={workerId}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Attempt to register restore worker"))
@@ -165,7 +171,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 });
                 
                 int totalActive = _activeRestoreWorkers.Count(w => !w.IsCompleted);
-                log.WriteLine($"[Coordinator] Registered restore worker: {collectionKey} Worker#{workerId} (Total active: {totalActive})", LogType.Debug);
+                MigrationJobContext.AddVerboseLog($"Registered restore worker: {collectionKey} Worker#{workerId} (Total active: {totalActive})");
             }
         }
         
@@ -174,6 +180,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static void MarkDumpWorkerCompleted(string jobId, string collectionKey, int workerId, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolCoordinator.MarkDumpWorkerCompleted: jobId={jobId}, collectionKey={collectionKey}, workerId={workerId}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Attempt to mark dump worker completed"))
@@ -185,11 +192,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                     worker.IsCompleted = true;
                     var duration = DateTime.UtcNow - worker.StartedAt;
                     int totalActive = _activeDumpWorkers.Count(w => !w.IsCompleted);
-                    log.WriteLine($"[Coordinator] Completed dump worker: {collectionKey} Worker#{workerId} (Duration: {duration.TotalSeconds:F1}s, Remaining active: {totalActive})", LogType.Debug);
+                    log.WriteLine($"Completed dump worker: {collectionKey} Worker#{workerId} (Duration: {duration.TotalSeconds:F1}s, Remaining active: {totalActive})", LogType.Debug);
                 }
                 else
                 {
-                    log.WriteLine($"[Coordinator] WARNING: Could not find dump worker to mark completed: {collectionKey} Worker#{workerId}", LogType.Warning);
+                    MigrationJobContext.AddVerboseLog($"WARNING: Could not find dump worker to mark completed: {collectionKey} Worker#{workerId}");
                 }
             }
         }
@@ -210,11 +217,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                     worker.IsCompleted = true;
                     var duration = DateTime.UtcNow - worker.StartedAt;
                     int totalActive = _activeRestoreWorkers.Count(w => !w.IsCompleted);
-                    log.WriteLine($"[Coordinator] Completed restore worker: {collectionKey} Worker#{workerId} (Duration: {duration.TotalSeconds:F1}s, Remaining active: {totalActive})", LogType.Debug);
+                    MigrationJobContext.AddVerboseLog($"Completed restore worker: {collectionKey} Worker#{workerId} (Duration: {duration.TotalSeconds:F1}s, Remaining active: {totalActive})");
                 }
                 else
                 {
-                    log.WriteLine($"[Coordinator] WARNING: Could not find restore worker to mark completed: {collectionKey} Worker#{workerId}", LogType.Warning);
+                    log.WriteLine($"WARNING: Could not find restore worker to mark completed: {collectionKey} Worker#{workerId}", LogType.Warning);
                 }
             }
         }
@@ -238,7 +245,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 
                 if (log != null && beforeCleanup != afterCleanup)
                 {
-                    log.WriteLine($"[Coordinator] Cleaned up {beforeCleanup - afterCleanup} completed dump workers. Active: {afterCleanup}", LogType.Debug);
+                    MigrationJobContext.AddVerboseLog($"Cleaned up {beforeCleanup - afterCleanup} completed dump workers. Active: {afterCleanup}");
                 }
                 
                 return _activeDumpWorkers.Count;
@@ -264,7 +271,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 
                 if (log != null && beforeCleanup != afterCleanup)
                 {
-                    log.WriteLine($"[Coordinator] Cleaned up {beforeCleanup - afterCleanup} completed restore workers. Active: {afterCleanup}", LogType.Debug);
+                    MigrationJobContext.AddVerboseLog($"Cleaned up {beforeCleanup - afterCleanup} completed restore workers. Active: {afterCleanup}");
                 }
                 
                 return _activeRestoreWorkers.Count;
@@ -276,6 +283,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static int AdjustDumpWorkers(string jobId, int newCount, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"Adjusting dump workers for job {jobId} to {newCount}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Cannot adjust dump workers"))
@@ -289,7 +297,6 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 
                 // Use the pool's actual active worker count (from semaphore state)
                 int currentActiveCount = _dumpPool.CurrentActive;
-                log.WriteLine($"[Coordinator] Adjusting dump workers from {currentActiveCount} to {newCount}", LogType.Debug);
                 return WorkerCountHelper.AdjustDumpWorkers(newCount, currentActiveCount, _dumpPool, log);
             }
         }
@@ -299,6 +306,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static int AdjustRestoreWorkers(string jobId, int newCount, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"Adjusting restore workers for job {jobId} to {newCount}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Cannot adjust restore workers"))
@@ -312,7 +320,6 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
                 
                 // Use the pool's actual active worker count (from semaphore state)
                 int currentActiveCount = _restorePool.CurrentActive;
-                log.WriteLine($"[Coordinator] Adjusting restore workers from {currentActiveCount} to {newCount}", LogType.Debug);
                 return WorkerCountHelper.AdjustRestoreWorkers(newCount, currentActiveCount, _restorePool, log);
             }
         }

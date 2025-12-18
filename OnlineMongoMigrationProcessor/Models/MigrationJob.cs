@@ -189,6 +189,7 @@ namespace OnlineMongoMigrationProcessor
 
         public bool Persist()
         {
+            MigrationJobContext.AddVerboseLog($"MigrationJob.Persist: jobId={this.Id}, jobName={this.Name}");
 
             //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
             var filePath = $"migrationjobs\\{this.Id}\\jobdefinition.json";

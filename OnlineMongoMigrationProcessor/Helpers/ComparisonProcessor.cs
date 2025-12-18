@@ -19,6 +19,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         CancellationToken cancellationToken = default
         )
         {
+            MigrationJobContext.AddVerboseLog($"ComparisonHelper.CompareRandomDocumentsAsync: jobId={job.Id}, sampleSize={config.CompareSampleSize}");
             MongoClient sourceClient;
             MongoClient targetClient;
 

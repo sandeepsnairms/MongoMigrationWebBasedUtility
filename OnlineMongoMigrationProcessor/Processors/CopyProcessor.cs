@@ -17,6 +17,7 @@ namespace OnlineMongoMigrationProcessor
         public CopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
             : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("CopyProcessor: Constructor called");
             // Constructor body can be empty or contain initialization logic if needed
         }
 
@@ -25,6 +26,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public override void InitiateControlledPause()
         {
+            MigrationJobContext.AddVerboseLog("CopyProcessor.InitiateControlledPause: called");
             base.InitiateControlledPause();
             _log.WriteLine("CopyProcessor: Controlled pause initiated");
         }
@@ -32,6 +34,7 @@ namespace OnlineMongoMigrationProcessor
         // Custom exception handler delegate with logic to control retry flow
         private Task<TaskResult> CopyProcess_ExceptionHandler(Exception ex, int attemptCount, string processName, string dbName, string colName, int chunkIndex, int currentBackoff)
         {
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.CopyProcess_ExceptionHandler: processName={processName}, collection={dbName}.{colName}, chunkIndex={chunkIndex}, attemptCount={attemptCount}");
             if (ex is OperationCanceledException)
             {
                 _log.WriteLine($"Document copy operation was paused for {dbName}.{colName}[{chunkIndex}]");
@@ -58,6 +61,7 @@ namespace OnlineMongoMigrationProcessor
         
         private async Task <TaskResult> ProcessChunkAsync(MigrationUnit mu, int chunkIndex, ProcessorContext ctx, double initialPercent, double contributionFactor)
         {
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.ProcessChunkAsync: mu={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={chunkIndex}");
             long docCount;
             FilterDefinition<BsonDocument> filter;
 
@@ -130,6 +134,7 @@ namespace OnlineMongoMigrationProcessor
 
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.StartProcessAsync: migrationUnitId={migrationUnitId}");
             var mu=MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
             mu.ParentJob= MigrationJobContext.CurrentlyActiveJob;
             ProcessRunning = true;

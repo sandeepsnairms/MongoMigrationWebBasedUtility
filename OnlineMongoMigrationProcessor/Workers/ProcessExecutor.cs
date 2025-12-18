@@ -58,6 +58,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             Action<int>? onProcessStarted = null,
             Action<int>? onProcessEnded = null)
         {
+            MigrationJobContext.AddVerboseLog($"ProcessExecutor.Execute: mu={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={chunkIndex}, exePath={exePath}");
             _cancellationToken = cancellationToken;
             string processType = exePath.ToLower().Contains("restore") ? "MongoRestore" : "MongoDump";
 
@@ -89,7 +90,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (!string.IsNullOrEmpty(args.Data))
                     {
                         outputBuffer.AppendLine(args.Data);
-                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}", LogType.Debug);
+                        MigrationJobContext.AddVerboseLog($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}");
                     }
                 };
 
@@ -97,7 +98,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
-                        _log.WriteLine($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}", LogType.Debug);
                         errorBuffer.AppendLine(args.Data);
                         ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount);
                     }
@@ -173,7 +173,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex) when (ex.Message.Contains("canceled"))
             {
-                _log.WriteLine($"{processType} process {_process.Id} canceled", LogType.Verbose);
+                _log.WriteLine($"{processType} process {_process.Id} canceled", LogType.Debug);
                 return false;
             }
             catch (Exception ex)
@@ -203,13 +203,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     percent = Math.Min(100, Math.Round((double)count / targetCount * 100, 3));
                     chunk.DumpResultDocCount = count;
-                    _log.WriteLine($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Dumped Documents Count: {count}", LogType.Verbose);
+                    MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Dumped Documents Count: {count}");
                 }
                 else if (percent > 0 && targetCount > 0 && count == 0)
                 {
                     long calculatedCount = (long)(percent / 100.0 * targetCount);
                     chunk.DumpResultDocCount = calculatedCount;
-                    _log.WriteLine($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Calculated Dumped Documents Count: {calculatedCount}", LogType.Verbose);
+                    MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Calculated Dumped Documents Count: {calculatedCount}");
                 }              
 
                 if (percent > 0 && targetCount > 0)
@@ -253,11 +253,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
                     {
-                        _log.WriteLine($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}]: {Helper.RedactPii(data)}",LogType.Verbose);
+                        MigrationJobContext.AddVerboseLog($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}]: {Helper.RedactPii(data)}");
                     }
                     else
                     {
-                        _log.WriteLine($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : Duplicate key violation encountered, skipping duplicate documents.: {Helper.RedactPii(data)}",LogType.Verbose);
+                        MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : Duplicate key violation encountered, skipping duplicate documents.: {Helper.RedactPii(data)}");
                     }
                 }
             }

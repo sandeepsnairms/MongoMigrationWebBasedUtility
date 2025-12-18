@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using OnlineMongoMigrationProcessor.Context;
 
 namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
@@ -40,6 +41,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public WorkerPoolManager(Log log, string poolName, int initialMaxWorkers)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolManager: Constructor called, poolName={poolName}, initialMaxWorkers={initialMaxWorkers}");
             _log = log ?? throw new ArgumentNullException(nameof(log));
             _poolName = poolName ?? throw new ArgumentNullException(nameof(poolName));
             _maxWorkers = Math.Max(1, initialMaxWorkers);
@@ -52,6 +54,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// <returns>Number of workers added (positive) or removed (negative)</returns>
         public int AdjustPoolSize(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolManager.AdjustPoolSize: poolName={_poolName}, newCount={newCount}");
             // Safety limits
             if (newCount < 1) newCount = 1;
             if (newCount > 16) newCount = 16;
@@ -101,6 +104,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public void Release()
         {
+            MigrationJobContext.AddVerboseLog($"WorkerPoolManager.Release: poolName={_poolName}");
             lock (_lock)
             {
                 if (_activeWorkers > 0)

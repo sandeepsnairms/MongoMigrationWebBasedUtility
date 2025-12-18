@@ -36,6 +36,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <exception cref="InvalidOperationException">Thrown when initialization fails</exception>
         public override void Initialize(string connectionStringOrPath,string appId)
         {
+
             if (_isInitialized)
                 return;
 
@@ -274,6 +275,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
         public override int GetLogCount(string id)
         {
+
             EnsureInitialized();
             if (string.IsNullOrWhiteSpace(id))
                 return 0;
@@ -460,6 +462,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
         public override LogBucket ReadLogs(string id, out string fileName)
         {
+
             fileName = id;
             if (string.IsNullOrWhiteSpace(id))
                 throw new ArgumentException("ID cannot be null or empty", nameof(id));
@@ -514,6 +517,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
         public override void PushLogEntry(string jobId, LogObject logObject)
         {
+
             // Store one document per log entry with ObjectId as _id
             // Each document contains JobId field for querying all logs for a specific job
 
@@ -549,6 +553,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>Number of log entries deleted, or -1 if error occurred</returns>
         public override long DeleteLogs(string jobId)
         {
+
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(jobId))
@@ -574,6 +579,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>True if connection is successful, false otherwise</returns>
         public override bool TestConnection()
         {
+
             if (!_isInitialized)
                 return false;
 

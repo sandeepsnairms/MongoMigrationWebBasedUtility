@@ -51,12 +51,14 @@ namespace OnlineMongoMigrationProcessor.Workers
        
         public MigrationWorker()
         {            
+            MigrationJobContext.AddVerboseLog("MigrationWorker: Constructor called");
             _log = new Log();          
             MigrationJobContext.JobList.SetLog(_log);
         }
 
         public LogBucket? GetLogBucket(string jobId)
         {
+            MigrationJobContext.AddVerboseLog($"GetLogBucket: jobId={jobId}");
             // only for active job in migration worker
             if (MigrationJobContext.CurrentlyActiveJob != null && MigrationJobContext.CurrentlyActiveJob.Id == jobId)
                 return _log.GetCurentLogBucket(jobId);
@@ -66,6 +68,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public List<LogObject>? GetMonitorMessages(string jobId)
         {
+            MigrationJobContext.AddVerboseLog($"GetMonitorMessages: jobId={jobId}");
             // only for active job in migration worker
             if (MigrationJobContext.CurrentlyActiveJob != null && MigrationJobContext.CurrentlyActiveJob.Id == jobId)
                 return _log.GetMonitorMessages();
@@ -75,12 +78,14 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public string GetRunningJobId()
         {
+            MigrationJobContext.AddVerboseLog($"GetRunningJobId: _activeJobId={_activeJobId}");
             Console.WriteLine($"GetRunningJobId :{_activeJobId}");
             return _activeJobId;           
         }
 
         public bool IsProcessRunning(string id)
         {
+            MigrationJobContext.AddVerboseLog($"IsProcessRunning: id={id}, _activeJobId={_activeJobId}");
             if (string.IsNullOrWhiteSpace(_activeJobId))
             {
                 Console.WriteLine( $"IsProcessRunning false,  IsNullOrWhiteSpace :true");
@@ -113,6 +118,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public void StopMigration()
         {
+            MigrationJobContext.AddVerboseLog($"StopMigration: _activeJobId={_activeJobId}");
             try
             {
                 _activeJobId=string.Empty;
@@ -133,7 +139,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 // Stop percentage timer
                 PercentageUpdater.StopPercentageTimer();
 
-                _log.WriteLine("StopMigration completed - all resources released", LogType.Verbose);
+                _log.WriteLine("StopMigration completed - all resources released", LogType.Debug);
             }
             catch { }
         }
@@ -143,6 +149,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         public void ControlledPauseMigration()
         {
+            MigrationJobContext.AddVerboseLog("ControlledPauseMigration: called");
             _log.WriteLine("Controlled pause requested - will stop after at logical point.");
             
             MigrationJobContext.ControlledPauseRequested = true;            
@@ -154,6 +161,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         public void AdjustDumpWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"AdjustDumpWorkers: newCount={newCount}");
             if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
             {
                 dumpRestoreProcessor.AdjustDumpWorkers(newCount);
@@ -165,6 +173,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         public void AdjustRestoreWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"AdjustRestoreWorkers: newCount={newCount}");
             if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
             {
                 dumpRestoreProcessor.AdjustRestoreWorkers(newCount);
@@ -176,6 +185,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         public void AdjustInsertionWorkers(int newCount)
         {
+            MigrationJobContext.AddVerboseLog($"AdjustInsertionWorkers: newCount={newCount}");
             if (_migrationProcessor is DumpRestoreProcessor dumpRestoreProcessor)
             {
                 dumpRestoreProcessor.AdjustInsertionWorkers(newCount);
@@ -184,13 +194,14 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task WaitForResumeTokenTask(string collectionKey)
         {
+            MigrationJobContext.AddVerboseLog($"WaitForResumeTokenTask: collectionKey={collectionKey}");
             if (_resumeTokenTasksByCollection.TryGetValue(collectionKey, out var task))
             {
-                _log.WriteLine($"Waiting for resume token setup task to complete for {collectionKey}", LogType.Verbose);
+                _log.WriteLine($"Waiting for resume token setup task to complete for {collectionKey}", LogType.Debug);
                 try
                 {
                     await task;
-                    _log.WriteLine($"Resume token setup task completed for {collectionKey}", LogType.Verbose);
+                    _log.WriteLine($"Resume token setup task completed for {collectionKey}", LogType.Debug);
                 }
                 catch (Exception ex)
                 {
@@ -201,7 +212,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> PrepareForMigration()
         {
-            _log.WriteLine("PrepareForMigration started", LogType.Verbose);
+            _log.WriteLine("PrepareForMigration started", LogType.Debug);
             if (MigrationJobContext.CurrentlyActiveJob == null)
                 return TaskResult.FailedAfterRetries;
             if (_config == null)
@@ -211,8 +222,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return TaskResult.FailedAfterRetries;
 
             _sourceClient = MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], false, _config.CACertContentsForSourceServer ?? string.Empty);
-            _log.WriteLine("Source client created.");
-            _log.WriteLine($"Source client initialized - ConnectionString masked, JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}, IsSimulated: {MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun}", LogType.Debug);
+            _log.WriteLine($"Source client initialized,  JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}, IsSimulated: {MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun}");
             if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
             {
                 _log.WriteLine("Simulated Run. No changes will be made to the target.", LogType.Warning);
@@ -269,16 +279,16 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 case JobType.MongoDriver:
                     _migrationProcessor = new CopyProcessor(_log, _sourceClient!, _config, this);
-                    _log.WriteLine("CopyProcessor created for MongoDriver job type", LogType.Verbose);
+                    _log.WriteLine("CopyProcessor created for MongoDriver job type", LogType.Debug);  
                     break;
                 case JobType.DumpAndRestore:
                     _migrationProcessor = new DumpRestoreProcessor(_log,_sourceClient!, _config, this);
                     _migrationProcessor.MongoToolsFolder = _toolsLaunchFolder;
-                    _log.WriteLine("DumpRestoreProcessor created for DumpAndRestore job type", LogType.Verbose);
+                    _log.WriteLine("DumpRestoreProcessor created for DumpAndRestore job type", LogType.Debug);
                     break;
                 case JobType.RUOptimizedCopy:
             _migrationProcessor = new RUCopyProcessor(_log, _sourceClient!, _config, this);
-                    _log.WriteLine("RUCopyProcessor created for RUOptimizedCopy job type", LogType.Verbose);
+                    _log.WriteLine("RUCopyProcessor created for RUOptimizedCopy job type", LogType.Debug);
                     break;
                 default:
                     _log.WriteLine($"Unknown JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}. Defaulting to MongoDriver.", LogType.Error);
@@ -289,7 +299,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             // Set the delegate to wait for resume token tasks before processing collections
             _migrationProcessor.WaitForResumeTokenTaskDelegate = WaitForResumeTokenTask;
-            _log.WriteLine("WaitForResumeTokenTaskDelegate set for migration processor", LogType.Verbose);
+            _log.WriteLine("WaitForResumeTokenTaskDelegate set for migration processor", LogType.Debug);
 
             return TaskResult.Success;
         }
@@ -298,7 +308,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         private Task<TaskResult> Default_ExceptionHandler(Exception ex, int attemptCount, string processName, int currentBackoff)
         {
             _log.WriteLine($"{processName} attempt {attemptCount} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
-            _log.WriteLine($"Exception type: {ex.GetType().Name}, Will retry after {currentBackoff}s", LogType.Debug);
             return Task.FromResult(TaskResult.Retry);
         }
 
@@ -313,12 +322,10 @@ namespace OnlineMongoMigrationProcessor.Workers
 			if (ex is MongoExecutionTimeoutException)
             {
                 _log.WriteLine($"{processName} attempt {attemptCount} failed due to timeout: {ex}.", LogType.Error);
-                _log.WriteLine($"MongoExecutionTimeoutException - will retry after {currentBackoff}s", LogType.Debug);
             }
             else
             {
                 _log.WriteLine($"{processName} attempt {attemptCount} failed. Details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
-                _log.WriteLine($"Exception type: {ex.GetType().Name}, Will retry after {currentBackoff}s", LogType.Debug);
             }
         
             return Task.FromResult(TaskResult.Retry);
@@ -327,7 +334,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> CreatePartitionsAsync(MigrationUnit mu,  CancellationToken _cts)
         {
-            _log.WriteLine($"CreatePartitionsAsync started for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
+            _log.WriteLine($"CreatePartitionsAsync started for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+
             if(mu.MigrationChunks!=null && mu.MigrationChunks.Count>0)
             {
                 _log.WriteLine($"Partitions already exist for {mu.DatabaseName}.{mu.CollectionName} - Count: {mu.MigrationChunks.Count}", LogType.Debug);
@@ -364,13 +372,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 			mu.MigrationChunks = chunks!;
             mu.ChangeStreamStartedOn = currrentTime;
-            _log.WriteLine($"Partitions created successfully - Chunks: {chunks!.Count}, ChangeStreamStartedOn: {currrentTime}", LogType.Verbose);
+            _log.WriteLine($"Partitions created successfully - Chunks: {chunks!.Count}, ChangeStreamStartedOn: {currrentTime}", LogType.Debug);
             return TaskResult.Success;
         }
 
         private async Task<TaskResult> SetResumeTokens(MigrationUnit mu, CancellationToken _cts, List<Task> resumeTokenTasks)
         {
-            _log.WriteLine($"SetResumeTokens called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Verbose);
+            _log.WriteLine($"SetResumeTokens called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Debug);
             bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
             if (useServerLevel)
             {
@@ -383,28 +391,25 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 //if reset CS need to get the latest CS resume token synchronously
                 _log.WriteLine($"Resetting change stream for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
-                _log.WriteLine($"Synchronous resume token setup initiated (30s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
                 await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, _cts,false);
-                _log.WriteLine($"Synchronous resume token setup completed for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
+                _log.WriteLine($"Synchronous resume token setup completed for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
             }
             else
             {
-                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
-                
+                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);                
                 string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
                 try
                 {
+                    _log.WriteLine($"Calling SetChangeStreamResumeTokenAsync as async for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                     var task = Task.Run(async () =>
                     {
                         try
                         {
-                            _log.WriteLine($"[ASYNC] Starting SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,true);
-                            _log.WriteLine($"[ASYNC] Completed SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Verbose);
+                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,true);                            
                         }
                         catch (Exception ex)
                         {
-                            _log.WriteLine($"[ASYNC] ERROR in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
+                            _log.WriteLine($"Error in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
                         }
                     });
                     
@@ -434,7 +439,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             // Determine if we should use server-level processing
             bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
-            _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel}, JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Verbose);
+            _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel}, JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Debug);
 
 
             var unitsForPrep = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
@@ -617,11 +622,12 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> MigrateJobCollections(CancellationToken ctsToken)
         {
             _log.WriteLine("MigrateJobCollections started", LogType.Debug);
+
             if (MigrationJobContext.CurrentlyActiveJob == null)
                 return TaskResult.FailedAfterRetries;
 
             List<Task> resumeTokenTasks = new List<Task>();
-            _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics.Count} migration units", LogType.Verbose);
+            _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics.Count} migration units", LogType.Debug);
 
             foreach (var mub in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
             {
@@ -650,6 +656,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
+            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitAsync: mub.Id={mub.Id}");
             var migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mub.Id);
             migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
@@ -682,6 +689,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<(bool exists, bool isCollection)> ValidateSourceCollectionAsync(MigrationUnit migrationUnit)
         {
+            MigrationJobContext.AddVerboseLog($"ValidateSourceCollectionAsync: mu={migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
             bool checkExist;
             if (MigrationJobContext.CurrentlyActiveJob!.JobType == JobType.RUOptimizedCopy)
                 checkExist = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
@@ -713,6 +721,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task ValidateTargetCollectionExistsAsync(MigrationUnit migrationUnit)
         {
+            MigrationJobContext.AddVerboseLog($"ValidateTargetCollectionExistsAsync: mu={migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
             if (MigrationJobContext.CurrentlyActiveJob!.IsSimulatedRun)
                 return;
 
@@ -738,6 +747,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
+            MigrationJobContext.AddVerboseLog($"ExecuteMigrationForUnitAsync: mu={migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
             if (_migrationProcessor == null)
                 return TaskResult.Abort;
 
@@ -763,6 +773,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> StartMigrationProcessorAsync(MigrationUnit migrationUnit)
         {
+            MigrationJobContext.AddVerboseLog($"StartMigrationProcessorAsync: mu={migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
             if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id]) ||
                 string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
                 return TaskResult.Abort;
@@ -791,9 +802,9 @@ namespace OnlineMongoMigrationProcessor.Workers
         private void LogMigrationSuccess(MigrationUnit migrationUnit)
         {
             if (MigrationJobContext.CurrentlyActiveJob!.JobType == JobType.DumpAndRestore)
-                _log.WriteLine($"Dump processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
+                _log.WriteLine($"Dump processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
             else
-                _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Verbose);
+                _log.WriteLine($"Migration processor completed successfully for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
         }
 
         private bool ShouldBreakMigrationLoop()
@@ -807,7 +818,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> WaitForMigrationProcessorCompletionAsync(CancellationToken ctsToken)
         {
-            _log.WriteLine("Waiting for migration processor to complete all activities", LogType.Verbose);
+            MigrationJobContext.AddVerboseLog("Waiting for migration processor to complete all activities");
             while (_migrationProcessor != null && _migrationProcessor.ProcessRunning)
             {
                 if (HandleControlPause())
@@ -824,16 +835,17 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor, bool clearCache=false)
         {
+            _log.WriteLine("StartOnlineForJobCollections started", LogType.Debug);
             try
             {
                 MigrationJobContext.Log = _log;
-                _log.WriteLine("StartOnlineForJobCollections started", LogType.Debug);
+                
                 if (MigrationJobContext.CurrentlyActiveJob == null)
                     return TaskResult.FailedAfterRetries;
 
                 var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
 
-                _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Verbose);
+                _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Debug);
                 foreach (var migrationUnit in unitsForMigrate)
                 {
                     if (_migrationCancelled)
@@ -856,7 +868,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         if (await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
                         {
                             processor.AddCollectionToChangeStreamQueue(migrationUnit.Id);
-                            _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Verbose);
+                            _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Debug);
                             
                         }
                     }
@@ -888,6 +900,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private bool HandleControlPause()
         {
+            MigrationJobContext.AddVerboseLog($"HandleControlPause: ControlledPauseRequested={MigrationJobContext.ControlledPauseRequested}");
             if (MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine("Controlled pause requested - stopping migration processor", LogType.Info);
@@ -902,6 +915,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public async Task StartMigrationAsync(string namespacesToMigrate, JobType jobtype, bool trackChangeStreams)
         {
+            MigrationJobContext.AddVerboseLog($"StartMigrationAsync: namespaces={namespacesToMigrate}, jobtype={jobtype}, trackChangeStreams={trackChangeStreams}");
             try
             {
                 if (!InitializeJob())
@@ -955,6 +969,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private bool InitializeJob()
         {
+            MigrationJobContext.AddVerboseLog("InitializeJob: starting job initialization");
             JobStarting = true;
             if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id))
             {
@@ -998,13 +1013,13 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private void InitializeLogging()
         {
+            MigrationJobContext.AddVerboseLog($"InitializeLogging: jobId={MigrationJobContext.CurrentlyActiveJob.Id}");
             string logfile = _log.Init(MigrationJobContext.CurrentlyActiveJob.Id);
             if (logfile != MigrationJobContext.CurrentlyActiveJob.Id)
             {
                 _log.WriteLine($"Error in reading log. Orginal log backed up as {logfile}", LogType.Error);
             }
-            _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} started on {MigrationJobContext.CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
-            _log.WriteLine($"StartMigrationAsync called - JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Debug);
+            _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} - JobType: {MigrationJobContext.CurrentlyActiveJob.JobType} started on {MigrationJobContext.CurrentlyActiveJob.StartedOn} (UTC)", LogType.Warning);
             _log.SetJob(MigrationJobContext.CurrentlyActiveJob);
             _log.WriteLine($"Working folder is {Environment.GetEnvironmentVariable("ResourceDrive")}");
             MigrationJobContext.Log = _log;
@@ -1012,6 +1027,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private (string sourceConnectionString, string targetConnectionString) PrepareConnectionStrings()
         {
+            MigrationJobContext.AddVerboseLog("PrepareConnectionStrings: encoding connection strings");
             var sourceConnectionString = Helper.EncodeMongoPasswordInConnectionString(
                 MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
             var targetConnectionString = Helper.EncodeMongoPasswordInConnectionString(
@@ -1020,13 +1036,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             targetConnectionString = Helper.UpdateAppName(targetConnectionString, 
                 $"MSFTMongoWebMigration{Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob)}-" + MigrationJobContext.CurrentlyActiveJob.Id);
 
-            _log.WriteLine($"Connection strings prepared - Job ID: {MigrationJobContext.CurrentlyActiveJob.Id}", LogType.Verbose);
             return (sourceConnectionString, targetConnectionString);
         }
 
         private async Task PopulateMigrationUnitsAsync(string namespacesToMigrate, string sourceConnectionString)
         {
-            _log.WriteLine($"Populating job collections from namespaces: {namespacesToMigrate.Replace(",", ", ")}", LogType.Verbose);
+            MigrationJobContext.AddVerboseLog($"PopulateMigrationUnitsAsync: namespaces={namespacesToMigrate.Replace(",", ", ")}");
+
             var unitsToAdd = await Helper.PopulateJobCollectionsAsync(
                 MigrationJobContext.CurrentlyActiveJob, 
                 namespacesToMigrate, 
@@ -1038,6 +1054,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<bool> EnsureMongoToolsAvailableAsync()
         {
+            MigrationJobContext.AddVerboseLog($"EnsureMongoToolsAvailableAsync: JobType={MigrationJobContext.CurrentlyActiveJob.JobType}");
             if (MigrationJobContext.CurrentlyActiveJob.JobType != JobType.DumpAndRestore)
                 return true;
 
@@ -1061,8 +1078,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                     StopMigration();
                     return false;
                 }
-                _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Verbose);
-                _log.WriteLine($"Working directory  is {Helper.GetWorkingFolder()}", LogType.Verbose);
+                _log.WriteLine($"MongoDB tools ready at: {_toolsLaunchFolder}", LogType.Debug);
+                _log.WriteLine($"Working directory  is {Helper.GetWorkingFolder()}", LogType.Debug);
                 _toolsLaunchFolder = $"{_toolsLaunchFolder}\\";
             }
             return true;
@@ -1104,8 +1121,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<bool> ExecutePreparePartitionsAsync()
         {
+            MigrationJobContext.AddVerboseLog("Starting PreparePartitionsAsync with retry logic");
             bool skipPartitioning = false;
-            _log.WriteLine("Starting PreparePartitionsAsync with retry logic", LogType.Debug);
+
             TaskResult result = await new RetryHelper().ExecuteTask(
                 () => PreparePartitionsAsync(_cts.Token, skipPartitioning),
                 (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
@@ -1135,7 +1153,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 compareHelper = null;
                 MigrationJobContext.CurrentlyActiveJob.RunComparison = false;
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                _log.WriteLine("Comparison completed - resuming migration", LogType.Verbose);
+                _log.WriteLine("Comparison completed - resuming migration", LogType.Debug);
             }
         }
 
@@ -1164,7 +1182,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                         if (!MigrationJobContext.ControlledPauseRequested)
                         {
                             MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
-                            _log.WriteLine("Job marked as completed", LogType.Verbose);
+                            _log.WriteLine("Job marked as completed", LogType.Debug);
                         }
                         MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                     }
@@ -1175,6 +1193,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private void LoadConfig()
         {
+            MigrationJobContext.AddVerboseLog("LoadConfig: loading migration settings");
             if (_config == null)
                 _config = new MigrationSettings();
              _config.Load();
@@ -1183,6 +1202,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString)
         {
+            MigrationJobContext.AddVerboseLog($"SyncBackToSource: sourceCS length={sourceConnectionString?.Length}, targetCS length={targetConnectionString?.Length}");
             JobStarting= true;
 
             if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id)) 
@@ -1239,6 +1259,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<List<MigrationChunk>> PartitionCollectionAsync(string databaseName, string collectionName, CancellationToken cts, MigrationUnit migrationUnit)
         {
+            MigrationJobContext.AddVerboseLog($"PartitionCollectionAsync: db={databaseName}, coll={collectionName}");
             try
             {
                 _log.WriteLine($"PartitionCollectionAsync started for {databaseName}.{collectionName}", LogType.Debug);
@@ -1284,7 +1305,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             long documentCount = stats.DocumentCount;
             long totalCollectionSizeBytes = stats.CollectionSizeBytes;
 
-            _log.WriteLine($"{databaseName}.{collectionName} - docCount: {documentCount}, size: {totalCollectionSizeBytes} bytes", LogType.Verbose);
+            _log.WriteLine($"{databaseName}.{collectionName} - docCount: {documentCount}, size: {totalCollectionSizeBytes} bytes", LogType.Debug);
             
             var database = _sourceClient!.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
@@ -1305,11 +1326,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 totalChunks = totalChunksBySize;
                 minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
-                _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}", LogType.Verbose);
+                _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}", LogType.Debug);
             }
             else
             {
-                _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}", LogType.Verbose);
+                _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}", LogType.Debug);
                 totalChunks = (int)Math.Min(SamplePartitioner.MaxSamples / SamplePartitioner.MaxSegments, 
                     documentCount / (SamplePartitioner.MaxSamples == 0 ? 1 : SamplePartitioner.MaxSamples));
                 totalChunks = Math.Max(1, totalChunks);
@@ -1347,7 +1368,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             string databaseName,
             string collectionName)
         {
-            _log.WriteLine($"Chunking {databaseName}.{collectionName}", LogType.Debug);
+            
+            MigrationJobContext.AddVerboseLog($"Chunking {databaseName}.{collectionName}");
 
             var (dataTypes, optimizeForObjectId) = DetermineDataTypes(migrationUnit);
             var migrationChunks = new List<MigrationChunk>();
@@ -1377,7 +1399,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (migrationUnit.DataTypeFor_Id.Value == DataType.ObjectId)
                 {
                     optimizeForObjectId = true;
-                    _log.WriteLine("ObjectId optimization enabled", LogType.Verbose);
+                    _log.WriteLine("ObjectId optimization enabled", LogType.Debug);
                 }
             }
             else
@@ -1387,7 +1409,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     DataType.Int, DataType.Int64, DataType.String, DataType.Object, 
                     DataType.Decimal128, DataType.Date, DataType.ObjectId 
                 };
-                _log.WriteLine($"Using all DataTypes for partitioning ({dataTypes.Count} types)", LogType.Verbose);
+                _log.WriteLine($"Using all DataTypes for partitioning ({dataTypes.Count} types)", LogType.Debug);
 
                 if (_config!.ReadBinary)
                 {
@@ -1408,7 +1430,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cts,
             List<MigrationChunk> migrationChunks)
         {
-            _log.WriteLine($"Creating partitions for DataType: {dataType}", LogType.Verbose);
+            _log.WriteLine($" Creating partitions for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} DataType: {dataType}", LogType.Debug);
 
             ChunkBoundaries? chunkBoundaries = SamplePartitioner.CreatePartitions(
                 _log, 
@@ -1425,7 +1447,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (docCountByType == 0 || chunkBoundaries == null)
             {
-                _log.WriteLine($"No documents found for DataType: {dataType}", LogType.Verbose);
+                _log.WriteLine($"No documents found for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} DataType: {dataType}", LogType.Debug);
                 return;
             }
 
@@ -1435,7 +1457,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             else
             {
-                _log.WriteLine($"Creating segments from {chunkBoundaries.Boundaries.Count} boundaries for DataType: {dataType}", LogType.Debug);
+                _log.WriteLine($"Creating segments from {chunkBoundaries.Boundaries.Count} boundaries for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} DataType: {dataType}", LogType.Debug);
 #pragma warning disable CS8604
                 CreateSegments(chunkBoundaries, migrationChunks, dataType, migrationUnit?.UserFilter);
 #pragma warning restore CS8604
@@ -1461,7 +1483,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private void CreateSegments(ChunkBoundaries chunkBoundaries, List<MigrationChunk> migrationChunks, DataType dataType, string userFilter)
         {
-            _log.WriteLine($"CreateSegments started - creating segments for {chunkBoundaries.Boundaries.Count} boundaries", LogType.Verbose);
+            _log.WriteLine($"CreateSegments started - creating segments for {chunkBoundaries.Boundaries.Count} boundaries", LogType.Debug);
             for (int i = 0; i < chunkBoundaries.Boundaries.Count; i++)
             {               
                 var (startId, endId) = GetStartEnd(true, chunkBoundaries.Boundaries[i], chunkBoundaries.Boundaries.Count, i, userFilter);
@@ -1478,7 +1500,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 if (MigrationJobContext.CurrentlyActiveJob!.JobType == JobType.MongoDriver && boundary.SegmentBoundaries != null && boundary.SegmentBoundaries.Count > 0)
                 {
-                    _log.WriteLine($"Creating {boundary.SegmentBoundaries.Count} segments for boundary {i}", LogType.Verbose);
+                    _log.WriteLine($"Creating {boundary.SegmentBoundaries.Count} segments for boundary {i}", LogType.Debug);
                     for (int j = 0; j < boundary.SegmentBoundaries.Count; j++)
                     {
                         var segment = boundary.SegmentBoundaries[j];

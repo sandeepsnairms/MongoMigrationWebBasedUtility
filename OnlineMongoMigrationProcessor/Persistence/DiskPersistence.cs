@@ -35,6 +35,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <exception cref="InvalidOperationException">Thrown when initialization fails</exception>
         public override void Initialize(string connectionStringOrPath,string appId)
         {
+
             if (_isInitialized)
                 return;
 
@@ -122,6 +123,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// </summary>
         private static string GetDirectoryPath(string id)
         {
+
             // Split by backslash or forward slash
             var parts = id.Split('\\', '/');
             
@@ -348,7 +350,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         
 
         public override void PushLogEntry(string jobId, LogObject logObject)
-        {
+        {           
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(jobId))
@@ -757,6 +759,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
         private string CreateFileCopyWithTimestamp(string sourceFilePath)
         {
+
             if (string.IsNullOrEmpty(sourceFilePath))
                 throw new ArgumentException("Source file path cannot be null or empty.", nameof(sourceFilePath));
 
@@ -785,6 +788,7 @@ namespace OnlineMongoMigrationProcessor.Persistence
         /// <returns>1 if file was deleted, 0 if file didn't exist, -1 if error occurred</returns>
         public override long DeleteLogs(string jobId)
         {
+
             EnsureInitialized();
 
             if (string.IsNullOrWhiteSpace(jobId))

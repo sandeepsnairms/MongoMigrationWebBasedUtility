@@ -78,6 +78,7 @@ namespace OnlineMongoMigrationProcessor.Workers
           string targetCollectionName,
           int pageSize)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.Initialize: targetDatabase={targetDatabase}, targetCollectionName={targetCollectionName}, pageSize={pageSize}");
             _log = log;
             _targetClient = targetClient;
             _sourceCollection = sourceCollection;
@@ -96,6 +97,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cancellationToken,
             bool isWriteSimulated)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.CopyDocumentsAsync: mu={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}, targetCount={targetCount}");
+
             ConcurrentBag<Exception> errors = new ConcurrentBag<Exception>();
             try
             {
@@ -179,6 +182,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private void ResetSegmentsInChunk(MigrationChunk migrationChunk)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.ResetSegmentsInChunk: segments.Count={migrationChunk.Segments.Count}");
+
             foreach (var segment in migrationChunk.Segments)
             {
                 segment.IsProcessed = false;
@@ -197,10 +202,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cancellationToken,
             bool isWriteSimulated) 
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.ProcessSegmentAsync: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}, segmentId={segment.Id}");
+
             string segmentId = segment.Id;
             TimeSpan backoff = TimeSpan.FromSeconds(2);
-
-            _log.WriteLine($"Document copy started for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]", LogType.Debug);
 
             if (segment.IsProcessed == true)
             {
@@ -327,6 +332,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cancellationToken,
             bool isWriteSimulated)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.CheckForMissingDocumentsAsync: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}");
+
             var migrationChunk = mu.MigrationChunks[migrationChunkIndex];
             
             // Check if any segment has QueryDocCount > ResultDocCount
@@ -364,6 +371,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             try
             {
+                MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.CompareChunkDocumentsAsync: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}");
+
                 await CompareChunkDocumentsAsync(migrationChunk, mu, migrationChunkIndex, chunkFilter, cancellationToken, isWriteSimulated);
             }
             catch (Exception ex)
@@ -382,6 +391,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cancellationToken,
             bool isWriteSimulated)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.CompareChunkDocumentsAsync: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}");
+
             var missingDocuments = new List<BsonDocument>();
             int pageIndex = 0;
             const int comparisonPageSize = 100; // Smaller page size for comparison
@@ -491,6 +502,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private TaskResult ValidateChunkDocumentCounts(MigrationUnit mu, int migrationChunkIndex)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.ValidateChunkDocumentCounts: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}");
+
 #pragma warning disable CS8604 // Possible null reference argument.
             var bounds = SamplePartitioner.GetChunkBounds(mu.MigrationChunks[migrationChunkIndex].Gte, mu.MigrationChunks[migrationChunkIndex].Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
             var gte = bounds.gte;
@@ -525,6 +538,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task WriteDocumentsToTarget(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
+
             if (!MongoHelper.IsCosmosRUEndpoint(_targetCollection))
             {
                 await WriteBulkDocuments(documents, segment, cancellationToken);
@@ -537,6 +551,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task WriteBulkDocuments(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.WriteBulkDocuments: documents.Count={documents.Count}, segmentId={segment.Id}");
+
             var insertModels = documents.Select(doc =>
             {
                 if (doc.Contains("_id") && doc["_id"].IsObjectId)
@@ -551,6 +567,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task WriteDocumentsWithInsertMany(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.WriteDocumentsWithInsertMany: documents.Count={documents.Count}, segmentId={segment.Id}");
+
             var docsToInsert = documents.Select(doc =>
             {
                 if (doc.Contains("_id") && doc["_id"].IsObjectId)
@@ -570,6 +588,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             int migrationChunkIndex,
             string segmentId)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.HandleBulkWriteException: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={migrationChunkIndex}, segmentId={segmentId}");
+
             long bulkInserted = ex.Result?.InsertedCount ?? 0;
             Interlocked.Add(ref _successCount, bulkInserted);
             segment.ResultDocCount += bulkInserted;
@@ -603,6 +623,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             CancellationToken cancellationToken,
             List<BsonDocument> missingDocuments)
         {
+
             long foundMissingCount = 0;
             
             _log.WriteLine($"Processing {documentIds.Count} individual documents as bulk insert failed.");
@@ -614,7 +635,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             var existingIds = new HashSet<BsonValue>(existingTargetDocs.Select(doc => doc["_id"]));
 
-            _log.WriteLine($"Count before loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
             
             foreach (var sourceDoc in sourceDocuments)
             {
@@ -638,14 +658,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                 }
             }
-            
-            _log.WriteLine($"Count after loop, Failure: {_failureCount}, Sucess: {_successCount}", LogType.Debug);
+
+            MigrationJobContext.AddVerboseLog($"Count after loop, Failure: {_failureCount}, Sucess: {_successCount}");
             
             return foundMissingCount;
         }
 
         private async Task InsertMissingDocument(BsonDocument sourceDoc, BsonValue idValue, MigrationChunk migrationChunk)
         {
+            MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.InsertMissingDocument: _id={idValue}");
             try
             {
                 await _targetCollection.InsertOneAsync(sourceDoc, cancellationToken: CancellationToken.None);

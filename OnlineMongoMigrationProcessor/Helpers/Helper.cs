@@ -81,6 +81,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static bool CanProceedWithDownloads(string directoryPath,long spaceRequiredInMb, out double folderSizeInGB, out double freeSpaceGB)
         {
+            
             freeSpaceGB = 0;
             folderSizeInGB = 0;
 
@@ -103,7 +104,7 @@ namespace OnlineMongoMigrationProcessor
 
                 folderSizeInGB = Math.Round(GetFolderSizeInGB(dirInfo.FullName), 2);
                 freeSpaceGB = Math.Round(freeSpaceInMb /1024, 2);
-
+                MigrationJobContext.AddVerboseLog($"CanProceedWithDownloads returned false: directoryPath={directoryPath}, spaceRequiredInMb={spaceRequiredInMb}");
                 return false;
             }
             else
@@ -116,6 +117,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static string EncodeMongoPasswordInConnectionString(string connectionString)
         {
+       
             // Regex pattern to capture the password part (assuming mongodb://user:password@host)
             string pattern = @"(mongodb(?:\+srv)?:\/\/[^:]+:)(.*)@([^@]+)$";
 
@@ -135,6 +137,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<bool> ValidateMongoToolsAvailableAsync(Log log)
         {
+            MigrationJobContext.AddVerboseLog("ValidateMongoToolsAvailableAsync: checking mongodump/mongorestore");
             try
             {
                 var mongodumpCheck = Process.Start(new ProcessStartInfo
@@ -163,12 +166,11 @@ namespace OnlineMongoMigrationProcessor
         }
         public static async Task<string> EnsureMongoToolsAvailableAsync(Log log,string toolsDestinationFolder, MigrationSettings config)
         {
+            MigrationJobContext.AddVerboseLog($"EnsureMongoToolsAvailableAsync: toolsDestinationFolder={toolsDestinationFolder}");
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
 
             try
             {
-
-
                 string toolsLaunchFolder = Path.Combine(toolsDestinationFolder, Path.GetFileNameWithoutExtension(toolsDownloadUrl), "bin");
 
                 string mongodumpPath = Path.Combine(toolsLaunchFolder, "mongodump.exe");
@@ -247,6 +249,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static string GetWorkingFolder()
         {
+            MigrationJobContext.AddVerboseLog($"GetWorkingFolder: _workingFolder={_workingFolder}");
 
             if (!string.IsNullOrEmpty(_workingFolder))
             {
@@ -289,6 +292,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static string UpdateAppName(string connectionString, string appName)
         {
+            MigrationJobContext.AddVerboseLog($"UpdateAppName: appName={appName}");
             try
             {
                 if (string.IsNullOrWhiteSpace(connectionString))
@@ -389,6 +393,8 @@ namespace OnlineMongoMigrationProcessor
 
         public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
         {
+            MigrationJobContext.AddVerboseLog($"PopulateJobCollectionsAsync: jobId={job?.Id}, allCollectionsUseObjectId={allCollectionsUseObjectId}");
+
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
             if (string.IsNullOrWhiteSpace(namespacesToMigrate))
             {

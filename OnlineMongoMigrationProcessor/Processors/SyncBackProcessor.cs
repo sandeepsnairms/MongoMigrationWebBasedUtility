@@ -21,6 +21,7 @@ namespace OnlineMongoMigrationProcessor.Processors
         public SyncBackProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
            : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("SyncBackProcessor: Constructor called");
             // Constructor body can be empty or contain initialization logic if needed
         }
 
@@ -47,6 +48,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         private Task<TaskResult> SyncBackAttemptAsync()
         {
+            MigrationJobContext.AddVerboseLog("SyncBackProcessor.SyncBackAttemptAsync: starting");
             if (_cts == null)
             {
                 _log.WriteLine("Cancellation token source not initialized for SyncBack.", LogType.Error);

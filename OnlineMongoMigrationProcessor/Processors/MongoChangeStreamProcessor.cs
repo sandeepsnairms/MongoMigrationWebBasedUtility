@@ -55,6 +55,7 @@ namespace OnlineMongoMigrationProcessor
 
         public MongoChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient,  ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
         {
+            MigrationJobContext.AddVerboseLog($"MongoChangeStreamProcessor: Constructor called, syncBack={syncBack}");
             _log = log;
             _migrationWorker = migrationWorker;
 
@@ -64,6 +65,7 @@ namespace OnlineMongoMigrationProcessor
 
         private ChangeStreamProcessor CreateProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache,  MigrationSettings config, bool syncBack, MigrationWorker? migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog($"MongoChangeStreamProcessor.CreateProcessor: syncBack={syncBack}, ChangeStreamLevel={MigrationJobContext.CurrentlyActiveJob?.ChangeStreamLevel}");
             // Determine which processor to use
             bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
 
@@ -89,11 +91,13 @@ namespace OnlineMongoMigrationProcessor
         // Delegate methods to the underlying processor
         public bool AddCollectionsToProcess(string  migrationUnitId, CancellationTokenSource cts)
         {
+            MigrationJobContext.AddVerboseLog($"MongoChangeStreamProcessor.AddCollectionsToProcess: migrationUnitId={migrationUnitId}");
             return _processor.AddCollectionsToProcess(migrationUnitId, cts);
         }
 
         public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
         {
+            MigrationJobContext.AddVerboseLog("MongoChangeStreamProcessor.RunCSPostProcessingAsync: starting post-processing");
             await _processor.RunCSPostProcessingAsync(cts);
         }
 

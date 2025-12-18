@@ -22,6 +22,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <returns>Validated worker count between MIN_WORKERS and MAX_WORKERS</returns>
         public static int ValidateWorkerCount(int count)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerCountHelper.ValidateWorkerCount: count={count}");
             if (count < MIN_WORKERS) return MIN_WORKERS;
             if (count > MAX_WORKERS) return MAX_WORKERS;
             return count;
@@ -35,6 +36,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <returns>Optimal worker count</returns>
         public static int CalculateOptimalConcurrency(int? configOverride, bool isDump)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerCountHelper.CalculateOptimalConcurrency: configOverride={configOverride}, isDump={isDump}");
             // User override takes precedence
             if (configOverride.HasValue && configOverride.Value > 0)
             {
@@ -61,6 +63,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <returns>Insertion worker count to use</returns>
         public static int GetInsertionWorkersCount(int? configuredMax, int currentDefault)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerCountHelper.GetInsertionWorkersCount: configuredMax={configuredMax}, currentDefault={currentDefault}");
             if (configuredMax.HasValue)
             {
                 return ValidateWorkerCount(configuredMax.Value);
@@ -75,6 +78,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <returns>Default insertion worker count</returns>
         public static int CalculateDefaultInsertionWorkers()
         {
+            MigrationJobContext.AddVerboseLog("WorkerCountHelper.CalculateDefaultInsertionWorkers: calculating default");
             int calculated = Math.Min(Environment.ProcessorCount / 2, 8);
             return ValidateWorkerCount(calculated);
         }
@@ -89,6 +93,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// <returns>Number of workers to spawn (positive), 0 if no change, or negative if reducing</returns>
         internal static int AdjustDumpWorkers(int newCount, int currentActiveCount, WorkerPoolManager poolManager, Log log)
         {
+            MigrationJobContext.AddVerboseLog($"WorkerCountHelper.AdjustDumpWorkers: newCount={newCount}, currentActiveCount={currentActiveCount}");
             int originalCount = newCount;
             newCount = ValidateWorkerCount(newCount);
             

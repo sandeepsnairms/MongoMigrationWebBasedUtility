@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using OnlineMongoMigrationProcessor.Context;
 
 namespace OnlineMongoMigrationProcessor.Helpers
 {
@@ -14,6 +15,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         public void Add(T item)
         {
+            MigrationJobContext.AddVerboseLog($"OrderedUniqueList.Add: item={item}, currentCount={_list.Count}");
             if (_set.Add(item)) // returns false if item already exists
                 _list.Add(item);
         }

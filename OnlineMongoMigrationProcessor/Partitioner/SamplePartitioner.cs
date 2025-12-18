@@ -4,6 +4,7 @@ using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Partitioner;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -31,6 +32,8 @@ namespace OnlineMongoMigrationProcessor
         /// <returns>A list of partition boundaries.</returns>
         public static ChunkBoundaries? CreatePartitions(Log log, bool optimizeForMongoDump, IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, bool optimizeForObjectId, MigrationSettings config, out long docCountByType)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.CreatePartitions: collection={collection.CollectionNamespace}, chunkCount={chunkCount}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}");
+
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
             long docsInChunk = 0;
@@ -69,7 +72,7 @@ namespace OnlineMongoMigrationProcessor
                     else
                     {
                         docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
-                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} for {dataType} with user filter {userFilter}", LogType.Verbose);
+                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} for {dataType} with user filter {userFilter}", LogType.Debug);
                     }
 
                 }
@@ -348,6 +351,8 @@ namespace OnlineMongoMigrationProcessor
 
         private static ChunkBoundaries ConvertToBoundaries(List<BsonValue> ids, int segmentCount)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.ConvertToBoundaries: ids.Count={ids.Count}, segmentCount={segmentCount}");
+
             ChunkBoundaries chunkBoundaries = new ChunkBoundaries();
             Boundary? segmentBoundary = null;
             Boundary? chunkBoundary = null;
@@ -394,6 +399,8 @@ namespace OnlineMongoMigrationProcessor
 
         public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, DataType dataType, bool useEstimate = false, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType: dataType={dataType}, useEstimate={useEstimate}, skipDataTypeFilter={skipDataTypeFilter}");
+
             var filterBuilder = Builders<BsonDocument>.Filter;
 
             BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
@@ -417,6 +424,8 @@ namespace OnlineMongoMigrationProcessor
 
         public static BsonDocument BuildDataTypeCondition(DataType dataType, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.BuildDataTypeCondition: dataType={dataType}, skipDataTypeFilter={skipDataTypeFilter}");
+
             BsonDocument matchCondition;
 
             if (skipDataTypeFilter)

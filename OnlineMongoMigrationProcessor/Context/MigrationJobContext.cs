@@ -28,6 +28,15 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static bool ControlledPauseRequested { get; set; } = false;
 
+
+        public static void AddVerboseLog(string message) 
+        {
+            if (Log == null)
+                return;
+
+             Log?.WriteLine(message, LogType.Verbose);
+        }
+
         /// <summary>
         /// Resets static state for a new job. Call this when starting a new migration job
         /// to prevent state from previous jobs from interfering.
@@ -60,7 +69,7 @@ namespace OnlineMongoMigrationProcessor.Context
                     {
                         process.Kill(entireProcessTree: true);
                         killedCount++;
-                        log?.WriteLine($"Killed leftover process PID {pid}", LogType.Verbose);
+                        MigrationJobContext.AddVerboseLog($"Killed leftover process PID {pid}");
                     }
                 }
                 catch (ArgumentException)
@@ -69,13 +78,13 @@ namespace OnlineMongoMigrationProcessor.Context
                 }
                 catch (Exception ex)
                 {
-                    log?.WriteLine($"Error killing process {pid}: {ex.Message}", LogType.Verbose);
+                    MigrationJobContext.AddVerboseLog($"Error killing process {pid}: {ex.Message}");
                 }
             }
             
             if (killedCount > 0)
             {
-                log?.WriteLine($"Killed {killedCount} leftover mongodump/mongorestore processes", LogType.Verbose);
+                MigrationJobContext.AddVerboseLog($"Killed {killedCount} leftover mongodump/mongorestore processes");
             }
         }
 
@@ -209,6 +218,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         private static MigrationJob? LoadMigrationJob(string jobId)
         {
+
             if (MigrationJobs.ContainsKey(jobId))
             {
                 return MigrationJobs[jobId];
@@ -235,6 +245,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static MigrationJob? GetMigrationJob(string jobId)
         {
+
             if(jobId==ActiveMigrationJobId && CurrentlyActiveJob!=null)
                 return CurrentlyActiveJob;
 
@@ -243,6 +254,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static List<MigrationJob>  PopulateMigrationJobs(List<string> ids)
         {
+
             List<MigrationJob> jobs = new List<MigrationJob>();
             foreach (var id in ids)
             {
@@ -255,16 +267,11 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static bool SaveMigrationUnit(MigrationUnit mu, bool updateParent)
         {
+
             try
             {
                 if (mu == null)
-                    return false;
-
-                if(_log != null &&( mu.DumpPercent==0 || mu.RestorePercent==0))
-                {
-                   _log.WriteLine($"Saving MU:UnitId={mu.Id}, DumpPercent={mu.DumpPercent}, RestorePercent={mu.RestorePercent}", LogType.Verbose);
-                }
-                
+                    return false;               
   
                 if (CurrentlyActiveJob != null)
                     mu.ParentJob = CurrentlyActiveJob;
@@ -390,6 +397,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static bool SaveJobList()
         {
+
             try
             {
                 if (JobList != null)
@@ -411,6 +419,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static MigrationUnit GetMigrationUnit(string jobId, string unitId)
         {
+            AddVerboseLog($"MigrationJobContext.GetMigrationUnit: jobId={jobId}, unitId={unitId}");
             try
             {
                 //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
