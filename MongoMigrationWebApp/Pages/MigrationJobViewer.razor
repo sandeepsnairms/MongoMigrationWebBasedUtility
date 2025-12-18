@@ -1223,15 +1223,16 @@ else if (@_showLogBackupFile)
 
     private bool CheckCutoverReadiness()
     {
-        foreach (var mu in CurrentlyLoadedMigrationJob.MigrationUnitBasics)
-        {
-            if (mu.SourceStatus != CollectionStatus.NotFound)
-            {
-                if (mu.DumpPercent != 100 || mu.RestorePercent != 100)
-                    return false;
-            }
-        }
-        return true;
+        return Helper.IsOfflineJobCompleted(CurrentlyLoadedMigrationJob);
+        // foreach (var mu in CurrentlyLoadedMigrationJob.MigrationUnitBasics)
+        // {
+        //     if (mu.SourceStatus != CollectionStatus.NotFound)
+        //     {
+        //         if (mu.DumpPercent != 100 || mu.RestorePercent != 100)
+        //             return false;
+        //     }
+        // }
+        // return true;
     }
 
     protected override async Task OnParametersSetAsync()

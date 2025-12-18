@@ -79,6 +79,8 @@ $ErrorActionPreference = 'Continue'
 az containerapp update `
     --name $ContainerAppName `
     --resource-group $ResourceGroupName `
+    --min-replicas 1 `
+    --max-replicas 1 `
     --image $imageName `
     2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' }
 

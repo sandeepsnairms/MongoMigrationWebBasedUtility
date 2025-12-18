@@ -51,14 +51,12 @@ namespace OnlineMongoMigrationProcessor.Workers
        
         public MigrationWorker()
         {            
-            MigrationJobContext.AddVerboseLog("MigrationWorker: Constructor called");
             _log = new Log();          
             MigrationJobContext.JobList.SetLog(_log);
         }
 
         public LogBucket? GetLogBucket(string jobId)
         {
-            MigrationJobContext.AddVerboseLog($"GetLogBucket: jobId={jobId}");
             // only for active job in migration worker
             if (MigrationJobContext.CurrentlyActiveJob != null && MigrationJobContext.CurrentlyActiveJob.Id == jobId)
                 return _log.GetCurentLogBucket(jobId);
@@ -68,7 +66,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public List<LogObject>? GetMonitorMessages(string jobId)
         {
-            MigrationJobContext.AddVerboseLog($"GetMonitorMessages: jobId={jobId}");
             // only for active job in migration worker
             if (MigrationJobContext.CurrentlyActiveJob != null && MigrationJobContext.CurrentlyActiveJob.Id == jobId)
                 return _log.GetMonitorMessages();
@@ -78,14 +75,12 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         public string GetRunningJobId()
         {
-            MigrationJobContext.AddVerboseLog($"GetRunningJobId: _activeJobId={_activeJobId}");
             Console.WriteLine($"GetRunningJobId :{_activeJobId}");
             return _activeJobId;           
         }
 
         public bool IsProcessRunning(string id)
         {
-            MigrationJobContext.AddVerboseLog($"IsProcessRunning: id={id}, _activeJobId={_activeJobId}");
             if (string.IsNullOrWhiteSpace(_activeJobId))
             {
                 Console.WriteLine( $"IsProcessRunning false,  IsNullOrWhiteSpace :true");
@@ -900,7 +895,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private bool HandleControlPause()
         {
-            MigrationJobContext.AddVerboseLog($"HandleControlPause: ControlledPauseRequested={MigrationJobContext.ControlledPauseRequested}");
+            
             if (MigrationJobContext.ControlledPauseRequested)
             {
                 _log.WriteLine("Controlled pause requested - stopping migration processor", LogType.Info);
