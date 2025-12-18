@@ -125,7 +125,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             {
                 if (_activeDumpWorkers.TryGetValue(jobId, out var workers))
                 {
-                    var worker = workers.FirstOrDefault(w => w.WorkerId == workerId && w.CollectionKey == collectionKey);
+                    log.WriteLine($"[Coordinator] WARNING: Attempt to mark dump worker completed for job {jobId} but coordinator is tracking {_currentJobId}", LogType.Warning);
+                    return;
+                }
+                
+                var worker = _activeDumpWorkers.FirstOrDefault(w => w.WorkerId == workerId && w.CollectionKey == collectionKey);
                     if (worker != null)
                     {
                         worker.IsCompleted = true;
@@ -150,7 +154,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             {
                 if (_activeRestoreWorkers.TryGetValue(jobId, out var workers))
                 {
-                    var worker = workers.FirstOrDefault(w => w.WorkerId == workerId && w.CollectionKey == collectionKey);
+                    log.WriteLine($"[Coordinator] WARNING: Attempt to mark dump worker completed for job {jobId} but coordinator is tracking {_currentJobId}", LogType.Warning);
+                    return;
+                }
+                
+                var worker = _activeDumpWorkers.FirstOrDefault(w => w.WorkerId == workerId && w.CollectionKey == collectionKey);
                     if (worker != null)
                     {
                         worker.IsCompleted = true;
