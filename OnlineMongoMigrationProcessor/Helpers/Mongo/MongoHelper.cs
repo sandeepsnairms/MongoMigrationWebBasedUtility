@@ -923,7 +923,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         
         // Determine if we should use server-level or collection-level processing
         bool useServerLevel = job.ChangeStreamLevel == ChangeStreamLevel.Server;
-
+        bool skipLoops = false;
         while (!isSucessful && retryCount < 10)
         {
                 try
@@ -1048,19 +1048,28 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 catch (Exception ex) when (ex is MongoExecutionTimeoutException || ex is TimeoutException)
                 {
                     log.WriteLine($"Timeout when setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}",LogType.Debug);
+
+                    if (resetCS && string.IsNullOrEmpty(mu.ResumeToken))
+                        skipLoops = true;
                 }
                 catch (Exception ex)
                 {
-                    retryCount++;
-
-                    log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Error);
-
-                    // If all retries exhausted, clear the flag to prevent infinite retry loop
-                    if (retryCount >= 10 && mu.ResetChangeStream)
+                    if (resetCS && !string.IsNullOrEmpty(mu.ResumeToken))
                     {
-                        mu.ResetChangeStream = false;
-                        log.WriteLine($"Failed to reset change stream for {mu.DatabaseName}.{mu.CollectionName} after {retryCount} attempts. Flag cleared to prevent infinite retries. Manual intervention may be required.", LogType.Error);
+                        retryCount++;
+                        log.WriteLine($"Attempt {retryCount}. Error setting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}: {ex}", LogType.Error);
+
+                        // If all retries exhausted, clear the flag to prevent infinite retry loop
+                        if (retryCount >= 10 && mu.ResetChangeStream)
+                        {
+                            mu.ResetChangeStream = false;
+                            log.WriteLine($"Failed to reset change stream for {mu.DatabaseName}.{mu.CollectionName} after {retryCount} attempts. Flag cleared to prevent infinite retries. Manual intervention may be required.", LogType.Error);
+                        }
                     }
+                    else
+                        skipLoops = true;
+
+
                 }
                 finally
                 {
@@ -1069,9 +1078,12 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     else
                         log.WriteLine($"Exiting Collection-level SetChangeStreamResumeToken for {mu.DatabaseName}.{mu.CollectionName} - ResumeToken: {(!string.IsNullOrEmpty(mu.ResumeToken) ? "SET" : "NOT SET")}, InitialDocReplayed: {mu.InitialDocumenReplayed}", LogType.Debug);
 
-                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    MigrationJobContext.SaveMigrationUnit(mu, false);                    
                 }
-        }
+
+                if (skipLoops)
+                    return;
+            }
         return;
     }
 

@@ -1048,10 +1048,10 @@ else if (@_showLogBackupFile)
         {
             return;
         }
-        
+
         // First check log count
         _logEntryCount = await GetLogCount(JobId);
-        
+
         if (_logEntryCount > LOG_THRESHOLD)
         {
             // Show paginated download dialog
@@ -1119,7 +1119,7 @@ else if (@_showLogBackupFile)
         {
             var url = $"/api/File/download/log/{jobId}/count";
             var response = await HttpClient.GetAsync(url);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 var content = await response.Content.ReadAsStringAsync();
@@ -1128,7 +1128,7 @@ else if (@_showLogBackupFile)
             }
         }
         catch { }
-        
+
         return 0;
     }
 
@@ -1542,7 +1542,7 @@ else if (@_showLogBackupFile)
         }
     }
 
-    
+
 
 
     private void YesNoDialogSubmit(YesNoDialog.YesNoDialogResult result)
@@ -1553,8 +1553,8 @@ else if (@_showLogBackupFile)
         {     
             if (result.DiaLogType == YesNoDialog.Category.CutoverNot || result.DiaLogType == YesNoDialog.Category.CompleteNot)
             {
-                JobManager.StopMigration();
-
+                MigrationJobContext.AddVerboseLog($"YesNoDialogSubmit {result.DiaLogType}");
+                JobManager.StopMigration();                
                 if (CurrentlyLoadedMigrationJob != null)
                 {
                     CurrentlyLoadedMigrationJob.IsCancelled = true;
@@ -1686,7 +1686,13 @@ else if (@_showLogBackupFile)
 
         string activeJob = JobManager?.GetRunningJobId() ?? string.Empty;
         if (activeJob != string.Empty && activeJob != JobId)
-            return false;
+        {
+            var job = MigrationJobContext.GetMigrationJob(activeJob);
+            if (job != null && !job.IsCancelled && !job.IsCompleted)
+                return false;
+            else
+                return true;
+        }
         else
             return true;
     }

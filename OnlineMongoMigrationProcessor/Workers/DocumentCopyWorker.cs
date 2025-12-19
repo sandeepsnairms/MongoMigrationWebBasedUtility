@@ -1,4 +1,5 @@
 ﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Models;
 using System;
@@ -50,10 +51,14 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                _log.ShowInMonitor($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
 
-                mu.DumpPercent = basePercent + percent * contribFactor;
+                mu.DumpPercent = basePercent + (percent * contribFactor);
                 mu.RestorePercent = mu.DumpPercent;
-                mu.DumpComplete = mu.DumpPercent == 100;
-                mu.RestoreComplete = mu.DumpComplete;
+
+                if (mu.MigrationChunks.All(chunk => chunk.IsDownloaded == true))
+                {
+                    mu.DumpComplete = mu.DumpPercent == 100;
+                    mu.RestoreComplete = mu.DumpComplete;
+                }
 
                 if(mu.DumpComplete && mu.RestoreComplete)
                 {
@@ -269,9 +274,26 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     catch (Exception ex)
                     {
+                        var command = string.Empty;
+                        if(ex is MongoCommandException)
+                        {
+                            try
+                            {
+                                // Properly render the filter to BsonDocument before converting to JSON
+                                var serializerRegistry = BsonSerializer.SerializerRegistry;
+                                var documentSerializer = serializerRegistry.GetSerializer<BsonDocument>();
+                                var renderedFilter = combinedFilter.Render(new RenderArgs<BsonDocument>(documentSerializer, serializerRegistry));
+                                command = $"combinedFilter: {renderedFilter.ToJson()}, pageIndex: {pageIndex} , pageSize: {_pageSize}";
+                            }
+                            catch
+                            {
+                                // If rendering fails, provide a safe fallback
+                                command = $"combinedFilter: [Unable to render filter], pageIndex: {pageIndex} , pageSize: {_pageSize}";
+                            }
+                        }
                         errors.Add(ex);
                         _log.WriteLine(
-                            $"Batch processing error encountered during document copy of segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Details: {ex}",
+                            $"Batch processing error encountered during document copy of segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Details: {ex}. {command}",
                             LogType.Error);
                         failed = true;
                     }
@@ -479,15 +501,28 @@ namespace OnlineMongoMigrationProcessor.Workers
             MigrationUnit mu,
             int migrationChunkIndex)
         {
-            FilterDefinition<BsonDocument> combinedFilter = Builders<BsonDocument>.Filter.Empty;
+            FilterDefinition<BsonDocument> combinedFilter;
 
-            if ((mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 && string.IsNullOrEmpty(mu.UserFilter)) || segment.IsProcessed == true)
+            // If only 1 segment, it doesn't have its own bounds - it covers the entire chunk
+            // Use the chunk-level filter that was passed in
+            if (mu.MigrationChunks[migrationChunkIndex].Segments.Count == 1 )
             {
-                var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(MongoHelper.GetFilterDoc(mu.UserFilter));
-                combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
+                // Single segment covering entire chunk - use the chunk-level filter
+                var userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
+                if (userFilterDoc != null && userFilterDoc.ElementCount > 0)
+                {
+                    var userFilter = new BsonDocumentFilterDefinition<BsonDocument>(userFilterDoc);
+                    combinedFilter = Builders<BsonDocument>.Filter.And(filter, userFilter);
+                }
+                else
+                {
+                    combinedFilter = filter;
+                }
             }
             else
             {
+                // Multiple segments - each segment has its own bounds
+                // Generate a segment-specific filter
 #pragma warning disable CS8604 // Possible null reference argument.
                 var bounds = SamplePartitioner.GetChunkBounds(segment.Gte, segment.Lt, mu.MigrationChunks[migrationChunkIndex].DataType);
 #pragma warning restore CS8604 // Possible null reference argument.
@@ -525,6 +560,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (mu.MigrationChunks[migrationChunkIndex].DocCountInTarget == mu.MigrationChunks[migrationChunkIndex].DumpQueryDocCount)
             {
+                mu.MigrationChunks[migrationChunkIndex].RestoredFailedDocCount = 0;
                 _log.WriteLine($"No documents missing in {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]. Target count: {mu.MigrationChunks[migrationChunkIndex].DocCountInTarget}");
             }
             else

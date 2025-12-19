@@ -632,9 +632,13 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (HandleControlPause())
                     return TaskResult.Canceled;
 
+                MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {mub.DatabaseName}.{mub.CollectionName}");
+
                 var result = await ProcessMigrationUnitAsync(mub, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
+
+                MigrationJobContext.AddVerboseLog($"Before ShouldBreakMigrationLoop, last processed {mub.DatabaseName}.{mub.CollectionName}");
 
                 if (ShouldBreakMigrationLoop())
                 {
@@ -643,6 +647,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
             }
 
+            MigrationJobContext.AddVerboseLog($"Before WaitForMigrationProcessorCompletionAsync");
             return await WaitForMigrationProcessorCompletionAsync(ctsToken);
         }
 
@@ -679,6 +684,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             await ValidateTargetCollectionExistsAsync(migrationUnit);
 
+            MigrationJobContext.AddVerboseLog($"Before ExecuteMigrationForUnitAsync {migrationUnit.Id}");
             return await ExecuteMigrationForUnitAsync(migrationUnit, ctsToken, resumeTokenTasks);
         }
 
@@ -763,6 +769,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (HandleControlPause())
                 return TaskResult.Canceled;
 
+            MigrationJobContext.AddVerboseLog($"Before StartMigrationProcessorAsync {migrationUnit.Id}");
             return await StartMigrationProcessorAsync(migrationUnit);
         }
 
@@ -804,6 +811,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private bool ShouldBreakMigrationLoop()
         {
+            MigrationJobContext.AddVerboseLog($"In ShouldBreakMigrationLoop IsOnline:{ Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob!)},SyncBackEnabled: {MigrationJobContext.CurrentlyActiveJob.SyncBackEnabled}, CSPostProcessingStarted: {MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted}, Aggressive: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive},IsOfflineJobCompleted: { Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob)}");
+
             return Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob!) &&
                    MigrationJobContext.CurrentlyActiveJob.SyncBackEnabled &&
                    MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted &&

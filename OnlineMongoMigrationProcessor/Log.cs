@@ -87,8 +87,6 @@ namespace OnlineMongoMigrationProcessor
                 string logBackupFile = string.Empty;
                 _currentId = id;
 
-                //Directory.CreateDirectory(Path.Combine(Helper.GetWorkingFolder(), "migrationlogs"));
-
                 _logBucket = ReadLogFile(_currentId, out logBackupFile);
                 _verboseMessages.Clear();
 

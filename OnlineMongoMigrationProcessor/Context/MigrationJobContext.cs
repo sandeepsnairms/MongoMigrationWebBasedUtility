@@ -31,7 +31,7 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static void AddVerboseLog(string message) 
         {
-            if (Log == null)
+            if (Log == null || CurrentlyActiveJob==null || CurrentlyActiveJob.IsCancelled || CurrentlyActiveJob.IsCompleted)
                 return;
 
              Log?.WriteLine(message, LogType.Verbose);
@@ -422,7 +422,6 @@ namespace OnlineMongoMigrationProcessor.Context
             AddVerboseLog($"MigrationJobContext.GetMigrationUnit: jobId={jobId}, unitId={unitId}");
             try
             {
-                //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{jobId}");
                 var filePath = $"{Path.Combine("migrationjobs", jobId, $"{unitId}.json")}";
                 string json =Store.ReadDocument(filePath);
                 var loadedObject = JsonConvert.DeserializeObject<MigrationUnit>(json);

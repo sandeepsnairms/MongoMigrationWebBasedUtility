@@ -165,8 +165,6 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                 if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Delayed && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) && !_postUploadCSProcessing && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 {
-                    
-
                     _postUploadCSProcessing = true; // Set flag to indicate post-upload CS processing is in progress
 
                     if (_targetClient == null)
@@ -204,7 +202,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             MigrationJobContext.AddVerboseLog($"MigrationProcessor.PostCopyChangeStreamProcessor: migratioUnitId={mu.DatabaseName}.{mu.CollectionName}");
 
-            if (MigrationJobContext.CurrentlyActiveJob == null || Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+            if (MigrationJobContext.CurrentlyActiveJob == null || !Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
             {
                 _log.WriteLine($"CurrentlyActiveJob is null or Offline for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                 return Task.CompletedTask;
@@ -233,20 +231,23 @@ namespace OnlineMongoMigrationProcessor.Processors
 
                     if (!_cts.Token.IsCancellationRequested)
                     {
-
-                        _log.WriteLine("Run RunChangeStreamProcessorForAllCollections", LogType.Debug);
-                        // For aggressive change stream jobs, run final cleanup for all collections
-                        RunChangeStreamProcessorForAllCollections();
-
-                        // Don't mark as completed if this is a controlled pause
-                        if (!MigrationJobContext.ControlledPauseRequested)
+                        // Check if the job is completed (all collections processed)
+                        if (Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
                         {
-                            _log.WriteLine($"{MigrationJobContext.CurrentlyActiveJob.Id} completed.");
-                            MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
-                            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                        }                                
-                                
-                        StopProcessing(true);                           
+                            _log.WriteLine("Running change stream  for all collections", LogType.Info);
+                            RunChangeStreamProcessorForAllCollections();
+                            _log.WriteLine("Completed running change stream  for all collections", LogType.Info);
+
+                            // Don't mark as completed if this is a controlled pause
+                            if (!MigrationJobContext.ControlledPauseRequested)
+                            {
+                                _log.WriteLine($"{MigrationJobContext.CurrentlyActiveJob.Id} completed.");
+                                MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
+                                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                            }
+
+                            StopProcessing(true);
+                        }
                         
                     }
                 }

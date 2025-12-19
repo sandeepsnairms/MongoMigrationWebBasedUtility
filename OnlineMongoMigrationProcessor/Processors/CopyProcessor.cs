@@ -108,7 +108,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (result == TaskResult.Success)
             {
-                if (!_cts.Token.IsCancellationRequested)
+                if (!_cts.Token.IsCancellationRequested && mu.MigrationChunks[chunkIndex].Segments.All(seg => seg.IsProcessed == true))
                 {                        
                     mu.MigrationChunks[chunkIndex].IsDownloaded = true;
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
@@ -190,9 +190,9 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 // Check if controlled pause completed
-                if (MigrationJobContext.ControlledPauseRequested && mu.DumpComplete)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log.WriteLine("Controlled pause completed for CopyProcessor");
+                    _log.WriteLine("Controlled pause detected - exiting without marking as complete",LogType.Debug);
                     StopProcessing();
                     return TaskResult.Success;
                 }
@@ -205,7 +205,7 @@ namespace OnlineMongoMigrationProcessor
                 long failed= mu.MigrationChunks.Sum(chunk => chunk.RestoredFailedDocCount);
                 // don't compare counts source vs target as some documents may have been deleted in source
                 //only  check for failed documents
-                if (failed == 0)
+                if (failed <= 0 && mu.MigrationChunks.All(chunk => chunk.IsDownloaded == true))
                 {
                     mu.BulkCopyEndedOn = DateTime.UtcNow;
 
@@ -222,7 +222,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    _log.WriteLine($"Document copy operation for {{ctx.DatabaseName}}.{{ctx.CollectionName}}[{{i}}] failed because of count mismatch.\", LogType.Error");
+                    _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} failed because of count mismatch.\", LogType.Error");
                     return TaskResult.Retry;
                 }
                              

@@ -57,7 +57,11 @@ namespace MongoMigrationWebApp.Service
                 if (migrationJobIds != null && migrationJobIds.Count == 1)
                 {
                     var mj= GetMigrationJobById(migrationJobIds[0]);
+                    if (mj == null)
+                        return;
+                        
                     Helper.LogToFile($"Step1 : {mj.IsStarted}-{mj.IsCompleted} -{string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id])} - {string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])} ");
+
                     if (mj.IsStarted && !mj.IsCompleted && string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id]) && string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id]))
                     {
                         try
