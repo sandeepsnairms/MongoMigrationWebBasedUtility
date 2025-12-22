@@ -202,10 +202,24 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             MigrationJobContext.AddVerboseLog($"MigrationProcessor.PostCopyChangeStreamProcessor: migratioUnitId={mu.DatabaseName}.{mu.CollectionName}");
 
-            if (MigrationJobContext.CurrentlyActiveJob == null || !Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+            if (MigrationJobContext.CurrentlyActiveJob == null)
             {
                 _log.WriteLine($"CurrentlyActiveJob is null or Offline for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                 return Task.CompletedTask;
+            }
+
+            //if offline and all offline task completed
+            if(!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) )
+            {
+                // Don't mark as completed if this is a controlled pause
+                if (!MigrationJobContext.ControlledPauseRequested)
+                {
+                    _log.WriteLine($"{MigrationJobContext.CurrentlyActiveJob.Id} completed.");
+                    MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
+                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                }
+
+                StopProcessing(true);
             }
 
             _log.WriteLine($"PostCopyChangeStreamProcessor called for {mu.DatabaseName},{mu.CollectionName}, RestoreComplete:{mu.RestoreComplete} DumpComplete:{mu.DumpComplete} ", LogType.Debug);

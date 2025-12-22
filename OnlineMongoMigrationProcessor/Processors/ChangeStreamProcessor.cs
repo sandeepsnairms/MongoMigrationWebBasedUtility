@@ -71,6 +71,20 @@ namespace OnlineMongoMigrationProcessor
         private bool _disposed = false;
         protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
 
+        protected Dictionary<string, AccumulatedChangesTracker> _accumulatedChangesPerCollection = new Dictionary<string, AccumulatedChangesTracker>();
+
+        protected void InitializeAccumulatedChangesTracker(string collectionKey)
+        {
+            MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.InitializeAccumulatedChangesTracker: collectionKey={collectionKey}");
+            lock (_accumulatedChangesPerCollection)
+            {
+                if (!_accumulatedChangesPerCollection.ContainsKey(collectionKey))
+                {
+                    _accumulatedChangesPerCollection[collectionKey] = new AccumulatedChangesTracker(collectionKey);
+                }
+            }
+        }
+
         /// <summary>
         /// Stops the job immediately by setting flags and calling the migration worker's stop method
         /// </summary>

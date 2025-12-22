@@ -65,6 +65,14 @@ namespace OnlineMongoMigrationProcessor
             {
                 _log.WriteLine($"{_syncBackPrefix}Starting server-level change stream processing for {_migrationUnitsToProcess.Count} collection(s).");
             }
+
+            //// Initialize change stream documents for each collection
+            //foreach (var id in _migrationUnitsToProcess.Keys)
+            //{
+            //    _migrationUnitsToProcess[id] = 0;
+            //    InitializeAccumulatedChangesTracker(id);
+            //}
+
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 try
@@ -94,8 +102,7 @@ namespace OnlineMongoMigrationProcessor
         {
             MigrationJobContext.AddVerboseLog("ServerLevelChangeStreamProcessor.WatchServerLevelChangeStream: starting");
 
-            long counter = 0;
-            var accumulatedChangesInColl = new Dictionary<string, AccumulatedChangesTracker>();
+            long counter = 0;            
             string collectionKey = string.Empty;
 
             try
@@ -188,14 +195,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Watch at client level (server-level)
                 using var cursor = _sourceClient.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
-
-
-                // Initialize change stream documents for each collection
-                foreach (var id in _migrationUnitsToProcess.Keys)
-                {
-                    _migrationUnitsToProcess[id] = 0;
-                    accumulatedChangesInColl[id] = new AccumulatedChangesTracker(id);
-                }
+                               
 
                 if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
@@ -208,7 +208,7 @@ namespace OnlineMongoMigrationProcessor
                             cancellationToken.ThrowIfCancellationRequested();
                             if (ExecutionCancelled) break;
 
-                            var result = await PreProcessChange(change, accumulatedChangesInColl, counter);
+                            var result = await PreProcessChange(change, counter);
                             if (!result.success)
                                 break;
                             counter = result.counter;
@@ -219,12 +219,12 @@ namespace OnlineMongoMigrationProcessor
 
                     try
                     {
-                        await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                        await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                     {
-                        _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync (3.x path): {ex.Message}", LogType.Error);
-                        StopJob($"CRITICAL error in BulkProcessAllChangesAsync (3.x): {ex.Message}");
+                        _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync : {ex.Message}", LogType.Error);
+                        StopJob($"CRITICAL error in BulkProcessAllChangesAsync: {ex.Message}");
                         throw; // Re-throw to stop processing
                     }
 
@@ -248,7 +248,7 @@ namespace OnlineMongoMigrationProcessor
                                 cancellationToken.ThrowIfCancellationRequested();
                                 if (ExecutionCancelled) break;
 
-                                var result = await PreProcessChange(change, accumulatedChangesInColl, counter);
+                                var result = await PreProcessChange(change, counter);
                                 if (!result.success)
                                     break;
                                 counter = result.counter;
@@ -261,7 +261,7 @@ namespace OnlineMongoMigrationProcessor
                         
                         try
                         {
-                            await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                         {
@@ -285,11 +285,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 try
                 {
-                    if (accumulatedChangesInColl != null)
+                    if (_accumulatedChangesPerCollection != null)
                     {
                         try
                         {
-                            await BulkProcessAllChangesAsync(accumulatedChangesInColl);
+                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                         {
@@ -307,7 +307,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        private async Task<(bool success, long counter)> PreProcessChange(ChangeStreamDocument<BsonDocument> change, Dictionary<string, AccumulatedChangesTracker> accumulatedChangesInColl, long counter)
+        private async Task<(bool success, long counter)> PreProcessChange(ChangeStreamDocument<BsonDocument> change, long counter)
         {
             try
             {
@@ -368,20 +368,17 @@ namespace OnlineMongoMigrationProcessor
                 // Get target collection
                 IMongoCollection<BsonDocument> targetCollection = GetTargetCollection(databaseName, collectionName);
 
+                
                 if (_monitorAllCollections)
                 {
-                    //_migrationUnitsToProcess.TryGetValue("DUMMY.DUMMY", out migrationUnit);
                     migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(Helper.GenerateMigrationUnitId("DUMMY", "DUMMY"));
                     migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
-                    if (!accumulatedChangesInColl.ContainsKey(collectionKey))
-                    {
-                        accumulatedChangesInColl[collectionKey] = new AccumulatedChangesTracker(collectionKey);
-                    }
+                    
                 }
 
-
-                // Process the change
-                PreProcessChangeEvent(change, targetCollection, collectionKey, accumulatedChangesInColl[collectionKey], MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun, migrationUnit);
+                var keyForUI= $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
+                InitializeAccumulatedChangesTracker(keyForUI);
+                PreProcessChangeEvent(change, targetCollection, collectionKey, _accumulatedChangesPerCollection[keyForUI], MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun, migrationUnit);
 
                 migrationUnit.CSUpdatesInLastBatch++;
 
@@ -416,6 +413,7 @@ namespace OnlineMongoMigrationProcessor
                     mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                     if (mu != null)
                     {
+                        migrationUnit = mu;
                         var targetCollection = GetTargetCollection(migrationUnit.DatabaseName, migrationUnit.CollectionName);
 
                         if (_monitorAllCollections)

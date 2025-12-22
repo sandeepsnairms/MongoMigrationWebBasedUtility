@@ -61,6 +61,9 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustDumpWorkers(int newCount)
         {
+            if (_coordinator == null)
+                InitializeCoordinator();
+
             MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustDumpWorkers: newCount={newCount}");
             _coordinator.AdjustDumpWorkers(newCount);
         }
@@ -70,6 +73,9 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustRestoreWorkers(int newCount)
         {
+            if (_coordinator == null)
+                InitializeCoordinator();
+
             MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustRestoreWorkers: newCount={newCount}");
             _coordinator.AdjustRestoreWorkers(newCount);
         }
@@ -79,21 +85,29 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public void AdjustInsertionWorkers(int newCount)
         {
+            if (_coordinator == null)
+                InitializeCoordinator();
+
             MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.AdjustInsertionWorkers: newCount={newCount}");
             _coordinator.AdjustInsertionWorkers(newCount);
         }
 
         private void InitializeCoordinator()
         {
+
             MigrationJobContext.AddVerboseLog("DumpRestoreProcessor.InitializeCoordinator: initializing coordinator");
-            // Create instance coordinator with completion callback
-            _coordinator = new MongoDumpRestoreCordinator();
-            _coordinator.Initialize(
-                _jobId,
-                _log,
-                MongoToolsFolder,
-                onMigrationUnitCompleted: OnMigrationUnitCompleted
-            );
+
+            if (_coordinator == null)
+            {
+                // Create instance coordinator with completion callback
+                _coordinator = new MongoDumpRestoreCordinator();
+                _coordinator.Initialize(
+                    _jobId,
+                    _log,
+                    MongoToolsFolder,
+                    onMigrationUnitCompleted: OnMigrationUnitCompleted
+                );
+            }
 
         }
 

@@ -51,7 +51,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (percent > 0)
             {
-               _log.ShowInMonitor($"Document copy for segment [{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
+               _log.ShowInMonitor($"Document copy for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] Progress: {successCount} documents copied, {skippedCount} documents skipped(duplicate), {failureCount} documents failed. Chunk completion percentage: {percent}");
 
                 mu.DumpPercent = basePercent + (percent * contribFactor);
                 mu.RestorePercent = mu.DumpPercent;
@@ -245,8 +245,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                            _log
                        );
 
+                    if(result== TaskResult.Success)
+                    {
+                        break; //completed all pages
+                    }
 
-                    if (result != TaskResult.Success)
+                    if (result != TaskResult.HasMore)
                     {
                         failed = true;
                         break;
@@ -368,7 +372,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 UpdateProgress(segmentId, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
             }
 
-            return TaskResult.Success;
+            return TaskResult.HasMore;
         }
 
         private void LogErrors(List<BulkWriteError> exceptions, string location)

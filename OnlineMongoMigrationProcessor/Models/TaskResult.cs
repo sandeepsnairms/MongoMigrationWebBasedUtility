@@ -13,7 +13,8 @@ namespace OnlineMongoMigrationProcessor.Models
         Retry,
         Abort,
         FailedAfterRetries,
-        Canceled
+        Canceled,
+        HasMore
 
     }
 }

@@ -1822,7 +1822,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 // Collection-level resume token setting
                 mu.ResumeToken = resumeTokenJson;
                 
-                if (!resetCS && string.IsNullOrEmpty(mu.OriginalResumeToken))
+                if (string.IsNullOrEmpty(mu.OriginalResumeToken))
                     mu.OriginalResumeToken = resumeTokenJson;
 
                 mu.CursorUtcTimestamp = timestamp;

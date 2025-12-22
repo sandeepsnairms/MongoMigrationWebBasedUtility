@@ -14,7 +14,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             int maxTries=10,
             int initialDelayMs = 2000)
         {
-            MigrationJobContext.AddVerboseLog($"RetryHelper.ExecuteTask: maxTries={maxTries}, initialDelayMs={initialDelayMs}");
+
             int attempt = 0;
             int delay = initialDelayMs;
 
