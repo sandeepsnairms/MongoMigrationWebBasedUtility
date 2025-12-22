@@ -915,7 +915,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
         }
 
-    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, CancellationToken cts, bool fromOrgin)
+    public async static Task SetChangeStreamResumeTokenAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, int seconds, bool syncBack, CancellationToken cts, bool fromOrgin)
     {
         int retryCount = 0;
         bool isSucessful = false;
@@ -947,7 +947,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         {
                             //try to go 15 min back in time, temporary fix for backward compatibility
                             var start = (mu.ChangeStreamStartedOn ?? DateTime.UtcNow).AddMinutes(-15).ToUniversalTime();
-                            log.WriteLine($"Resetting change stream start time token for {mu.DatabaseName}.{mu.CollectionName} to {start} (UTC)");
+                            log.WriteLine($"Resetting change stream start time for {mu.DatabaseName}.{mu.CollectionName} to {start} (UTC)");
                             var bsonTimestamp = ConvertToBsonTimestamp(start);
                             options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                         }
@@ -981,6 +981,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                 if (mu.CSLastChecked==null || mu.CSLastChecked == DateTime.MinValue)
                                 {
                                     mu.CSLastChecked = mu.ChangeStreamStartedOn.Value;
+                                    log.WriteLine($"Collection-level CSLastChecked for {mu.DatabaseName}.{mu.CollectionName} set to {mu.CSLastChecked}", LogType.Debug);
                                 }
 
                                 var start = (mu.CSLastChecked ?? DateTime.UtcNow).ToUniversalTime();                                
@@ -993,20 +994,22 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
                     }
 
-                    //new way to get resume token
-                    //On MongoDB 4.0+, the WatchChangeStreamAsync method opens a change stream and waits for changes.
+                    
                     //On MongoDB 3.6, TailOplogAsync opens a tailable cursor on the oplog, filtering on namespace and timestamp to detect new operations.
                     if (!string.IsNullOrEmpty(job.SourceServerVersion) && job.SourceServerVersion.StartsWith("3"))
                     {
-                        if (!await TailOplogAsync(client, mu.DatabaseName, mu.CollectionName, mu, cts) && !resetCS)
+                        isSucessful = !await TailOplogAsync(client, mu.DatabaseName, mu.CollectionName, mu, cts);
+                        if(isSucessful)
                         {
-                            //if failed to tail oplog, fallback to watching change stream infinelty. Should be called async only
-                            await WatchChangeStreamUntilChangeAsync(log, client, job, mu, collection, options, resetCS, -1, cts, useServerLevel);
+                            ResetCounters(mu, syncBack);
                         }
                     }
-                    else
-                        await WatchChangeStreamUntilChangeAsync(log, client, job, mu, collection, options, resetCS, seconds, cts, useServerLevel);
-                    //end of new way to get resume token
+
+                    
+                    // WatchChangeStreamAsync method opens a change stream and waits for changes.
+                    if (!isSucessful)
+                        await WatchChangeStreamUntilChangeAsync(log, client, job, mu, collection, options, resetCS, seconds, syncBack, cts, useServerLevel);
+
 
                     isSucessful = true;
                 }
@@ -1030,11 +1033,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                             if (!string.IsNullOrEmpty(mu.OriginalResumeToken))
                             {
                                 mu.ResumeToken = mu.OriginalResumeToken;
-                                log.WriteLine($"No changes detected in {mu.DatabaseName}.{mu.CollectionName} during {seconds}s timeout window. ResumeToken reset to OriginalResumeToken.", LogType.Info);
+                                log.WriteLine($"While CS reset no changes detected in {mu.DatabaseName}.{mu.CollectionName} during {seconds}s timeout window. ResumeToken reset to OriginalResumeToken.", LogType.Info);
                             }
                             else
                             {
-                                log.WriteLine($"No changes detected in {mu.DatabaseName}.{mu.CollectionName} during {seconds}s timeout window. No OriginalResumeToken available - will start fresh on next change.", LogType.Info);
+                                log.WriteLine($"While CS reset no changes detected in {mu.DatabaseName}.{mu.CollectionName} during {seconds}s timeout window. No OriginalResumeToken available.", LogType.Info);
                             }
                             isSucessful = true; // Exit retry loop - timeout is expected and handled
                         }
@@ -1087,7 +1090,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         return;
     }
 
-    private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool forced, int seconds, CancellationToken manualCts, bool useServerLevel = false)
+    private static async Task WatchChangeStreamUntilChangeAsync(Log log, MongoClient client, MigrationJob job, MigrationUnit mu, IMongoCollection<BsonDocument> collection, ChangeStreamOptions options, bool forced, int seconds, bool syncBack, CancellationToken manualCts, bool useServerLevel = false)
     {
         var pipeline = new BsonDocument[] { };
         if (job.JobType == JobType.RUOptimizedCopy)
@@ -1194,7 +1197,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                 if (migrationUnit != null && Helper.IsMigrationUnitValid(migrationUnit))
                                 {
                                     // Use common function for server-level resume token setting
-                                    SetResumeTokenProperties(job, change, forced, databaseName, collectionName);
+                                    SetResumeTokenProperties(job, change, forced,syncBack,log, databaseName, collectionName);
                                     log.WriteLine($"Server-level resume token set for job {job.Id} with collection key {job.ResumeCollectionKey}");
                                     // Exit immediately after first change detected
                                     return;
@@ -1203,7 +1206,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                             else
                             {
                                 // Use common function for collection-level resume token setting
-                                SetResumeTokenProperties(mu, change, forced);
+                                SetResumeTokenProperties(mu, change, forced, syncBack,log);
 
                                 MigrationJobContext.AddVerboseLog($"Collection-level resume token set for {mu.DatabaseName}.{mu.CollectionName} - Operation: {mu.ResumeTokenOperation}, DocumentId: {mu.ResumeDocumentId}");
 
@@ -1771,7 +1774,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <param name="resetCS">Whether this is a change stream reset operation</param>
         /// <param name="databaseName">Database name for server-level operations</param>
         /// <param name="collectionName">Collection name for server-level operations</param>
-        private static void SetResumeTokenProperties(object target, ChangeStreamDocument<BsonDocument> change, bool resetCS, string? databaseName = null, string? collectionName = null)
+        private static void SetResumeTokenProperties(object target, ChangeStreamDocument<BsonDocument> change, bool resetCS, bool syncBack, Log log, string? databaseName = null, string? collectionName = null )
         {
             string resumeTokenJson = change.ResumeToken.ToJson();
             string documentKeyJson = change.DocumentKey.ToJson();
@@ -1831,8 +1834,40 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 if (resetCS)
                 {
                     mu.ResetChangeStream = false;
+
+                    ResetCounters(mu,syncBack);
+                    log.WriteLine($"Counters reset for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                 }
                 MigrationJobContext.SaveMigrationUnit(mu,true);
+            }
+        }
+
+
+        private static void ResetCounters(MigrationUnit mu, bool syncBack)
+        {
+            MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.ResetCounters: muId={mu.Id}, syncBack={syncBack}");
+
+            if (!syncBack)
+            {
+                mu.CSDocsUpdated = 0;
+                mu.CSDocsInserted = 0;
+                mu.CSDocsDeleted = 0;
+                mu.CSDuplicateDocsSkipped = 0;
+
+                mu.CSDInsertEvents = 0;
+                mu.CSDeleteEvents = 0;
+                mu.CSUpdateEvents = 0;
+            }
+            else
+            {
+                mu.SyncBackDocsUpdated = 0;
+                mu.SyncBackDocsInserted = 0;
+                mu.SyncBackDocsDeleted = 0;
+                mu.SyncBackDuplicateDocsSkipped = 0;
+
+                mu.SyncBackInsertEvents = 0;
+                mu.SyncBackDeleteEvents = 0;
+                mu.SyncBackUpdateEvents = 0;
             }
         }
 

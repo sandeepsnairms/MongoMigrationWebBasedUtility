@@ -1,17 +1,19 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Linq;
-using OnlineMongoMigrationProcessor.Helpers.Mongo;
-using OnlineMongoMigrationProcessor.Context;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 namespace OnlineMongoMigrationProcessor.Workers
@@ -222,90 +224,35 @@ namespace OnlineMongoMigrationProcessor.Workers
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
             MigrationJobContext.SaveMigrationUnit(mu,false);
 
+            var querySuccess = false;
             try
             {
                 bool failed = false;
                 int pageIndex = 0;
                 List<BsonDocument> set = new List<BsonDocument>();
-
+                
 
                 segment.ResultDocCount =0;
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    try
-                    {
-                        // 1. Fetch documents from source
-                        set = await _sourceCollection.Aggregate()
-                            .Match(combinedFilter)
-                            .Skip(pageIndex * _pageSize)
-                            .Limit(_pageSize)
-                            .ToListAsync(cancellationToken);
-                        
+                    TaskResult result = await new RetryHelper().ExecuteTask(
+                           () => ProcessSegmentPageAsync(segment, combinedFilter, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, errors, cancellationToken, isWriteSimulated, segmentId, pageIndex),
+                           (ex, attemptCount, currentBackoff) => ProcessSegmentExceptionHandler(
+                               ex, attemptCount,
+                               $"Processing segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}], Page {pageIndex}", currentBackoff
+                           ),
+                           _log
+                       );
 
-                        if (set.Count == 0)
-                            break;
 
-                        // 2. Write to target (unless simulated)
-                        if (!isWriteSimulated)
-                        {
-                            await WriteDocumentsToTarget(set, segment, cancellationToken);
-                        }
-                        else
-                        {
-                            Interlocked.Add(ref _successCount, set.Count);
-                        }
-                    }
-                    catch (MongoBulkWriteException<BsonDocument> ex)
+                    if (result != TaskResult.Success)
                     {
-                        HandleBulkWriteException(ex, segment, mu, migrationChunkIndex, segmentId);
-                    }
-                    catch (OutOfMemoryException ex)
-                    {
-                        _log.WriteLine(
-                            $"Encountered Out Of Memory exception for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize. Details: {ex}",
-                            LogType.Error);
-                        return TaskResult.Retry;
-                    }
-                    catch (Exception ex) when (ex.ToString().Contains("canceled."))
-                    {
-                        _log.WriteLine($"Document copy operation for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] was canceled.");
-                        return TaskResult.Canceled;
-                    }
-                    catch (Exception ex)
-                    {
-                        var command = string.Empty;
-                        if(ex is MongoCommandException)
-                        {
-                            try
-                            {
-                                // Properly render the filter to BsonDocument before converting to JSON
-                                var serializerRegistry = BsonSerializer.SerializerRegistry;
-                                var documentSerializer = serializerRegistry.GetSerializer<BsonDocument>();
-                                var renderedFilter = combinedFilter.Render(new RenderArgs<BsonDocument>(documentSerializer, serializerRegistry));
-                                command = $"combinedFilter: {renderedFilter.ToJson()}, pageIndex: {pageIndex} , pageSize: {_pageSize}";
-                            }
-                            catch
-                            {
-                                // If rendering fails, provide a safe fallback
-                                command = $"combinedFilter: [Unable to render filter], pageIndex: {pageIndex} , pageSize: {_pageSize}";
-                            }
-                        }
-                        errors.Add(ex);
-                        _log.WriteLine(
-                            $"Batch processing error encountered during document copy of segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Details: {ex}. {command}",
-                            LogType.Error);
                         failed = true;
-                    }
-                    finally
-                    {
-                        UpdateProgress(segmentId,  mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
-                        pageIndex++;
-                    }
-
-                    if (failed)
                         break;
-                }
+                    }
+                    pageIndex++;
+                }                
 
                 if (!cancellationToken.IsCancellationRequested)
                 {
@@ -336,7 +283,93 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
+        private Task<TaskResult> ProcessSegmentExceptionHandler(Exception ex, int attemptCount, string processName, int currentBackoff)
+        {
+            _log.WriteLine($"{processName} attempt {attemptCount} failed. Error details:{ex}. Retrying in {currentBackoff} seconds...", LogType.Error);
+            return Task.FromResult(TaskResult.Retry);
+        }
 
+
+        private async Task<TaskResult> ProcessSegmentPageAsync(Segment segment,
+            FilterDefinition<BsonDocument> combinedFilter,
+            MigrationUnit mu,
+            int migrationChunkIndex,
+            double basePercent,
+            double contribFactor,
+            long targetCount,
+            ConcurrentBag<Exception> errors,
+            CancellationToken cancellationToken,
+            bool isWriteSimulated,
+            string segmentId,
+            int pageIndex)
+        {
+            var querySuccess = false;
+            try
+            {
+                querySuccess = false;
+
+                // 1. Fetch documents from source
+                var set = await _sourceCollection.Aggregate()
+                    .Match(combinedFilter)
+                    .Skip(pageIndex * _pageSize)
+                    .Limit(_pageSize)
+                    .ToListAsync(cancellationToken);
+
+                querySuccess = true;
+
+                if (set.Count == 0)
+                    return TaskResult.Success;
+
+                // 2. Write to target (unless simulated)
+                if (!isWriteSimulated)
+                {
+                    var writeResult = await WriteDocumentsToTarget(set, segment, cancellationToken);
+                    if (writeResult == TaskResult.Canceled)
+                    {
+                        return TaskResult.Canceled;
+                    }
+                }
+                else
+                {
+                    Interlocked.Add(ref _successCount, set.Count);
+                }
+            }
+            catch (MongoBulkWriteException<BsonDocument> ex)
+            {
+                HandleBulkWriteException(ex, segment, mu, migrationChunkIndex, segmentId);
+            }
+            catch (OutOfMemoryException ex)
+            {
+                _log.WriteLine(
+                    $"Encountered Out Of Memory exception for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Try reducing _pageSize. Details: {ex}",
+                    LogType.Error);
+                return TaskResult.Retry;
+            }
+            catch (Exception ex) when (ex.ToString().Contains("canceled."))
+            {
+                _log.WriteLine($"Document copy operation for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] was canceled.");
+                return TaskResult.Canceled;
+            }
+            catch (Exception ex)
+            {
+                if (!querySuccess)
+                {
+                    _log.WriteLine($"Error in fetching documents for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}] during command execution.", LogType.Warning);
+                    return TaskResult.Retry;
+                }
+                errors.Add(ex);
+                _log.WriteLine(
+                    $"Batch processing error encountered during document copy of segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]. Details: {ex}.",
+                    LogType.Error);
+                return TaskResult.Retry;
+            }
+            finally
+            {
+                UpdateProgress(segmentId, mu, migrationChunkIndex, basePercent, contribFactor, targetCount, _successCount, _failureCount, _skippedCount);
+            }
+
+            return TaskResult.Success;
+        }
 
         private void LogErrors(List<BulkWriteError> exceptions, string location)
         {
@@ -572,49 +605,81 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success;
         }
 
-        private async Task WriteDocumentsToTarget(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        private async Task<TaskResult> WriteDocumentsToTarget(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return TaskResult.Canceled;
+            }
 
             if (!MongoHelper.IsCosmosRUEndpoint(_targetCollection))
             {
-                await WriteBulkDocuments(documents, segment, cancellationToken);
+                return await WriteBulkDocuments(documents, segment, cancellationToken);
             }
             else
             {
-                await WriteDocumentsWithInsertMany(documents, segment, cancellationToken);
+                return await WriteDocumentsWithInsertMany(documents, segment, cancellationToken);
             }
         }
 
-        private async Task WriteBulkDocuments(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        private async Task<TaskResult> WriteBulkDocuments(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
             MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.WriteBulkDocuments: documents.Count={documents.Count}, segmentId={segment.Id}");
 
-            var insertModels = documents.Select(doc =>
+            if (cancellationToken.IsCancellationRequested)
             {
-                if (doc.Contains("_id") && doc["_id"].IsObjectId)
-                    doc["_id"] = doc["_id"].AsObjectId;
-                return new InsertOneModel<BsonDocument>(doc);
-            }).ToList();
+                return TaskResult.Canceled;
+            }
 
-            var result = await _targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false }, cancellationToken);
-            Interlocked.Add(ref _successCount, result.InsertedCount);
-            segment.ResultDocCount += result.InsertedCount;
+            try
+            {
+                var insertModels = documents.Select(doc =>
+                {
+                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                        doc["_id"] = doc["_id"].AsObjectId;
+                    return new InsertOneModel<BsonDocument>(doc);
+                }).ToList();
+
+                var result = await _targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false }, cancellationToken);
+                Interlocked.Add(ref _successCount, result.InsertedCount);
+                segment.ResultDocCount += result.InsertedCount;
+                
+                return TaskResult.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                return TaskResult.Canceled;
+            }
         }
 
-        private async Task WriteDocumentsWithInsertMany(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
+        private async Task<TaskResult> WriteDocumentsWithInsertMany(List<BsonDocument> documents, Segment segment, CancellationToken cancellationToken)
         {
             MigrationJobContext.AddVerboseLog($"DocumentCopyWorker.WriteDocumentsWithInsertMany: documents.Count={documents.Count}, segmentId={segment.Id}");
 
-            var docsToInsert = documents.Select(doc =>
+            if (cancellationToken.IsCancellationRequested)
             {
-                if (doc.Contains("_id") && doc["_id"].IsObjectId)
-                    doc["_id"] = doc["_id"].AsObjectId;
-                return doc;
-            }).ToList();
+                return TaskResult.Canceled;
+            }
 
-            await _targetCollection.InsertManyAsync(docsToInsert, new InsertManyOptions { IsOrdered = false }, cancellationToken);
-            Interlocked.Add(ref _successCount, docsToInsert.Count);
-            segment.ResultDocCount += docsToInsert.Count;
+            try
+            {
+                var docsToInsert = documents.Select(doc =>
+                {
+                    if (doc.Contains("_id") && doc["_id"].IsObjectId)
+                        doc["_id"] = doc["_id"].AsObjectId;
+                    return doc;
+                }).ToList();
+
+                await _targetCollection.InsertManyAsync(docsToInsert, new InsertManyOptions { IsOrdered = false }, cancellationToken);
+                Interlocked.Add(ref _successCount, docsToInsert.Count);
+                segment.ResultDocCount += docsToInsert.Count;
+                
+                return TaskResult.Success;
+            }
+            catch (OperationCanceledException)
+            {
+                return TaskResult.Canceled;
+            }
         }
 
         private void HandleBulkWriteException(

@@ -39,8 +39,8 @@ namespace OnlineMongoMigrationProcessor.Workers
         private MongoClient? _sourceClient;
         private MigrationProcessor? _migrationProcessor;
         public MigrationSettings? _config;
+        bool _syncBack = false;
 
-       
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
 
@@ -371,9 +371,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success;
         }
 
-        private async Task<TaskResult> SetResumeTokens(MigrationUnit mu, CancellationToken _cts, List<Task> resumeTokenTasks)
+        private async Task<TaskResult> SetCollectionResumeToken(MigrationUnit mu, bool syncBack, CancellationToken _cts, List<Task> resumeTokenTasks)
         {
-            _log.WriteLine($"SetResumeTokens called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Debug);
+            _log.WriteLine($"SetCollectionResumeToken called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Debug);
             bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
             if (useServerLevel)
             {
@@ -381,43 +381,36 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return TaskResult.Success; //server-level handled separately
             }
 
-            // For collection-level, set up resume token for each collection (original behavior)
-            if (mu.ResetChangeStream)
+            // For collection-level, set up resume token for each collection
+            int durationSeconds =60;          
+
+            _log.WriteLine($"Asynchronous resume token setup initiated ({durationSeconds}s timeout) for {mu.DatabaseName}.{mu.CollectionName}. Reset CS {mu.ResetChangeStream}", LogType.Debug);                
+            string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
+            try
             {
-                //if reset CS need to get the latest CS resume token synchronously
-                _log.WriteLine($"Resetting change stream for {mu.DatabaseName}.{mu.CollectionName}.", LogType.Info);
-                await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, _cts,false);
-                _log.WriteLine($"Synchronous resume token setup completed for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
-            }
-            else
-            {
-                _log.WriteLine($"Asynchronous resume token setup initiated (300s timeout) for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);                
-                string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
-                try
+                _log.WriteLine($"Calling SetChangeStreamResumeTokenAsync as async for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                var task = Task.Run(async () =>
                 {
-                    _log.WriteLine($"Calling SetChangeStreamResumeTokenAsync as async for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
-                    var task = Task.Run(async () =>
+                    try
                     {
-                        try
-                        {
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,true);                            
-                        }
-                        catch (Exception ex)
-                        {
-                            _log.WriteLine($"Error in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
-                        }
-                    });
+                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts,true);                            
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"Error in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
+                    }
+                });
                     
-                    // Store task in dictionary by collection key
-                    _resumeTokenTasksByCollection[collectionKey] = task;
-                    // Also add to list for tracking
-                    resumeTokenTasks.Add(task);
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"ERROR creating async task for SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
-                }
+                // Store task in dictionary by collection key
+                _resumeTokenTasksByCollection[collectionKey] = task;
+                // Also add to list for tracking
+                resumeTokenTasks.Add(task);
             }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error creating async task for SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
+            }
+            
            
             return TaskResult.Success;
         }
@@ -425,17 +418,18 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> PreparePartitionsAsync(CancellationToken _cts, bool skipPartitioning)
         {
             _log.WriteLine($"PreparePartitionsAsync started - SkipPartitioning: {skipPartitioning}", LogType.Debug);
-            bool checkedCS = false;
-            bool serverLevelResumeTokenSet = false; // Track if server-level resume token has been set
-            List<Task> resumeTokenTasks = new List<Task>(); // Track all async resume token setup tasks
             
-            if (MigrationJobContext.CurrentlyActiveJob == null || _sourceClient == null)
+            var validationResult = ValidateAndInitialize();
+            if (!validationResult.IsValid)
                 return TaskResult.FailedAfterRetries;
 
-            // Determine if we should use server-level processing
-            bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
-            _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel}, JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Debug);
-
+            var prepContext = new PartitionPrepContext
+            {
+                CheckedCS = false,
+                ServerLevelResumeTokenSet = false,
+                UseServerLevel = validationResult.UseServerLevel,
+                SkipPartitioning = skipPartitioning
+            };
 
             var unitsForPrep = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
 
@@ -446,165 +440,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (HandleControlPause())
                     return TaskResult.Canceled;
 
-                if (mu.SourceStatus == CollectionStatus.IsView)
-                    continue;
-
-                bool checkExist;
-                if (MigrationJobContext.CurrentlyActiveJob.JobType== JobType.RUOptimizedCopy)
-                    checkExist = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, mu.DatabaseName, mu.CollectionName);
-                else
-                    checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, mu.DatabaseName, mu.CollectionName);
-
-                bool isCollection = true;
-                if (checkExist)
-                {
-                    (bool Exits, bool IsCollection) ret;
-                    try
-                    {
-                        ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient, mu.DatabaseName, mu.CollectionName); //fails if connnected to secondary
-                        isCollection = checkExist && ret.Item2;
-                    }
-                    catch
-                    {
-                        isCollection=true;
-                    }                   
-
-                    if (isCollection == false)
-                    {
-                        mu.SourceStatus = CollectionStatus.IsView;
-                        _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);                        
-                        continue;
-                    }
-                }
-                else
-                    mu.SourceStatus = CollectionStatus.Unknown;
-
-
-                if (checkExist && isCollection)
-                {
-                    mu.SourceStatus = CollectionStatus.OK;
-
-                    MigrationJobContext.SaveMigrationUnit(mu,true);
-
-                    if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
-                    {
-
-                        var db = _sourceClient!.GetDatabase(mu.DatabaseName);
-                        var coll = db.GetCollection<BsonDocument>(mu.CollectionName);
-
-                        mu.EstimatedDocCount = coll.EstimatedDocumentCount();
-
-                        _ = Task.Run(() =>
-                        {
-                            long count = MongoHelper.GetActualDocumentCount(coll, mu);
-                            mu.ActualDocCount = count;
-                            MigrationJobContext.SaveMigrationUnit(mu,false);
-                        }, _cts);
-
-                    }
-
-                    
-
-                    if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
-                    {
-                        // Handle server-level vs collection-level change stream resume token setup
-                        if (useServerLevel)
-                        {
-                            // For server-level, only set up resume token once per job
-                            if (!serverLevelResumeTokenSet)
-                            {
-                                // For server-level streams, Currently not supported reset of server-level streams
-
-                                // Run server-level resume token setup async, but only once
-                                _log.WriteLine($"Setting up server-level change stream resume token for job {MigrationJobContext.CurrentlyActiveJob.Id}.");
-                                _ = Task.Run(async () =>
-                                {
-                                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, _cts,false);
-                                });
-
-                                serverLevelResumeTokenSet = true;
-
-                            }
-
-                        }
-                       
-                    }
-
-                    if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
-                    {                     
-
-                        if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && !MigrationJobContext.CurrentlyActiveJob.AppendMode && !mu.TargetCreated)
-                        {
-                            var database = _sourceClient!.GetDatabase(mu.DatabaseName);
-                            var collection = database.GetCollection<BsonDocument>(mu.CollectionName);
-                            if (string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
-                                return TaskResult.FailedAfterRetries;
-                            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
-
-                            if (_cts.IsCancellationRequested)
-                                return TaskResult.Canceled;
-
-                            if (!result)
-                            {
-                                return TaskResult.Retry;
-                            }
-                            MigrationJobContext.SaveMigrationUnit(mu,false);
-                            if (MigrationJobContext.CurrentlyActiveJob.SyncBackEnabled && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && !checkedCS)
-                            {
-                                _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
-
-                                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], mu, true);
-                                checkedCS = true;
-                                if (!retValue.IsCSEnabled)
-                                {
-                                    return TaskResult.Abort;
-                                }
-                            }
-
-                        }
-
-                        
-                        if (!skipPartitioning)
-                        {
-                            var ret= await CreatePartitionsAsync(mu, _cts); 
-                            if(ret!= TaskResult.Success)
-                                return ret;
-                        }
-
-                        
-
-                    }
-
-                }
-                else
-                {
-                    if (!_cts.IsCancellationRequested)
-                    {
-                        if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && !MigrationJobContext.CurrentlyActiveJob.AppendMode && !mu.TargetCreated)
-                        {
-                            try
-                            {
-                                //try creating empty collection with necessary indexes.
-                                var database = _sourceClient!.GetDatabase(mu.DatabaseName);
-                                var collection = database.GetCollection<BsonDocument>(mu.CollectionName);
-                                var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
-                            }
-                            catch
-                            {
-                                //do nothing
-                            }
-                        }
-                        mu.SourceStatus = CollectionStatus.NotFound;
-                        _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} does not exist on source", LogType.Error);
-                        MigrationJobContext.SaveMigrationUnit(mu,true);
-                        //return TaskResult.Success;
-                    }
-                    else
-                        return TaskResult.Canceled;
-                }
-                
-                
-                MigrationJobContext.SaveMigrationUnit(mu,false);
+                var result = await ProcessMigrationUnitAsync(mu, prepContext, _cts);
+                if (result != TaskResult.Success)
+                    return result;
             }
             
             // Note: No need to wait for all resume token tasks here.
@@ -614,7 +452,219 @@ namespace OnlineMongoMigrationProcessor.Workers
             return TaskResult.Success;
         }
 
-        private async Task<TaskResult> MigrateJobCollections(CancellationToken ctsToken)
+        private (bool IsValid, bool UseServerLevel) ValidateAndInitialize()
+        {
+            if (MigrationJobContext.CurrentlyActiveJob == null || _sourceClient == null)
+                return (false, false);
+
+            // Determine if we should use server-level processing
+            bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server 
+                && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
+            
+            _log.WriteLine($"Change stream level determination - UseServerLevel: {useServerLevel}, ChangeStreamLevel: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel}, JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Debug);
+
+            return (true, useServerLevel);
+        }
+
+        private async Task<TaskResult> ProcessMigrationUnitAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+        {
+            if (mu.SourceStatus == CollectionStatus.IsView)
+                return TaskResult.Success;
+
+            var collectionStatus = await ValidateCollectionExistsAsync(mu, _cts);
+            
+            if (collectionStatus == CollectionValidationResult.NotFound)
+            {
+                return await HandleMissingCollectionAsync(mu, _cts);
+            }
+            else if (collectionStatus == CollectionValidationResult.IsView)
+            {
+                return TaskResult.Success;
+            }
+            else if (collectionStatus == CollectionValidationResult.Valid)
+            {
+                mu.SourceStatus = CollectionStatus.OK;
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                await UpdateDocumentCountsAsync(mu, _cts);
+                await SetupServerLevelResumeTokenAsync(mu, context, _cts);
+
+                if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
+                {
+                    var prepResult = await PrepareTargetCollectionAsync(mu, context, _cts);
+                    if (prepResult != TaskResult.Success)
+                        return prepResult;
+
+                    if (!context.SkipPartitioning)
+                    {
+                        var partResult = await CreatePartitionsAsync(mu, _cts);
+                        if (partResult != TaskResult.Success)
+                            return partResult;
+                    }
+                }
+            }
+
+            MigrationJobContext.SaveMigrationUnit(mu, false);
+            return TaskResult.Success;
+        }
+
+        private async Task<CollectionValidationResult> ValidateCollectionExistsAsync(MigrationUnit mu, CancellationToken _cts)
+        {
+            bool checkExist;
+            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
+                checkExist = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, mu.DatabaseName, mu.CollectionName);
+            else
+                checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, mu.DatabaseName, mu.CollectionName);
+
+            if (!checkExist)
+            {
+                mu.SourceStatus = CollectionStatus.Unknown;
+                return CollectionValidationResult.NotFound;
+            }
+
+            bool isCollection = true;
+            try
+            {
+                var ret = await MongoHelper.CheckIsCollectionAsync(_sourceClient, mu.DatabaseName, mu.CollectionName);
+                isCollection = checkExist && ret.Item2;
+            }
+            catch
+            {
+                isCollection = true;
+            }
+
+            if (!isCollection)
+            {
+                mu.SourceStatus = CollectionStatus.IsView;
+                _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);
+                return CollectionValidationResult.IsView;
+            }
+
+            return CollectionValidationResult.Valid;
+        }
+
+        private async Task UpdateDocumentCountsAsync(MigrationUnit mu, CancellationToken _cts)
+        {
+            if (mu.MigrationChunks != null && mu.MigrationChunks.Count > 0)
+                return;
+
+            var db = _sourceClient!.GetDatabase(mu.DatabaseName);
+            var coll = db.GetCollection<BsonDocument>(mu.CollectionName);
+
+            mu.EstimatedDocCount = coll.EstimatedDocumentCount();
+
+            _ = Task.Run(() =>
+            {
+                long count = MongoHelper.GetActualDocumentCount(coll, mu);
+                mu.ActualDocCount = count;
+                MigrationJobContext.SaveMigrationUnit(mu, false);
+            }, _cts);
+        }
+
+        private async Task SetupServerLevelResumeTokenAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+        {
+            if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+                return;
+
+            if (context.UseServerLevel && !context.ServerLevelResumeTokenSet)
+            {
+                _log.WriteLine($"Setting up server-level change stream resume token for job {MigrationJobContext.CurrentlyActiveJob.Id}.");
+                _ = Task.Run(async () =>
+                {
+                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, false, _cts, false);
+                });
+
+                context.ServerLevelResumeTokenSet = true;
+            }
+        }
+
+        private async Task<TaskResult> PrepareTargetCollectionAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+        {
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun || MigrationJobContext.CurrentlyActiveJob.AppendMode || mu.TargetCreated)
+                return TaskResult.Success;
+
+            var database = _sourceClient!.GetDatabase(mu.DatabaseName);
+            var collection = database.GetCollection<BsonDocument>(mu.CollectionName);
+            
+            if (string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
+                return TaskResult.FailedAfterRetries;
+            
+            var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, 
+                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], 
+                collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
+
+            if (_cts.IsCancellationRequested)
+                return TaskResult.Canceled;
+
+            if (!result)
+                return TaskResult.Retry;
+
+            MigrationJobContext.SaveMigrationUnit(mu, false);
+
+            if (MigrationJobContext.CurrentlyActiveJob.SyncBackEnabled && 
+                !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && 
+                Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && 
+                !context.CheckedCS)
+            {
+                _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
+                var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, 
+                    MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], mu, true);
+                
+                context.CheckedCS = true;
+                
+                if (!retValue.IsCSEnabled)
+                    return TaskResult.Abort;
+            }
+
+            return TaskResult.Success;
+        }
+
+        private async Task<TaskResult> HandleMissingCollectionAsync(MigrationUnit mu, CancellationToken _cts)
+        {
+            if (_cts.IsCancellationRequested)
+                return TaskResult.Canceled;
+
+            if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && 
+                !MigrationJobContext.CurrentlyActiveJob.AppendMode && 
+                !mu.TargetCreated)
+            {
+                try
+                {
+                    var database = _sourceClient!.GetDatabase(mu.DatabaseName);
+                    var collection = database.GetCollection<BsonDocument>(mu.CollectionName);
+                    await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, 
+                        MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], 
+                        collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
+                }
+                catch
+                {
+                    // Intentionally empty - best effort attempt
+                }
+            }
+
+            mu.SourceStatus = CollectionStatus.NotFound;
+            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} does not exist on source", LogType.Error);
+            MigrationJobContext.SaveMigrationUnit(mu, true);
+
+            return TaskResult.Success;
+        }
+
+        private class PartitionPrepContext
+        {
+            public bool CheckedCS { get; set; }
+            public bool ServerLevelResumeTokenSet { get; set; }
+            public bool UseServerLevel { get; set; }
+            public bool SkipPartitioning { get; set; }
+        }
+
+        private enum CollectionValidationResult
+        {
+            Valid,
+            NotFound,
+            IsView
+        }
+
+        private async Task<TaskResult> MigrateJobCollections(bool syncBack,CancellationToken ctsToken)
         {
             _log.WriteLine("MigrateJobCollections started", LogType.Debug);
 
@@ -634,7 +684,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {mub.DatabaseName}.{mub.CollectionName}");
 
-                var result = await ProcessMigrationUnitAsync(mub, ctsToken, resumeTokenTasks);
+                var result = await ProcessMigrationUnitAsync(mub, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
 
@@ -653,6 +703,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> ProcessMigrationUnitAsync(
             MigrationUnitBasic mub,
+            bool syncBack,
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
@@ -685,7 +736,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             await ValidateTargetCollectionExistsAsync(migrationUnit);
 
             MigrationJobContext.AddVerboseLog($"Before ExecuteMigrationForUnitAsync {migrationUnit.Id}");
-            return await ExecuteMigrationForUnitAsync(migrationUnit, ctsToken, resumeTokenTasks);
+            return await ExecuteMigrationForUnitAsync(migrationUnit,  syncBack, ctsToken, resumeTokenTasks);
         }
 
         private async Task<(bool exists, bool isCollection)> ValidateSourceCollectionAsync(MigrationUnit migrationUnit)
@@ -745,6 +796,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> ExecuteMigrationForUnitAsync(
             MigrationUnit migrationUnit,
+            bool syncBack,
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
@@ -761,7 +813,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob!))
             {
-                var setResumeResult = await SetResumeTokens(migrationUnit, ctsToken, resumeTokenTasks);
+                var setResumeResult = await SetCollectionResumeToken(migrationUnit,syncBack, ctsToken, resumeTokenTasks);
                 if (setResumeResult != TaskResult.Success)
                     return setResumeResult;
             }
@@ -962,7 +1014,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (HandleControlPause())
                     return;
 
-                await ExecuteMigrationAsync();
+                await ExecuteMigrationAsync(_syncBack);
             }
             catch (Exception ex)
             {
@@ -1161,11 +1213,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
-        private async Task ExecuteMigrationAsync()
+        private async Task ExecuteMigrationAsync(bool syncBack)
         {
             _log.WriteLine("Starting MigrateJobCollections.", LogType.Debug);
             TaskResult result = await new RetryHelper().ExecuteTask(
-                () => MigrateJobCollections(_cts.Token),
+                () => MigrateJobCollections(syncBack,_cts.Token),
                 (ex, attemptCount, currentBackoff) => MigrateCollections_ExceptionHandler(
                     ex, attemptCount,
                     "Migrate collections", currentBackoff
@@ -1237,6 +1289,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             _migrationProcessor = null;
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
             _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!, this);
+            _syncBack = true;
             _migrationProcessor.ProcessRunning = true;
             JobStarting = false;
             var dummyUnit = new MigrationUnit(MigrationJobContext.CurrentlyActiveJob,"", "", new List<MigrationChunk>());

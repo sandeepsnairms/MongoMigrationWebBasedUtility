@@ -374,33 +374,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        protected void ResetCounters(MigrationUnit mu)
-        {
-            MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.ResetCounters: muId={mu.Id}, syncBack={_syncBack}");
-
-            if (!_syncBack)
-            {
-                mu.CSDocsUpdated = 0;
-                mu.CSDocsInserted = 0;
-                mu.CSDocsDeleted = 0;
-                mu.CSDuplicateDocsSkipped = 0;
-
-                mu.CSDInsertEvents = 0;
-                mu.CSDeleteEvents = 0;
-                mu.CSUpdateEvents = 0;
-            }
-            else
-            {
-                mu.SyncBackDocsUpdated = 0;
-                mu.SyncBackDocsInserted = 0;
-                mu.SyncBackDocsDeleted = 0;
-                mu.SyncBackDuplicateDocsSkipped = 0;
-
-                mu.SyncBackInsertEvents = 0;
-                mu.SyncBackDeleteEvents = 0;
-                mu.SyncBackUpdateEvents = 0;
-            }
-        }
+        
 
         protected async Task BulkProcessChangesAsync(
             MigrationUnit mu,

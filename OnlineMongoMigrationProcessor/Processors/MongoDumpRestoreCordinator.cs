@@ -1323,7 +1323,7 @@ namespace OnlineMongoMigrationProcessor
             string colName)
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.BuildRestoreArguments: collection={dbName}.{colName}, chunkIndex={chunkIndex}");
-            string args = $" --uri=\"{targetConnectionString}\" --gzip --archive";
+            string args = $" --uri=\"{targetConnectionString}\" --gzip --archive --noIndexRestore";
 
             //removed as we built indexes and collections earlier
             /*

@@ -158,7 +158,7 @@ while ($attemptCount -lt $maxAttempts -and -not $isReady) {
                 
                 # Verify all conditions are met
                 $imageMatches = $currentImage -eq $imageName
-                $statesOk = ($runningState -eq "Running") -and ($provisioningState -eq "Provisioned") -and ($healthState -eq "Healthy")
+                $statesOk = ($runningState -eq "RunningAtMaxScale") -and ($provisioningState -eq "Provisioned") -and ($healthState -eq "Healthy")
                 $correctReplicaCount = $activeReplicaCount -eq $expectedReplicaCount
                 
                 if ($imageMatches -and $statesOk -and $correctReplicaCount) {
@@ -169,6 +169,7 @@ while ($attemptCount -lt $maxAttempts -and -not $isReady) {
                     Write-Host "  Health state: $healthState" -ForegroundColor Green
                     Write-Host "  Active replicas: $activeReplicaCount (expected: $expectedReplicaCount)" -ForegroundColor Green
                     Write-Host "  Image verified: $currentImage" -ForegroundColor Green
+                    break
                 } else {
                     if (-not $imageMatches) {
                         Write-Host "  Waiting for new image to be deployed..." -ForegroundColor Yellow
