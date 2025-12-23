@@ -2,9 +2,9 @@
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Partitioner;
-using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -15,6 +15,7 @@ using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using static MongoDB.Driver.WriteConcern;
 
 namespace OnlineMongoMigrationProcessor
 {
@@ -74,7 +75,7 @@ namespace OnlineMongoMigrationProcessor
                         docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
                         log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} for {dataType} with user filter {userFilter}", LogType.Debug);
                     }
-
+                    MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType: collection={collection.CollectionNamespace}, docCountByType={docCountByType}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}, userFilter={userFilter}");
                 }
                 catch (Exception ex)
                 {
@@ -83,6 +84,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         log.WriteLine($"Using Estimated document count for {collection.CollectionNamespace} due to error in counting documents.");
                         docCountByType = GetDocumentCountByDataType(collection, dataType, true, userFilter, skipDataTypeFilter);
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType in Ex: collection={collection.CollectionNamespace}, docCountByType={docCountByType}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}, userFilter={userFilter}");
                     }
                     else
                         return null;
@@ -140,11 +142,12 @@ namespace OnlineMongoMigrationProcessor
                             break;
                         }
                         newCount = docCountByType / multiplier;
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating adjustedMaxSamples: collection={collection.CollectionNamespace}, newCount={newCount}, dataType={dataType}, docCountByType={docCountByType}, multiplier={multiplier}");
                     }
+                    
 
                     log.WriteLine($"Requested chunk count {chunkCount} exceeds maximum samples {adjustedMaxSamples} for {collection.CollectionNamespace}. Adjusting to {newCount}", LogType.Error);
                     chunkCount = (int)newCount;
-                    //throw new ArgumentException($"Chunk count too large for {collection.CollectionNamespace}. Retry with larger 'Chunk Size'.");
                 }
 
 
@@ -159,9 +162,11 @@ namespace OnlineMongoMigrationProcessor
                 );
 
 
-
                 // Calculate the total sample count
                 sampleCount = Math.Min(chunkCount * segmentCount, adjustedMaxSamples);
+
+
+                MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating sampleCount: collection={collection.CollectionNamespace}, dataType={dataType}, segmentCount={segmentCount}, sampleCount{sampleCount}");
 
                 // Adjust segments per chunk based on the new sample count
                 segmentCount = Math.Max(1, sampleCount / chunkCount);
@@ -178,6 +183,7 @@ namespace OnlineMongoMigrationProcessor
                     chunkCount = sampleCount / segmentCount;
                 }
 
+                MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, chunkCount={chunkCount}");
 
                 if (chunkCount < 1)
                     throw new ArgumentException("Chunk count must be greater than 0.");
@@ -192,11 +198,13 @@ namespace OnlineMongoMigrationProcessor
                     catch (Exception ex)
                     {
                         log.WriteLine($"Falling back to general sampler for {collection.CollectionNamespace} as ObjectId sampler failed. Details:  {ex}", LogType.Warning);
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, userFilter={userFilter}, skipDataTypeFilter={skipDataTypeFilter}, sampleCount={sampleCount}, chunkCount={chunkCount}, segmentCount={segmentCount}");
                         return GetChunkBoundariesGeneral(log, collection, optimizeForMongoDump, dataType, userFilter, skipDataTypeFilter, sampleCount, chunkCount, segmentCount);
                     }
                 }
                 else
                 {
+                    MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, userFilter={userFilter}, skipDataTypeFilter={skipDataTypeFilter}, sampleCount={sampleCount}, chunkCount={chunkCount}, segmentCount={segmentCount}");
                     return GetChunkBoundariesGeneral(log, collection, optimizeForMongoDump, dataType, userFilter, skipDataTypeFilter, sampleCount, chunkCount, segmentCount);
                 }
 

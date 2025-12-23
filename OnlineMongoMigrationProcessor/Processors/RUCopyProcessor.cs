@@ -34,12 +34,13 @@ namespace OnlineMongoMigrationProcessor.Processors
         private const int MaxConcurrentPartitions = 20;
         private static readonly TimeSpan BatchDuration = TimeSpan.FromSeconds(60);
         private static readonly object _processingLock = new object();
+        private readonly ParallelWriteHelper _parallelWriteHelper;
 
         public RUCopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
            : base(log, sourceClient, config, migrationWorker)
         {
             MigrationJobContext.AddVerboseLog("RUCopyProcessor: Constructor called");
-            // Constructor body can be empty or contain initialization logic if needed
+            _parallelWriteHelper = new ParallelWriteHelper(log, "RUCopyProcessor");
         }
 
         private async Task<TaskResult> ProcessChunksAsync(MigrationUnit mu, ProcessorContext ctx)
@@ -332,7 +333,25 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 // Create the counter delegate implementation
                 CounterDelegate<MigrationChunk> counterDelegate = (t, counterType, operationType, count) => IncrementDocCounter(chunk, count);
-                await MongoHelper.ProcessInsertsAsync<MigrationChunk>(chunk, targetCollection, accumulatedChangesInColl, counterDelegate, _log, $"Processing partition {targetCollection.CollectionNamespace}.[{chunk.Id}].");
+                
+                // Use ParallelWriteHelper for retry logic and better error handling
+                var result = await _parallelWriteHelper.ProcessInsertsWithRetryAsync<MigrationChunk>(
+                    chunk,
+                    targetCollection,
+                    accumulatedChangesInColl,
+                    counterDelegate,
+                    batchSize: 50,
+                    isAggressive: false,
+                    isAggressiveComplete: true,
+                    aggressiveHelper: null,
+                    targetCollection.Database.DatabaseNamespace.DatabaseName,
+                    targetCollection.CollectionNamespace.CollectionName,
+                    MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun);
+                
+                if (!result.Success)
+                {
+                    _log.WriteLine($"Failed to process inserts for partition {chunk.Id}: {string.Join(", ", result.Errors)}", LogType.Error);
+                }
             }
             else
                 IncrementDocCounter(chunk, accumulatedChangesInColl.Count);

@@ -35,8 +35,6 @@ namespace OnlineMongoMigrationProcessor
             _uniqueCollectionKeys = new OrderedUniqueList<string>();
         }
 
-
-
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
             MigrationJobContext.AddVerboseLog("ServerLevelChangeStreamProcessor.ProcessChangeStreamsAsync: starting");
@@ -66,12 +64,6 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{_syncBackPrefix}Starting server-level change stream processing for {_migrationUnitsToProcess.Count} collection(s).");
             }
 
-            //// Initialize change stream documents for each collection
-            //foreach (var id in _migrationUnitsToProcess.Keys)
-            //{
-            //    _migrationUnitsToProcess[id] = 0;
-            //    InitializeAccumulatedChangesTracker(id);
-            //}
 
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
@@ -195,7 +187,8 @@ namespace OnlineMongoMigrationProcessor
 
                 // Watch at client level (server-level)
                 using var cursor = _sourceClient.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
-                               
+
+                long changeCount = 0;
 
                 if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
@@ -212,6 +205,7 @@ namespace OnlineMongoMigrationProcessor
                             if (!result.success)
                                 break;
                             counter = result.counter;
+                            changeCount=counter;
                         }
                         if (ExecutionCancelled)
                             break;
@@ -219,7 +213,11 @@ namespace OnlineMongoMigrationProcessor
 
                     try
                     {
-                        await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                        if (changeCount > _config.ChangeStreamMaxDocsInBatch)
+                        {
+                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                            changeCount = 0;
+                        }
                     }
                     catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                     {
@@ -248,11 +246,14 @@ namespace OnlineMongoMigrationProcessor
                                 cancellationToken.ThrowIfCancellationRequested();
                                 if (ExecutionCancelled) break;
 
+                               
                                 var result = await PreProcessChange(change, counter);
                                 if (!result.success)
                                     break;
                                 counter = result.counter;
- 
+                                changeCount = counter;
+
+
                             }
                             if (ExecutionCancelled)
                                 break;
@@ -261,12 +262,16 @@ namespace OnlineMongoMigrationProcessor
                         
                         try
                         {
-                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                            if (counter > _config.ChangeStreamMaxDocsInBatch)
+                            {
+                                await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                                changeCount = 0;
+                            }
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                         {
-                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync (4.x+ path): {ex.Message}", LogType.Error);
-                            StopJob($"CRITICAL error in BulkProcessAllChangesAsync (4.x+): {ex.Message}");
+                            _log.WriteLine($"{_syncBackPrefix}CRITICAL error during BulkProcessAllChangesAsync : {ex.Message}", LogType.Error);
+                            StopJob($"CRITICAL error in BulkProcessAllChangesAsync: {ex.Message}");
                             throw; // Re-throw to stop processing
                         }
                     }

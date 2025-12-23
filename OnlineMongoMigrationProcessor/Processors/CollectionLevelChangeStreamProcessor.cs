@@ -357,29 +357,15 @@ namespace OnlineMongoMigrationProcessor
                 if (gap < TimeSpan.FromMinutes(60))
                 {
                     _log.WriteLine($"{_syncBackPrefix}Oplog for {mu.DatabaseName}.{mu.CollectionName} shorter than: {gap.TotalMinutes:F2} minutes, this collection will not be monitored for changes", LogType.Warning);
-                    if (!_syncBack)
-                        mu.ResumeToken = string.Empty; //clear resume token to use timestamp
-                    else
-                        mu.SyncBackResumeToken = string.Empty; //clear resume token to use timestamp
+                    SetResumeParameters(mu, mu.CursorUtcTimestamp, string.Empty); //clear resume token to use timestamp
                     return false;        
                 }
 
                 //adjust cursor time to last checked time
-                if (!_syncBack)
+                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu, applyHourAdjustment: false);
+                if (currentTimestamp > DateTime.MinValue && !string.IsNullOrEmpty(currentResumeToken))
                 {
-                    if (mu.CursorUtcTimestamp > DateTime.MinValue && !string.IsNullOrEmpty(mu.ResumeToken))
-                    {
-                        mu.CursorUtcTimestamp = mu.CSLastChecked.Value;
-                        mu.ResumeToken = string.Empty; //clear resume token to use timestamp
-                    }
-                }
-                else
-                {
-                    if (mu.SyncBackCursorUtcTimestamp > DateTime.MinValue && !string.IsNullOrEmpty(mu.SyncBackResumeToken))
-                    {
-                        mu.SyncBackCursorUtcTimestamp = mu.CSLastChecked.Value;
-                        mu.SyncBackResumeToken = string.Empty; //clear resume token to use timestamp
-                    }
+                    SetResumeParameters(mu, mu.CSLastChecked.Value, string.Empty); //clear resume token to use timestamp
                 }                   
                MigrationJobContext.SaveMigrationUnit(mu, false);
                return true;
@@ -585,7 +571,7 @@ namespace OnlineMongoMigrationProcessor
             return options;
         }
 
-        private (DateTime timeStamp, string resumeToken, string version, DateTime startedOn) GetResumeParameters(MigrationUnit mu)
+        private (DateTime timeStamp, string resumeToken, string version, DateTime startedOn) GetResumeParameters(MigrationUnit mu, bool applyHourAdjustment = true)
         {
             DateTime timeStamp;
             string resumeToken;
@@ -594,24 +580,38 @@ namespace OnlineMongoMigrationProcessor
 
             if (!_syncBack)
             {
-                timeStamp = mu.CursorUtcTimestamp.AddHours(mu.CSAddHours);
+                timeStamp = applyHourAdjustment ? mu.CursorUtcTimestamp.AddHours(mu.CSAddHours) : mu.CursorUtcTimestamp;
                 resumeToken = mu.ResumeToken ?? string.Empty;
                 version = MigrationJobContext.CurrentlyActiveJob.SourceServerVersion;
                 startedOn = mu.ChangeStreamStartedOn.HasValue 
-                    ? mu.ChangeStreamStartedOn.Value.AddHours(mu.CSAddHours) 
+                    ? (applyHourAdjustment ? mu.ChangeStreamStartedOn.Value.AddHours(mu.CSAddHours) : mu.ChangeStreamStartedOn.Value)
                     : DateTime.MinValue;
             }
             else
             {
-                timeStamp = mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours);
+                timeStamp = applyHourAdjustment ? mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours) : mu.SyncBackCursorUtcTimestamp;
                 resumeToken = mu.SyncBackResumeToken ?? string.Empty;
                 version = "8";
                 startedOn = mu.SyncBackChangeStreamStartedOn.HasValue 
-                    ? mu.SyncBackChangeStreamStartedOn.Value.AddHours(mu.SyncBackAddHours) 
+                    ? (applyHourAdjustment ? mu.SyncBackChangeStreamStartedOn.Value.AddHours(mu.SyncBackAddHours) : mu.SyncBackChangeStreamStartedOn.Value)
                     : DateTime.MinValue;
             }
 
             return (timeStamp, resumeToken, version!, startedOn);
+        }
+
+        private void SetResumeParameters(MigrationUnit mu, DateTime timestamp, string resumeToken)
+        {
+            if (!_syncBack)
+            {
+                mu.CursorUtcTimestamp = timestamp;
+                mu.ResumeToken = resumeToken;
+            }
+            else
+            {
+                mu.SyncBackCursorUtcTimestamp = timestamp;
+                mu.SyncBackResumeToken = resumeToken;
+            }
         }
 
         private async Task HandleAutoReplayIfNeeded(MigrationUnit mu, string collectionKey, IMongoCollection<BsonDocument>? targetCollection)
@@ -713,41 +713,21 @@ namespace OnlineMongoMigrationProcessor
             // Update resume token after successful flush
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
             {
-            	
-                if (!_syncBack)
+                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu, applyHourAdjustment: false);
+                string collectionNamespace = $"{mu.DatabaseName}.{mu.CollectionName}";
+                
+                // We don't allow going backwards in time
+                if (accumulatedChangesInColl.LatestTimestamp - currentTimestamp >= TimeSpan.FromSeconds(0))
                 {
-                    // We don't allow going backwards in time
-                    if (accumulatedChangesInColl.LatestTimestamp - mu.CursorUtcTimestamp >= TimeSpan.FromSeconds(0))
-                    {
-                        mu.CursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
-                        mu.ResumeToken = accumulatedChangesInColl.LatestResumeToken;
-                        
-                        MigrationJobContext.SaveMigrationUnit(mu,true);
-                    }
-                    else
-                    {
-                        string collectionNamespace = $"{mu.DatabaseName}.{mu.CollectionName}";
-                        _log.WriteLine($"Old Token:{mu.ResumeToken}, New Token:{accumulatedChangesInColl.LatestResumeToken} for {collectionNamespace}", LogType.Error);
-                        throw new Exception($"{_syncBackPrefix} Timestamp mismatch Old Value: {mu.CursorUtcTimestamp} is newer than New Value: {accumulatedChangesInColl.LatestTimestamp} for {collectionNamespace}");
-                    }
+                    SetResumeParameters(mu, accumulatedChangesInColl.LatestTimestamp, accumulatedChangesInColl.LatestResumeToken);
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
                 }
                 else
                 {
-                    // We don't allow going backwards in time
-                    if (accumulatedChangesInColl.LatestTimestamp - mu.SyncBackCursorUtcTimestamp >= TimeSpan.FromSeconds(0))
-                    {
-                        mu.SyncBackCursorUtcTimestamp = accumulatedChangesInColl.LatestTimestamp;
-                        mu.SyncBackResumeToken = accumulatedChangesInColl.LatestResumeToken;
-                        
-                        MigrationJobContext.SaveMigrationUnit(mu,true);
-                    }
-                    else
-                    {
-                        string collectionNamespace = $"{mu.DatabaseName}.{mu.CollectionName}";
-                        _log.WriteLine($"Old Token:{mu.SyncBackResumeToken}, New Token:{accumulatedChangesInColl.LatestResumeToken} for {collectionNamespace}", LogType.Error);
-                        throw new Exception($"{_syncBackPrefix} Timestamp mismatch Old Value: {mu.SyncBackCursorUtcTimestamp} is newer than New Value: {accumulatedChangesInColl.LatestTimestamp} for {collectionNamespace}");
-                    }
+                    _log.WriteLine($"Old Token:{currentResumeToken}, New Token:{accumulatedChangesInColl.LatestResumeToken} for {collectionNamespace}", LogType.Error);
+                    throw new Exception($"{_syncBackPrefix} Timestamp mismatch Old Value: {currentTimestamp} is newer than New Value: {accumulatedChangesInColl.LatestTimestamp} for {collectionNamespace}");
                 }
+                
                 _resumeTokenCache[$"{targetCollection.CollectionNamespace}"] = accumulatedChangesInColl.LatestResumeToken;
             }
 

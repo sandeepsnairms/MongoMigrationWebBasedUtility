@@ -431,10 +431,10 @@ namespace OnlineMongoMigrationProcessor
 
                 MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Processing context - Aggressive: {isAggressive}, AggressiveComplete: {isAggressiveComplete}, Simulated: {isSimulatedRun} for {collectionKey}");
 
-                // Use ParallelWriteProcessor for improved performance with retry logic
-                var parallelProcessor = new ParallelWriteProcessor(_log, _syncBackPrefix);
-                
-                var result = await parallelProcessor.ProcessWritesAsync(
+                // Use ParallelWriteHelper for improved performance with retry logic
+                var parallelWriteHelper = new ParallelWriteHelper(_log, _syncBackPrefix);
+
+                var result = await parallelWriteHelper.ProcessWritesAsync(
                     mu,
                     collection,
                     insertEvents,
@@ -448,7 +448,7 @@ namespace OnlineMongoMigrationProcessor
                     _targetClient,
                     isSimulatedRun);
 
-                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}ParallelWriteProcessor completed - Success: {result.Success}, TotalFailures: {result.Failures}, WriteLatency: {result.WriteLatencyMS}ms for {collectionKey}");
+                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}ParallelWriteHelper completed - Success: {result.Success}, TotalFailures: {result.Failures}, WriteLatency: {result.WriteLatencyMS}ms for {collectionKey}");
 
                 // Track write latency directly in AccumulatedChangesTracker
                 accumulatedChangesInColl.CSTotaWriteDurationInMS += result.WriteLatencyMS;
