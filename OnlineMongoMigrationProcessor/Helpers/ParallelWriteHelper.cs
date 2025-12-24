@@ -339,7 +339,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (updateOps.Any())
             {
-                var updateResult = await ProcessUpdatesWithRetryAsync(
+                var updateResult = await ProcessUpdatesWithRetryAsync<TMigration(
                     mu, collection, updateOps, counterDelegate, batchSize,
                     isAggressive, isAggressiveComplete, aggressiveHelper, databaseName, collectionName, isSimulatedRun);
                 result.Processed += updateResult.Processed;
