@@ -1010,7 +1010,7 @@ namespace OnlineMongoMigrationProcessor
                     
                     if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
                     {
-                        _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {changeStreamCollection!.CollectionNamespace}", LogType.Info);
+                        //_log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {changeStreamCollection!.CollectionNamespace}", LogType.Info);
                         break; // Exit loop, let finally block handle cleanup
                     }
 
@@ -1058,7 +1058,10 @@ namespace OnlineMongoMigrationProcessor
                     // Restart stopwatch for next read iteration
                     readStopwatch.Restart();
                 }
-
+                //if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
+                //{
+                //    _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {changeStreamCollection!.CollectionNamespace}", LogType.Info);                    
+                //}
                 readStopwatch.Stop();
             } 
 

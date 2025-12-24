@@ -10,12 +10,29 @@ namespace OnlineMongoMigrationProcessor.Helpers
     public static class PercentageUpdater
     {
         private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-        private static readonly SafeDictionary<string, bool> _activeTrackers = new SafeDictionary<string, bool>();
+        private static SafeDictionary<string, bool> _activeTrackers = new SafeDictionary<string, bool>();
+
+        private static List<string> _trackersToRemove = new List<string>();
 
         private static System.Timers.Timer _timer =new System.Timers.Timer(PERCENTAGE_UPDATE_INTERVAL_MS);
         
         private static Log _log;
- 
+
+        public static void Initialize()
+        {
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater Initialize Invoked");
+            try
+            {
+                _activeTrackers = new SafeDictionary<string, bool>();
+                _trackersToRemove = new List<string>();
+                _timer.Stop();
+
+            }
+            finally
+            {
+            }
+        }
+
         /// <summary>
         /// Ensures a timer is running for the given migration mu to periodically recalculate percentages.
         /// Timer runs every 5 seconds and stops when all chunks are complete.
@@ -44,80 +61,118 @@ namespace OnlineMongoMigrationProcessor.Helpers
             MigrationJobContext.AddVerboseLog($"PercentageUpdater.RemovePercentageTracker: id={id}, isRestore={isRestore}");
             _log = log;
             var key = $"{id}_{isRestore}";
-            _activeTrackers.Remove(key);
-            
-            if (_activeTrackers.Count == 0)
-            {
-                _timer.Stop();
-            }
+
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater _trackersToRemove added {key}");
+            _trackersToRemove.Add(key);            
         }
 
         private  static void TimerTick()
         {
             foreach (var kvp in _activeTrackers.GetAll())
-            {
-                
+            {                
                 bool isRestore = kvp.Value;
-
                 string id = kvp.Key.Split("_")[0];
-                var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(id);
-                if (mu == null)
-                {
-                    continue; // Migration unit not found
-                }
-                bool hasActiveChunks = false;
-                if (isRestore)
-                {
-                    // Check for active or pending restore chunks
-                    foreach (var chunk in mu.MigrationChunks)
-                    {
-                        if (chunk.IsUploaded != true && (chunk.RestoredSuccessDocCount > 0 || chunk.IsDownloaded == true))
-                        {
-                            hasActiveChunks = true;
-                            break;
-                        }
-                    }
-                    if (hasActiveChunks)
-                    {
-                        // Recalculate overall restore percent
-                        mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true, log: _log);
-                        mu.UpdateParentJob();
-                        if (mu.RestorePercent >= 99.99)
-                        {
-                            mu.RestoreComplete = true;
-                            RemovePercentageTracker(id, isRestore, _log);
-                            MigrationJobContext.SaveMigrationUnit(mu, true);
-                        }
-                    }
-                }
-                else // MongoDump
-                {
-                    // Check for active or pending dump chunks
-                    foreach (var chunk in mu.MigrationChunks)
-                    {
-                        if (chunk.IsDownloaded != true && chunk.DumpQueryDocCount > 0)
-                        {
-                            hasActiveChunks = true;
-                            break;
-                        }
-                    }
-                    if (hasActiveChunks)
-                    {
-                        // Recalculate overall dump percent
-                        mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false, log: _log);
-                        mu.UpdateParentJob();
-                        if (mu.DumpPercent >= 99.99)
-                        {
-                            mu.DumpComplete = true;
-                            RemovePercentageTracker(id, isRestore, _log);
-                            MigrationJobContext.SaveMigrationUnit(mu, true);
-                        }
-                    }
-                }
-               
-            }            
-        }        
+                ProcessMigrationUnitProgress(id, isRestore);
 
+
+                //cleanup if marked for removal
+                if (_trackersToRemove.Contains(kvp.Key))
+                {
+                    MigrationJobContext.AddVerboseLog($"PercentageUpdater _activeTrackers.Remove({kvp.Key})  _activeTrackers.Count={_activeTrackers.Count}");
+                    _activeTrackers.Remove(kvp.Key);
+
+                    if (_activeTrackers.Count == 0)
+                        _timer.Stop();
+
+                    _trackersToRemove.Remove(kvp.Key);
+                }
+            }
+        }
+
+
+        private static bool ProcessMigrationUnitProgress(string id, bool isRestore)
+        {
+            var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(id);
+            if (mu == null)
+            {
+                return false; // Migration unit not found
+            }
+            bool hasActiveChunks = false;
+
+            //string key = $"{id}_{isRestore}";
+            //if (_trackersToRemove.Contains(key))
+            //{
+            //    if (isRestore)
+            //    {
+            //        mu.RestoreComplete = true;
+            //        mu.RestorePercent = 100;
+            //    }
+            //    else
+            //    {
+            //        mu.DumpComplete = true;
+            //        mu.DumpPercent = 100;
+            //    }
+            //    mu.UpdateParentJob();
+            //    MigrationJobContext.SaveMigrationUnit(mu, true);
+            //    return true;
+            //}
+
+            if (isRestore)
+            {
+                if(mu.RestoreComplete == true)
+                    return true;
+
+                // Check for active or pending restore chunks
+                foreach (var chunk in mu.MigrationChunks)
+                {
+                    if (chunk.IsUploaded != true && (chunk.RestoredSuccessDocCount > 0 || chunk.IsDownloaded == true))
+                    {
+                        hasActiveChunks = true;
+                        break;
+                    }
+                }
+                if (hasActiveChunks)
+                {
+                    // Recalculate overall restore percent
+                    mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true, log: _log);
+                    mu.UpdateParentJob();
+                    if (mu.RestorePercent >= 99.99)
+                    {
+                        mu.RestoreComplete = true;
+                        RemovePercentageTracker(id, isRestore, _log);
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                    }
+                }
+            }
+            else // MongoDump
+            {
+                if (mu.DumpComplete == true)
+                    return true;
+
+                // Check for active or pending dump chunks
+                foreach (var chunk in mu.MigrationChunks)
+                {
+                    if (chunk.IsDownloaded != true && chunk.DumpQueryDocCount > 0)
+                    {
+                        hasActiveChunks = true;
+                        break;
+                    }
+                }
+                if (hasActiveChunks)
+                {
+                    // Recalculate overall dump percent
+                    mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false, log: _log);
+                    mu.UpdateParentJob();
+                    if (mu.DumpPercent >= 99.99)
+                    {
+                        mu.DumpComplete = true;
+                        RemovePercentageTracker(id, isRestore, _log);
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                    }
+                }
+            }
+            return true;
+        }
         /// <summary>
         /// Calculates overall percent from all chunks by checking their current state.
         /// Used by timer to recalculate overall progress for dump or restore operations.
@@ -146,6 +201,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                 if (c.DumpQueryDocCount == 0)
                 {
+                    strLog = $"{strLog}\n skipped empty chunk";
                     continue;
                 }
 
@@ -163,12 +219,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     else if (c.RestoredSuccessDocCount > 0)
                     {
                         // In-progress chunk: calculate from restored count
-                        chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / c.DumpQueryDocCount * 100);
+                        chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / Math.Min(c.DumpQueryDocCount,c.DumpResultDocCount) * 100);
                         totalPercent += chunkPercent * chunkContrib;
                     }
                     // else: not started, contributes 0%
 
-                    strLog = $"{strLog}\n [{i}] {c.RestoredSuccessDocCount}/{c.DumpQueryDocCount} - {chunkPercent:F2} - {chunkContrib:F4} - {totalPercent:F2}";
+                    strLog = $"{strLog}\n [{i}] {c.RestoredSuccessDocCount}/{Math.Min(c.DumpQueryDocCount, c.DumpResultDocCount)} - {chunkPercent:F2} - {chunkContrib:F4} - {totalPercent:F2}";
                 }
                 else // Dump
                 {

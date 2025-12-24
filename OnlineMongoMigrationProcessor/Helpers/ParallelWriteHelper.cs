@@ -1,9 +1,10 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
-using OnlineMongoMigrationProcessor.Context;
 using System;
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -339,7 +340,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (updateOps.Any())
             {
-                var updateResult = await ProcessUpdatesWithRetryAsync<TMigration(
+                var updateResult = await ProcessUpdatesWithRetryAsync(
                     mu, collection, updateOps, counterDelegate, batchSize,
                     isAggressive, isAggressiveComplete, aggressiveHelper, databaseName, collectionName, isSimulatedRun);
                 result.Processed += updateResult.Processed;
@@ -366,11 +367,62 @@ namespace OnlineMongoMigrationProcessor.Helpers
             return result;
         }
 
+
+        internal async Task<bool> ProcessAggresiveCSAsync(Object unit,
+         IMongoCollection<BsonDocument> collection,
+         List<ChangeStreamDocument<BsonDocument>> events,
+         int batchSize,
+         bool isAggressive,
+         bool isAggressiveComplete,
+         AggressiveChangeStreamHelper? aggressiveHelper,
+         string databaseName,
+         string collectionName,
+         bool isSimulatedRun,
+         string eventType)
+        {
+
+            if(isSimulatedRun)
+                return true;
+
+            // Handle aggressive mode: store insert entries and remove delete entries
+            if (isAggressive && aggressiveHelper != null)
+            {
+                var documentKeys = events
+                    .Where(i => i.DocumentKey != null)
+                    .Select(i => i.DocumentKey)
+                    .ToList();
+
+                if (documentKeys.Count > 0)
+                {
+                    if (!isAggressiveComplete)
+                    {
+                        // Remove any delete entries for these document keys
+                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                        // Store insert entries for later processing
+                        await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, eventType);
+
+                        // Exit early - don't write to destination during aggressive mode
+                        return false;
+                    }
+
+                    var mu = unit as MigrationUnit;
+                    if (isAggressiveComplete && !mu.AggressiveCacheDeleted)
+                    {
+                        // Remove any entries for these document keys
+                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                    }
+                }
+            }
+
+            return true;
+        }
+
+
         /// <summary>
         /// Process inserts with retry logic
         /// </summary>
         internal async Task<WriteResult> ProcessInsertsWithRetryAsync<TMigration>(
-         TMigration mu,
+         TMigration unit,
          IMongoCollection<BsonDocument> collection,
          List<ChangeStreamDocument<BsonDocument>> events,
          CounterDelegate<TMigration> counterDelegate,
@@ -393,29 +445,14 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     .Select(g => g.First())
                     .ToList();
 
-                // Handle aggressive mode: store insert entries and remove delete entries
-                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
+                // Handle aggressive mode: store event entries in temp and remove old entries
+                if(await ProcessAggresiveCSAsync(unit, collection, deduplicatedInserts, batchSize,
+                    isAggressive, isAggressiveComplete, aggressiveHelper, databaseName, collectionName, isSimulatedRun,"insert") == false)
                 {
-                    var documentKeys = deduplicatedInserts
-                        .Where(insertEvent => insertEvent.DocumentKey != null)
-                        .Select(insertEvent => insertEvent.DocumentKey)
-                        .ToList();
-
-                    if (documentKeys.Count > 0)
-                    {                       
-                        // Remove any delete entries for these document keys
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
-
-                        // Store insert entries for later processing
-                        await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "insert");
-                    }
-                    
-                    // Exit early - don't write to destination during aggressive mode
                     continue;
                 }
-                
-                //// Clean up stale entries from temp collection after aggressive mode completes
-                //if (isAggressive && isAggressiveComplete && aggressiveHelper != null)
+
+                //if (isAggressive && aggressiveHelper != null)
                 //{
                 //    var documentKeys = deduplicatedInserts
                 //        .Where(insertEvent => insertEvent.DocumentKey != null)
@@ -423,11 +460,28 @@ namespace OnlineMongoMigrationProcessor.Helpers
                 //        .ToList();
 
                 //    if (documentKeys.Count > 0)
-                //    {
-                //        // Remove any stale entries for these document keys from temp collection
-                //        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //    {  
+                //        if (!isAggressiveComplete)
+                //        {
+                //            // Remove any delete entries for these document keys
+                //            await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //            // Store insert entries for later processing
+                //            await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "insert");
+
+                //            // Exit early - don't write to destination during aggressive mode
+                //            continue;
+                //        }
+
+                //        var mu = unit as MigrationUnit;
+                //        if(isAggressiveComplete && !mu.AggressiveCacheDeleted)
+                //        {
+                //            // Remove any entries for these document keys
+                //            await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //        }
                 //    }
-                //}
+
+
+                           
 
                 var insertDocs = deduplicatedInserts
                     .Select(e =>
@@ -473,7 +527,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                                     insertCount = insertDocs.Count;
                                 }
 
-                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
+                                counterDelegate(unit, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
                                 result.Processed += (int)insertCount;
                             }
 
@@ -483,11 +537,11 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         {
                             long insertCount = ex.Result?.InsertedCount ?? 0;
                             result.Processed += (int)insertCount;
-                            counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
+                            counterDelegate(unit, CounterType.Processed, ChangeStreamOperationType.Insert, (int)insertCount);
 
                             var duplicateKeyErrors = ex.WriteErrors.Where(err => err.Code == 11000).ToList();
                             result.Skipped += duplicateKeyErrors.Count;
-                            counterDelegate(mu, CounterType.Skipped, ChangeStreamOperationType.Insert, duplicateKeyErrors.Count);
+                            counterDelegate(unit, CounterType.Skipped, ChangeStreamOperationType.Insert, duplicateKeyErrors.Count);
 
                             var otherErrors = ex.WriteErrors.Where(err => err.Code != 11000).ToList();
                             if (otherErrors.Any())
@@ -549,7 +603,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// Process updates with retry logic
         /// </summary>
         private async Task<WriteResult> ProcessUpdatesWithRetryAsync<TMigration>(
-            TMigration mu,
+            TMigration unit,
             IMongoCollection<BsonDocument> collection,
             List<ChangeStreamDocument<BsonDocument>> events,
             CounterDelegate<TMigration> counterDelegate,
@@ -572,42 +626,44 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     .Select(g => g.OrderByDescending(e => e.ClusterTime ?? new BsonTimestamp(0, 0)).First())
                     .ToList();
 
-                // Handle aggressive mode: store update entries and remove delete entries
-                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
+                if (await ProcessAggresiveCSAsync(unit, collection, groupedUpdates, batchSize,
+                    isAggressive, isAggressiveComplete, aggressiveHelper, databaseName, collectionName, isSimulatedRun, "update") == false)
                 {
-                    var documentKeys = groupedUpdates
-                        .Where(updateEvent => updateEvent.DocumentKey != null)
-                        .Select(updateEvent => updateEvent.DocumentKey)
-                        .ToList();
-
-                    if (documentKeys.Count > 0)
-                    {                       
-                        // Remove any delete entries for these document keys
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
-
-                        // Store update entries for later processing
-                        await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "update");
-                    }
-                    
-                    // Exit early - don't write to destination during aggressive mode
                     continue;
                 }
 
-                MigrationUnit muTemp = (MigrationUnit)mu;
-                // Clean up stale entries from temp collection after aggressive mode completes
-                if (isAggressive && !muTemp.AggressiveCacheDeleted && aggressiveHelper != null)
-                {
-                    var documentKeys = groupedUpdates
-                        .Where(updateEvent => updateEvent.DocumentKey != null)
-                        .Select(updateEvent => updateEvent.DocumentKey)
-                        .ToList();
+                //// Handle aggressive mode: store insert entries and remove delete entries
+                //if (isAggressive && aggressiveHelper != null)
+                //{
+                //    var documentKeys = groupedUpdates
+                //        .Where(insertEvent => insertEvent.DocumentKey != null)
+                //        .Select(insertEvent => insertEvent.DocumentKey)
+                //        .ToList();
 
-                    if (documentKeys.Count > 0)
-                    {
-                        // Remove any stale entries for these document keys from temp collection
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
-                    }
-                }
+                //    if (documentKeys.Count > 0)
+                //    {
+                //        if (!isAggressiveComplete)
+                //        {
+                //            // Remove any delete entries for these document keys
+                //            await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //            // Store insert entries for later processing
+                //            await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "update");
+
+                //            // Exit early - don't write to destination during aggressive mode
+                //            continue;
+                //        }
+
+                //        var mu = unit as MigrationUnit;
+                //        if (isAggressiveComplete && !mu.AggressiveCacheDeleted)
+                //        {
+                //            // Remove any entries for these document keys
+                //            await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //        }
+                //    }
+
+                //}
+
+
 
                 var updateModels = groupedUpdates
                     .Select(e =>
@@ -639,7 +695,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
                                     updateCount = updateModels.Count;
                                 }
                                 
-                                counterDelegate(mu, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
+                                counterDelegate(unit, CounterType.Processed, ChangeStreamOperationType.Update, (int)updateCount);
                                 result.Processed += (int)updateCount;
                             }
                             break; // Success - exit retry loop
@@ -695,7 +751,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// Process deletes with retry logic
         /// </summary>
         private async Task<WriteResult> ProcessDeletesWithRetryAsync<TMigration>(
-            TMigration mu,
+            TMigration unit,
             IMongoCollection<BsonDocument> collection,
             List<ChangeStreamDocument<BsonDocument>> events,
             CounterDelegate<TMigration> counterDelegate,
@@ -712,27 +768,50 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             try
             {
-                // Handle aggressive mode: remove any insert/update entries for these document keys
-                if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
-                {
-                    var documentKeys = events
-                        .Where(deleteEvent => deleteEvent.DocumentKey != null)
-                        .Select(deleteEvent => deleteEvent.DocumentKey)
-                        .ToList();
 
-                    if (documentKeys.Count > 0)
-                    {
-                        // Remove any insert/update entries for these document keys since they're now being deleted
-                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
-                    }
-                    
-                    // Exit early - don't write to destination during aggressive mode
+                // Handle aggressive mode: store event entries in temp and remove old entries
+                if (await ProcessAggresiveCSAsync(unit, collection, events, batchSize,
+                    isAggressive, isAggressiveComplete, aggressiveHelper, databaseName, collectionName, isSimulatedRun, "delete") == false)
+                {
                     return result;
                 }
 
+                //// Handle aggressive mode: remove any insert/update entries for these document keys
+                //if (isAggressive && !isAggressiveComplete && aggressiveHelper != null)
+                //{
+                //    var documentKeys = events
+                //        .Where(deleteEvent => deleteEvent.DocumentKey != null)
+                //        .Select(deleteEvent => deleteEvent.DocumentKey)
+                //        .ToList();
+
+                //    if (documentKeys.Count > 0)
+                //    {
+                //        // Remove any insert/update entries for these document keys since they're now being deleted
+                //        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //    }
+
+                //    // Exit early - don't write to destination during aggressive mode
+                //    return result;
+                //}
+
+                //// Clean up stale entries from temp collection after aggressive mode completes but cache not yet deleted
+                //if (isAggressive && isAggressiveComplete && !mu.AggressiveCacheDeleted && aggressiveHelper != null)
+                //{
+                //    var documentKeys = events
+                //        .Where(deleteEvent => deleteEvent.DocumentKey != null)
+                //        .Select(deleteEvent => deleteEvent.DocumentKey)
+                //        .ToList();
+
+                //    if (documentKeys.Count > 0)
+                //    {
+                //        // Remove any stale entries for these document keys from temp collection
+                //        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //    }
+                //}
+
                 // Use the internal ProcessDeletesAsync method
                 int failures = await ProcessDeletesAsync(
-                    mu,
+                    unit,
                     collection,
                     events,
                     counterDelegate,
