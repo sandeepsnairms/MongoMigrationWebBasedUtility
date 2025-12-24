@@ -1694,26 +1694,31 @@ namespace OnlineMongoMigrationProcessor
                     string muId = tracker.MigrationUnit.Id;
                     string targetConnectionString = string.Empty;
 
-                    // Mark migration unit as complete
-                    tracker.MigrationUnit.DumpComplete = true;
-                    tracker.MigrationUnit.RestoreComplete = true;
-                    tracker.MigrationUnit.RestorePercent = 100;
 
-                    if (!tracker.MigrationUnit.BulkCopyEndedOn.HasValue || tracker.MigrationUnit.BulkCopyEndedOn.Value == DateTime.MinValue)
+                    var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(muId);
+
+                    // Mark migration unit as complete
+                    mu.DumpComplete = true;
+                    mu.DumpPercent = 100;
+                    mu.RestoreComplete = true;
+                    mu.RestorePercent = 100;
+                    mu.UpdateParentJob();
+
+                    if (!mu.BulkCopyEndedOn.HasValue || mu.BulkCopyEndedOn.Value == DateTime.MinValue)
                     {
-                        tracker.MigrationUnit.BulkCopyEndedOn = DateTime.UtcNow;
+                        mu.BulkCopyEndedOn = DateTime.UtcNow;
                     }
 
-                    MigrationJobContext.SaveMigrationUnit(tracker.MigrationUnit, true);
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
 
                     // Remove from active tracking
                     _activeMigrationUnits.TryRemove(muId, out _);
 
-                    _log.WriteLine($"Migration unit completed: {tracker.MigrationUnit.DatabaseName}.{tracker.MigrationUnit.CollectionName}", LogType.Info);
+                    _log.WriteLine($"Migration unit completed: {mu.DatabaseName}.{mu.CollectionName}", LogType.Info);
 
                     // Notify via delegate
 
-                    _onMigrationUnitCompleted?.Invoke(tracker.MigrationUnit);
+                    _onMigrationUnitCompleted?.Invoke(mu);
                 }
             }
             catch (Exception ex)

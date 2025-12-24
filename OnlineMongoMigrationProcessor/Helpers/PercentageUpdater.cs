@@ -72,9 +72,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {                
                 bool isRestore = kvp.Value;
                 string id = kvp.Key.Split("_")[0];
-                ProcessMigrationUnitProgress(id, isRestore);
-
-
+                
                 //cleanup if marked for removal
                 if (_trackersToRemove.Contains(kvp.Key))
                 {
@@ -82,21 +80,32 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     _activeTrackers.Remove(kvp.Key);
 
                     if (_activeTrackers.Count == 0)
+                    {
                         _timer.Stop();
-
+                        return;
+                    }
                     _trackersToRemove.Remove(kvp.Key);
                 }
+
+                ProcessMigrationUnitProgress(id, isRestore);
             }
         }
 
 
         private static bool ProcessMigrationUnitProgress(string id, bool isRestore)
         {
+            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitProgress mu={id} IsRestore={isRestore}");
+
             var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(id);
             if (mu == null)
             {
+                MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitProgress exited as MigrationUnit not found");
                 return false; // Migration unit not found
             }
+
+            if (mu.RestoreComplete == true || mu.RestorePercent == 100)
+                return true;
+
             bool hasActiveChunks = false;
 
             //string key = $"{id}_{isRestore}";
@@ -119,8 +128,6 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (isRestore)
             {
-                if(mu.RestoreComplete == true)
-                    return true;
 
                 // Check for active or pending restore chunks
                 foreach (var chunk in mu.MigrationChunks)
@@ -146,7 +153,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             }
             else // MongoDump
             {
-                if (mu.DumpComplete == true)
+                if (mu.DumpComplete == true || mu.DumpPercent == 100)
                     return true;
 
                 // Check for active or pending dump chunks
@@ -179,7 +186,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
         /// </summary>
         public static double CalculateOverallPercentFromAllChunks(MigrationUnit mu, bool isRestore, Log log)
         {
-            MigrationJobContext.AddVerboseLog($"PercentageUpdater.CalculateOverallPercentFromAllChunks: mu={mu.DatabaseName}.{mu.CollectionName}, isRestore={isRestore}");
+            MigrationJobContext.AddVerboseLog($"PercentageUpdater.CalculateOverallPercentFromAllChunks: mu={mu.DatabaseName}.{mu.CollectionName}, isRestore={isRestore} isDumpComplete={mu.DumpComplete} isRestoreComplete={mu.RestoreComplete} dumpPercent={mu.DumpPercent} restorePercent={mu.RestorePercent}");
             double totalPercent = 0;
             long totalDocs = Helper.GetMigrationUnitDocCount(mu);
 
@@ -201,7 +208,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                 if (c.DumpQueryDocCount == 0)
                 {
-                    strLog = $"{strLog}\n skipped empty chunk";
+                    strLog = $"{strLog}\n [{i}] Empty";
                     continue;
                 }
 
