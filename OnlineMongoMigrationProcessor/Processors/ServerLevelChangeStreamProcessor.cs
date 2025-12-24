@@ -64,18 +64,24 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{_syncBackPrefix}Starting server-level change stream processing for {_migrationUnitsToProcess.Count} collection(s).");
             }
 
+            long loop = 0;
 
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 try
                 {
+                    loop++;
                     int seconds = GetBatchDurationInSeconds(1.0f); // Use full duration for server-level
                     var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                     CancellationToken cancellationToken = cancellationTokenSource.Token;
 
-                    _log.WriteLine($"{_syncBackPrefix}Processing server-level change stream. Batch Duration {seconds} seconds");
+                    _log.WriteLine($"{_syncBackPrefix}Processing round{loop} for server - level change stream. Batch Duration {seconds} seconds");
 
                     await WatchServerLevelChangeStream(cancellationToken);
+
+                    //cleanup for aggressive CS mode
+                    if (loop%4==0)                    
+                        await AggressiveCSCleanupAsync();
 
                 }
                 catch (OperationCanceledException)

@@ -144,7 +144,10 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.DumpComplete = true;
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
-   
+
+                // Start change stream processing for the completed migration unit
+                AddCollectionToChangeStreamQueue(mu);
+
                 MigrationJobContext.SaveMigrationUnit(mu,true);
                 
                 MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
@@ -409,6 +412,14 @@ namespace OnlineMongoMigrationProcessor.Processors
            
             ProcessRunning = true;
             var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
+
+            if (mu.DumpComplete && mu.RestoreComplete)
+            {
+                _log.WriteLine($"Document copy operation for {mu.DatabaseName}.{mu.CollectionName} already completed.", LogType.Debug);
+                return TaskResult.Success;
+            }
+
+
             mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
             if (MigrationJobContext.CurrentlyActiveJob != null)
                 MigrationJobContext.CurrentlyActiveJob.IsStarted = true;
@@ -416,8 +427,8 @@ namespace OnlineMongoMigrationProcessor.Processors
             var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
             // Check if post-upload change stream processing is already in progress
-            if (CheckChangeStreamAlreadyProcessingAsync(ctx))
-                return TaskResult.Success;
+            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
+            //    return TaskResult.Success;
 
             _log.WriteLine($"RU copy Processor started for {ctx.DatabaseName}.{ctx.CollectionName}");
 
@@ -467,7 +478,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                 return vresult;
             }
 
-            await PostCopyChangeStreamProcessor(ctx, mu.Id);
+            StopOfflineOrInvokeChangeStreams();
 
             return TaskResult.Success;
         }

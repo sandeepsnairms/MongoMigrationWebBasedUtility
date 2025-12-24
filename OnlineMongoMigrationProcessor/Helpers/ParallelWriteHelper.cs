@@ -402,14 +402,32 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         .ToList();
 
                     if (documentKeys.Count > 0)
-                    {
-                        // Store insert entries for later processing
-                        await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "insert");
-                        
+                    {                       
                         // Remove any delete entries for these document keys
                         await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+
+                        // Store insert entries for later processing
+                        await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "insert");
                     }
+                    
+                    // Exit early - don't write to destination during aggressive mode
+                    continue;
                 }
+                
+                //// Clean up stale entries from temp collection after aggressive mode completes
+                //if (isAggressive && isAggressiveComplete && aggressiveHelper != null)
+                //{
+                //    var documentKeys = deduplicatedInserts
+                //        .Where(insertEvent => insertEvent.DocumentKey != null)
+                //        .Select(insertEvent => insertEvent.DocumentKey)
+                //        .ToList();
+
+                //    if (documentKeys.Count > 0)
+                //    {
+                //        // Remove any stale entries for these document keys from temp collection
+                //        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+                //    }
+                //}
 
                 var insertDocs = deduplicatedInserts
                     .Select(e =>
@@ -563,11 +581,30 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         .ToList();
 
                     if (documentKeys.Count > 0)
-                    {
+                    {                       
+                        // Remove any delete entries for these document keys
+                        await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
+
                         // Store update entries for later processing
                         await aggressiveHelper.StoreDocumentKeysAsync(databaseName, collectionName, documentKeys, "update");
-                        
-                        // Remove any delete entries for these document keys
+                    }
+                    
+                    // Exit early - don't write to destination during aggressive mode
+                    continue;
+                }
+
+                MigrationUnit muTemp = (MigrationUnit)mu;
+                // Clean up stale entries from temp collection after aggressive mode completes
+                if (isAggressive && !muTemp.AggressiveCacheDeleted && aggressiveHelper != null)
+                {
+                    var documentKeys = groupedUpdates
+                        .Where(updateEvent => updateEvent.DocumentKey != null)
+                        .Select(updateEvent => updateEvent.DocumentKey)
+                        .ToList();
+
+                    if (documentKeys.Count > 0)
+                    {
+                        // Remove any stale entries for these document keys from temp collection
                         await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
                     }
                 }
@@ -688,6 +725,9 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         // Remove any insert/update entries for these document keys since they're now being deleted
                         await aggressiveHelper.RemoveDocumentKeysAsync(databaseName, collectionName, documentKeys);
                     }
+                    
+                    // Exit early - don't write to destination during aggressive mode
+                    return result;
                 }
 
                 // Use the internal ProcessDeletesAsync method

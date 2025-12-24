@@ -10,7 +10,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
     public static class PercentageUpdater
     {
         private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-        private static readonly Dictionary<string,bool> _activeTrackers = new Dictionary<string, bool>();
+        private static readonly SafeDictionary<string, bool> _activeTrackers = new SafeDictionary<string, bool>();
 
         private static System.Timers.Timer _timer =new System.Timers.Timer(PERCENTAGE_UPDATE_INTERVAL_MS);
         
@@ -25,8 +25,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
             MigrationJobContext.AddVerboseLog($"PercentageUpdater.AddToPercentageTracker: id={id}, isRestore={isRestore}");
             _log = log;
             var key= $"{id}_{isRestore}";
-            if (!_activeTrackers.Keys.Contains(key)) {
-                _activeTrackers[key] = isRestore;
+            if (!_activeTrackers.ContainsKey(key)) {
+                _activeTrackers.AddOrUpdate(key, isRestore);
             }
 
             if (!_timer.Enabled)
@@ -44,10 +44,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
             MigrationJobContext.AddVerboseLog($"PercentageUpdater.RemovePercentageTracker: id={id}, isRestore={isRestore}");
             _log = log;
             var key = $"{id}_{isRestore}";
-            if (_activeTrackers.Keys.Contains(key))
-            {
-                _activeTrackers.Remove(key);
-            }
+            _activeTrackers.Remove(key);
+            
             if (_activeTrackers.Count == 0)
             {
                 _timer.Stop();
@@ -56,7 +54,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
         private  static void TimerTick()
         {
-            foreach (var kvp in _activeTrackers)
+            foreach (var kvp in _activeTrackers.GetAll())
             {
                 
                 bool isRestore = kvp.Value;

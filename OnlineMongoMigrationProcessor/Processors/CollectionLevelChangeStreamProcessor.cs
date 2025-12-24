@@ -97,11 +97,12 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _ = InitializeResumeTokensForUnsetUnitsAsync(token);
                     lastResumeTokenCheck = DateTime.UtcNow;
+
+                    //cleanup for aggressive CS mode
+                    await AggressiveCSCleanupAsync();
                 }
 
-                //static collections resume tokens need adjustment
-                //AdjustCusrsorTimeForStaticCollections();
-
+                
 
                 index = 0;
                 sortedKeys = GetSortedCollectionKeys();
@@ -487,7 +488,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _log.WriteLine($"{_syncBackPrefix}Oplog is full. Error processing change stream for {collectionKey}. Details: {ex}", LogType.Error);
                     _log.ShowInMonitor($"{_syncBackPrefix}Oplog is full. Error processing change stream for {collectionKey}. Details: {ex}");
-                    StopProcessing = true;
+                    //StopProcessing = true;
                 }
                 catch (MongoCommandException ex) when (ex.Message.Contains("Expired resume token") || ex.Message.Contains("cursor"))
                 {
@@ -848,6 +849,12 @@ namespace OnlineMongoMigrationProcessor
                     
                     AdjustCursorTimeForOplogError(mu); 
                 }
+                catch (Exception ex) when (ex.Message.Contains("Expired resume token or cursor")|| ex.Message.Contains("resume point may no longer be in the oplog"))
+                {
+                    _log.ShowInMonitor($"{_syncBackPrefix}Expired resume token or cursor for {collectionKey} - oplog position was deleted. Will push and retry in next batch.");
+
+                    AdjustCursorTimeForOplogError(mu);
+                }
                 catch (Exception ex)
                 {
                     _log.WriteLine($"{_syncBackPrefix}Failed to create change stream cursor for {collectionKey}: {ex}", LogType.Debug);
@@ -932,6 +939,11 @@ namespace OnlineMongoMigrationProcessor
                     throw;
                 }
                 catch (Exception ex) when (ex.Message.Contains("CollectionScan died due to position in capped collection being deleted"))
+                {
+                    // Don't log here - let outer catch handle it to avoid double logging
+                    throw;
+                }
+                catch (Exception ex) when (ex.Message.Contains("Expired resume token or cursor") || ex.Message.Contains("resume point may no longer be in the oplog"))
                 {
                     // Don't log here - let outer catch handle it to avoid double logging
                     throw;

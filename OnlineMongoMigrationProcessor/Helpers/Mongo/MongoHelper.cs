@@ -705,8 +705,10 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                                     log.WriteLine($"Collection-level CSLastChecked for {mu.DatabaseName}.{mu.CollectionName} set to {mu.CSLastChecked}", LogType.Debug);
                                 }
 
-                                var start = (mu.CSLastChecked ?? DateTime.UtcNow).ToUniversalTime();                                
-                                var bsonTimestamp = ConvertToBsonTimestamp(start);
+                                //effective start time is mu.ChangeStreamStartedOn if its less than 10 minutes from now,else use CSLastChecked
+                                var effctiveStartTime = (DateTime.UtcNow - mu.ChangeStreamStartedOn.Value.ToUniversalTime()).TotalMinutes <= 10 ? mu.ChangeStreamStartedOn.Value : mu.CSLastChecked.Value;
+                                                                                           
+                                var bsonTimestamp = ConvertToBsonTimestamp(effctiveStartTime.ToUniversalTime());
                                 options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp };
                                 resetCS = true; //reusing existing varibale
                             }

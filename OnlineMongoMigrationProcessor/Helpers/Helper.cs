@@ -892,6 +892,22 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+
+        public static bool AnyValidCollection(MigrationJob migrationJob)
+        {
+            if (migrationJob == null) return false;
+
+            foreach (var mu in migrationJob.MigrationUnitBasics)
+            {
+                if (Helper.IsMigrationUnitValid(mu))
+                {
+                    return true;
+                }
+            }
+            return false;
+
+        }
+
         public static string ExtractHost(string connectionString)
         {
             if (string.IsNullOrWhiteSpace(connectionString))

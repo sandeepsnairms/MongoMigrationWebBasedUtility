@@ -429,7 +429,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         _processTimer.Stop();
                         _timerStarted = false;
-                        _log?.WriteLine("All work complete - stopped coordination timer", LogType.Debug);
+                        _log?.WriteLine("Offline complete - stopped coordination timer", LogType.Debug);
                     }
                 }
             }
@@ -1736,7 +1736,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error checking if all work is complete: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error checking if offline is complete: {Helper.RedactPii(ex.Message)}", LogType.Error);
                 return false;
             }
         }

@@ -889,7 +889,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
 
 
-        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor, bool clearCache=false)
+        private async Task<TaskResult> StartOnlineForJobCollections(CancellationToken ctsToken, MigrationProcessor processor, bool IsAggrssive, bool clearCache=false)
         {
             _log.WriteLine("StartOnlineForJobCollections started", LogType.Debug);
             try
@@ -902,6 +902,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
 
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Debug);
+
                 foreach (var migrationUnit in unitsForMigrate)
                 {
                     if (_migrationCancelled)
@@ -911,19 +912,28 @@ namespace OnlineMongoMigrationProcessor.Workers
                         return TaskResult.Canceled;
  
 
-                    if (Helper.IsMigrationUnitValid(migrationUnit))
+                    if (Helper.IsMigrationUnitValid(migrationUnit)|| IsAggrssive)
                     {
-                        bool checkExist;
+                        bool valid;
 
                         if (MigrationJobContext.CurrentlyActiveJob.JobType== JobType.RUOptimizedCopy)
-                            checkExist = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
+                            valid = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
                         else
-                            checkExist = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
+                            valid = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
 
-
-                        if (await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName))
+                        if (valid && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
                         {
-                            processor.AddCollectionToChangeStreamQueue(migrationUnit.Id);
+                            if(! (migrationUnit.DumpComplete && migrationUnit.RestoreComplete))
+                            {
+                                _log.WriteLine($"Migration unit {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not ready for immediate change stream", LogType.Debug);
+                                valid = false;
+                            }
+                            
+                        }                        
+
+                        if (valid)
+                        {
+                            processor.AddCollectionToChangeStreamQueue(migrationUnit);
                             _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Debug);
                             
                         }
@@ -942,7 +952,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                     }
                 }
+
                 processor.RunChangeStreamProcessorForAllCollections();
+
                 _log.WriteLine("Change stream processor started for all collections", LogType.Debug);
 
                 return TaskResult.Success;
@@ -1143,7 +1155,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<bool> ExecutePrepareForMigrationAsync()
         {
-            _log.WriteLine("Starting PrepareForMigration with retry logic", LogType.Debug);
+            _log.WriteLine("Starting ExecutePrepareForMigrationAsync", LogType.Debug);
             TaskResult result = await new RetryHelper().ExecuteTask(
                 () => PrepareForMigration(),
                 (ex, attemptCount, currentBackoff) => Default_ExceptionHandler(
@@ -1164,15 +1176,26 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task StartImmediateChangeStreamIfNeededAsync()
         {
-            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && 
-                MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
-            {
-                _log.WriteLine("Starting online change stream processor in background for Immediate mode", LogType.Debug);
+            MigrationJobContext.AddVerboseLog("StartImmediateChangeStreamIfNeededAsync invoked");
+
+            if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+                return;
+
+
+            if(MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode ==ChangeStreamMode.Delayed && !Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
+                return;
+
+            //for delayed mode only, at the start no collections are valid, hence IsOfflineJobCompleted gives false positive
+            if (!Helper.AnyValidCollection(MigrationJobContext.CurrentlyActiveJob) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Delayed)
+                return;
+
+
+            _log.WriteLine("Starting online change stream processor in background.", LogType.Debug);
 #pragma warning disable CS4014
-                StartOnlineForJobCollections(_cts.Token, _migrationProcessor!, true);
+            StartOnlineForJobCollections(_cts.Token, _migrationProcessor!, MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive, true);
 #pragma warning restore CS4014
-                await Task.Delay(30000);
-            }
+            await Task.Delay(30000);
+            
         }
 
         private async Task<bool> ExecutePreparePartitionsAsync()
@@ -1311,7 +1334,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             _migrationProcessor.StartProcessAsync(dummyUnit.Id, sourceConnectionString, targetConnectionString).GetAwaiter().GetResult();
-            
+
         }
 
         private async Task<List<MigrationChunk>> PartitionCollectionAsync(string databaseName, string collectionName, CancellationToken cts, MigrationUnit migrationUnit)

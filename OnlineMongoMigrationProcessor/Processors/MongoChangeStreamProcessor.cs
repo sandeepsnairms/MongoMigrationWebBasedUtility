@@ -95,15 +95,20 @@ namespace OnlineMongoMigrationProcessor
             return _processor.AddCollectionsToProcess(migrationUnitId, cts);
         }
 
-        public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
+        public async Task RunChangeStreamProcessorForAllCollections(CancellationTokenSource cts)
         {
-            MigrationJobContext.AddVerboseLog("MongoChangeStreamProcessor.RunCSPostProcessingAsync: starting post-processing");
-            await _processor.RunCSPostProcessingAsync(cts);
+            MigrationJobContext.AddVerboseLog("MongoChangeStreamProcessor.RunChangeStreamProcessorForAllCollections: starting post-processing");
+            await _processor.RunChangeStreamProcessorForAllCollections(cts);
         }
 
-        public async Task CleanupAggressiveCSAllCollectionsAsync()
-        {
-            await _processor.CleanupAggressiveCSAllCollectionsAsync();
-        }
+        //public async Task CleanupAggressiveCSForCollectionAsync(MigrationUnit mu)
+        //{
+        //    await _processor.CleanupAggressiveCSForCollectionAsync(mu);
+        //}
+
+        //public async Task CleanupAggressiveTempDBAsync()
+        //{
+        //    await _processor.CleanupAggressiveTempDBAsync();
+        //}
     }
 }

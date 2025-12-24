@@ -150,24 +150,26 @@ namespace OnlineMongoMigrationProcessor
 
         public bool AddCollectionsToProcess(string migrationUnitId, CancellationTokenSource cts)
         {
+            //no checks on what collections can be added, caller is responsible for that
+
             var mu = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id,migrationUnitId);
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
 
             _log.WriteLine($"{_syncBackPrefix} AddCollectionsToProcess invoked for {key}", LogType.Debug);
 
-            _log.WriteLine($"{_syncBackPrefix}Evaluating {key} for change streams processing. IsValid:{Helper.IsMigrationUnitValid(mu)} DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Debug);
-            if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive))
-            {
-                _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Debug);
-                return false;
-            }
+            //_log.WriteLine($"{_syncBackPrefix}Evaluating {key} for change streams processing. IsValid:{Helper.IsMigrationUnitValid(mu)} DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Debug);
+            //if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive))
+            //{
+            //    _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Debug);
+            //    return false;
+            //}
 
             if (!_migrationUnitsToProcess.ContainsKey(mu.Id))
             {
                 _migrationUnitsToProcess.TryAdd(mu.Id, 0);
                 _log.WriteLine($"{_syncBackPrefix}Collection added to change stream queue - Key: {key}, DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Debug);
                 _log.ShowInMonitor($"Change stream processor added {mu.DatabaseName}.{mu.CollectionName} to the monitoring queue.");
-                _ = RunCSPostProcessingAsync(cts); // fire-and-forget by design
+                //_ = RunChangeStreamProcessorForAllCollections(cts); // fire-and-forget by design
                 return true;
             }
             else
@@ -177,7 +179,7 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public async Task RunCSPostProcessingAsync(CancellationTokenSource cts)
+        public async Task RunChangeStreamProcessorForAllCollections(CancellationTokenSource cts)
         {
 
             lock (_processingLock)
@@ -189,75 +191,76 @@ namespace OnlineMongoMigrationProcessor
                 _isCSProcessing = true;
             }
 
-            _log.WriteLine($"{_syncBackPrefix} RunCSPostProcessingAsync invoked", LogType.Debug);
+            _log.WriteLine($"{_syncBackPrefix} RunChangeStreamProcessorForAllCollections invoked", LogType.Debug);
             try
             {
                 cts = new CancellationTokenSource();
                 var token = cts.Token;
-
-                _migrationUnitsToProcess.Clear();
-                foreach (var mu in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}RunCSPostProcessingAsync looping for {mu.Id} ", LogType.Debug);
-
-                    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mu.Id);
-                    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive)))
-                    {
-                        _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
-
-                        // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
-                        if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
-                        {
-                            string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
-                            _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Debug);
-
-                            try
-                            {
-                                _ = Task.Run(async () =>
-                                {
-                                    try
-                                    {
-                                        _log.WriteLine($"{_syncBackPrefix}Starting aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                                        await CleanupAggressiveCSAsync(migrationUnit);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
-                                        // Don't re-throw for fire-and-forget tasks
-                                    }
-                                });
-                            }
-                            catch
-                            {
-                            }
-                        }
-                        else
-                        { 
-                            _log.WriteLine($"{_syncBackPrefix}Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - RestoreComplete: {migrationUnit.RestoreComplete}, AggressiveCacheDeleted: {migrationUnit.AggressiveCacheDeleted}", LogType.Debug);
-                        }
-                    }
-                }
-
-                MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted = true;
-
-                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); // persist state
-
-
-                if (_migrationUnitsToProcess.Count == 0)
-                {
-                    _log.WriteLine($"{_syncBackPrefix}No change streams to process.");
-
-                    _isCSProcessing = false;
-                    return;
-                }
-
-                _log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {_migrationUnitsToProcess.Count} collections.",LogType.Debug);
-
                 await ProcessChangeStreamsAsync(token);
 
-                _log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
+                //_migrationUnitsToProcess.Clear();
+                //foreach (var mu in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
+                //{
+                //    _log.WriteLine($"{_syncBackPrefix}RunChangeStreamProcessorForAllCollections looping for {mu.Id} ", LogType.Debug);
 
-                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+                //    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mu.Id);
+                //    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive)))
+                //    {
+                //        _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
+
+                //        // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
+                //        if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
+                //        {
+                //            string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
+                //            _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Debug);
+
+                //            try
+                //            {
+                //                _ = Task.Run(async () =>
+                //                {
+                //                    try
+                //                    {
+                //                        _log.WriteLine($"{_syncBackPrefix}Starting aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
+                //                        await CleanupAggressiveCSForCollectionAsync(migrationUnit);
+                //                    }
+                //                    catch (Exception ex)
+                //                    {
+                //                        _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
+                //                        // Don't re-throw for fire-and-forget tasks
+                //                    }
+                //                });
+                //            }
+                //            catch
+                //            {
+                //            }
+                //        }
+                //        else
+                //        { 
+                //            _log.WriteLine($"{_syncBackPrefix}Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - RestoreComplete: {migrationUnit.RestoreComplete}, AggressiveCacheDeleted: {migrationUnit.AggressiveCacheDeleted}", LogType.Debug);
+                //        }
+                //    }
+                //}
+
+                //MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted = true;
+
+                //MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); // persist state
+
+
+                //if (_migrationUnitsToProcess.Count == 0)
+                //{
+                //    _log.WriteLine($"{_syncBackPrefix}No change streams to process.");
+
+                //    _isCSProcessing = false;
+                //    return;
+                //}
+
+                //_log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {_migrationUnitsToProcess.Count} collections.",LogType.Debug);
+
+                //await ProcessChangeStreamsAsync(token);
+
+                //_log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
+
+                //MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
 
             }
             catch (OperationCanceledException)
@@ -425,7 +428,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 // Get context for aggressive change stream functionality
                 bool isAggressive = MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive;
-                bool isAggressiveComplete = mu.AggressiveCacheDeleted;
+                bool isAggressiveComplete = mu.RestoreComplete;
                 string jobId = MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty;
                 bool isSimulatedRun = MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun;
 
@@ -492,14 +495,44 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        protected async Task CleanupAggressiveCSAsync(MigrationUnit mu)
+        protected async Task AggressiveCSCleanupAsync()
         {
-            MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.CleanupAggressiveCSAsync: muId={mu.Id}, collection={mu.DatabaseName}.{mu.CollectionName}, RestoreComplete={mu.RestoreComplete}");
+            MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.AggressiveCSCleanupAsync invoked");
+
+            //agrressive cleanup is complete
+            if (_finalCleanupExecuted)
+                return;
+
+            if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive)
+                return;
+
+            foreach (var muId in _migrationUnitsToProcess.Keys)
+            {                
+                var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(muId);
+
+                MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.AggressiveCSCleanupAsync Checking {mu.DatabaseName}.{mu.CollectionName}, AggressiveCacheDeleted={mu?.AggressiveCacheDeleted}, RestoreComplete={mu?.RestoreComplete}");
+
+                if (mu != null && mu.RestoreComplete && !mu.AggressiveCacheDeleted)
+                {
+                    MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.AggressiveCSCleanupAsync, CleanupAggressiveCSForCollectionAsync invoked for {mu.DatabaseName}.{mu.CollectionName} ");
+                    await CleanupAggressiveCSForCollectionAsync(mu);
+                }
+            }
+
+            if(Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob) )
+            {
+                MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.AggressiveCSCleanupAsync, CleanupAggressiveTempDBAsync invoked as offline job is completed.");
+                await CleanupAggressiveTempDBAsync();
+                _finalCleanupExecuted = true;
+            }
+        }
+
+        private async Task CleanupAggressiveCSForCollectionAsync(MigrationUnit mu)
+        {
+            MigrationJobContext.AddVerboseLog($"ChangeStreamProcessor.CleanupAggressiveCSForCollectionAsync: muId={mu.Id}, collection={mu.DatabaseName}.{mu.CollectionName}, RestoreComplete={mu.RestoreComplete}");
 
             if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || !mu.RestoreComplete || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
-            {
                 return;
-            }
 
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
 
@@ -546,11 +579,9 @@ namespace OnlineMongoMigrationProcessor
                 long deletedCount = await aggressiveHelper.DeleteStoredDocsAsync(mu.DatabaseName, mu.CollectionName);
 
                 // Mark cleanup as completed
-                lock (_cleanupLock)
-                {
-                    mu.AggressiveCacheDeleted = true;
-                    mu.AggressiveCacheDeletedOn = DateTime.UtcNow;
-                }
+                mu.AggressiveCacheDeleted = true;
+                mu.AggressiveCacheDeletedOn = DateTime.UtcNow;
+                
 
                 // retry deletion in case some documents were added during the first deletion pass
                 deletedCount += await aggressiveHelper.DeleteStoredDocsAsync(mu.DatabaseName, mu.CollectionName);
@@ -584,74 +615,37 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        public async Task CleanupAggressiveCSAllCollectionsAsync()
+        //public async Task CleanupAggressiveCSForCollectionAsync(MigrationUnit mu)
+        //{
+        //    if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+        //        return;
+
+        //    if (!mu.AggressiveCacheDeleted)
+        //    {
+        //        await CleanupAggressiveCSForCollectionAsync(mu);
+        //    }
+        //    else
+        //    {
+        //        _log.ShowInMonitor($"Skipping aggressive cleanup for {mu.DatabaseName}.{mu.CollectionName} - already processed");
+        //    }
+        //}
+
+        public async Task CleanupAggressiveTempDBAsync()
         {
-            if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
-            {
-                return;
-            }
-
-            // Check if final cleanup has already been executed
-            lock (_cleanupLock)
-            {
-                if (_finalCleanupExecuted)
-                {
-                    _log.WriteLine("Aggressive change stream final cleanup already executed", LogType.Debug);
-                    return;
-                }
-                _finalCleanupExecuted = true;
-            }
-
+            // Final cleanup of any remaining temp collections
             try
             {
-                _log.WriteLine("Starting aggressive change stream cleanup for all completed collections");
-
-                int processedCount = 0;
-                int skippedCount = 0;
-
-                foreach (var mub in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
-                {
-                    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mub.Id);
-                    if (migrationUnit.RestoreComplete && Helper.IsMigrationUnitValid(migrationUnit))
-                    {
-                        if (!migrationUnit.AggressiveCacheDeleted)
-                        {
-                            await CleanupAggressiveCSAsync(migrationUnit);
-                            processedCount++;
-                        }
-                        else
-                        {
-                            skippedCount++;
-                            _log.ShowInMonitor($"Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - already processed");
-                        }
-                    }
-                }
-
-                // Final cleanup of any remaining temp collections
-                try
-                {
-                    var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty);
-                    await aggressiveHelper.CleanupTempDatabaseAsync();
-                }
-                catch (Exception ex)
-                {
-                    _log.WriteLine($"Error during final aggressive change stream cleanup: {ex.Message}", LogType.Error);
-                }
-
-                _log.WriteLine($"Aggressive change stream cleanup completed for all collections: {processedCount} processed, {skippedCount} already completed");
+                var aggressiveHelper = new AggressiveChangeStreamHelper(_targetClient, _log, MigrationJobContext.CurrentlyActiveJob.Id ?? string.Empty);
+                await aggressiveHelper.CleanupTempDatabaseAsync();
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error during CleanupAggressiveCSAllCollectionsAsync: {ex.Message}", LogType.Error);
-
-                // Reset flag to allow retry
-                lock (_cleanupLock)
-                {
-                    _finalCleanupExecuted = false;
-                }
+                _log.WriteLine($"Error during final aggressive change stream cleanup: {ex.Message}", LogType.Error);
             }
+
+            _log.WriteLine($"Aggressive change stream cleanup completed.");
         }
-		/*
+        /*
         protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
         {
             totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +

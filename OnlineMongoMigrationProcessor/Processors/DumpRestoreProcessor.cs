@@ -45,7 +45,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             // Start change stream processing for the completed migration unit
-            AddCollectionToChangeStreamQueue(mu.Id);
+            AddCollectionToChangeStreamQueue(mu);
 
             PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
             PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);
@@ -53,7 +53,7 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"Offline dump/restore processing completed for {mu.DatabaseName}. {mu.CollectionName}",LogType.Debug);
 
             // Handle post-completion logic -stop if offline, else invoke change streams
-            StopOrInvokeChangeStreams();
+            StopOfflineOrInvokeChangeStreams();
         }
 
         /// <summary>
@@ -121,6 +121,8 @@ namespace OnlineMongoMigrationProcessor
         public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.StartProcessAsync: migrationUnitId={migrationUnitId}");
+
+
             // Perform initial setup required by MigrationProcessor
             MigrationJobContext.ControlledPauseRequested = false;
             ProcessRunning = true;
@@ -129,14 +131,20 @@ namespace OnlineMongoMigrationProcessor
             var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
             mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
-            var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
+            if (mu.DumpComplete && mu.RestoreComplete)
+            {
+                _log.WriteLine($"Document copy operation for {mu.DatabaseName}.{mu.CollectionName} already completed.", LogType.Debug);
+                return TaskResult.Success;
+            }
 
-            PrepareDumpProcess(mu);            
+            var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
+            PrepareDumpProcess(mu);
 
             // Check if post-upload change stream processing is already in progress
             // This is a processor-level concern, not coordinator concern
-            if (CheckChangeStreamAlreadyProcessingAsync(ctx))
-                return TaskResult.Success;
+            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
+            //    return TaskResult.Success;
+                        
 
             //initialize coordinator if not already done
             InitializeCoordinator();
@@ -178,38 +186,13 @@ namespace OnlineMongoMigrationProcessor
         //    _log.WriteLine($"Offline dump/restore processing paused/completed for {mu.DatabaseName}.{mu.CollectionName}");
 
         //    // Handle post-completion logic -stop if offline, else invoke change streams
-        //    StopOrInvokeChangeStreams(ctx);
+        //    StopOfflineOrInvokeChangeStreams(ctx);
 
         //    // Return success after completion
         //    return TaskResult.Success;
         //}
 
-        public void StopOrInvokeChangeStreams()
-        {
-            // Handle offline completion and post-upload CS logic
-            
-            if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
-            {
-                // Don't mark as completed if this is a controlled pause
-                if (!MigrationJobContext.ControlledPauseRequested)
-                {
-                    _log.WriteLine($"Job {MigrationJobContext.CurrentlyActiveJob.Id} Completed");
-                    MigrationJobContext.CurrentlyActiveJob.IsCompleted = true;
-                    MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
-                }
-                StopProcessing();
-            }
-            else
-            {
-                if (!MigrationJobContext.ControlledPauseRequested)
-                {
-                    _log.WriteLine($"Invoke RunChangeStreamProcessorForAllCollections.", LogType.Debug);
-
-                    RunChangeStreamProcessorForAllCollections();
-                }
-            }
-            
-        }
+        
 
         public override void InitiateControlledPause()
         {

@@ -402,7 +402,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (!segmentsWithMissingDocs.Any())
             {
-                _log.WriteLine($"No missing documents detected during chunk-level comparison of {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
+                _log.WriteLine($"Document count verified for {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}]");
                 return;
             }
 

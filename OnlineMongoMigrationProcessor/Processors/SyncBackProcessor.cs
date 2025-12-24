@@ -68,10 +68,13 @@ namespace OnlineMongoMigrationProcessor.Processors
                     {
                         mu.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
                     }
-                }
+
+                    AddCollectionToChangeStreamQueue(mu);
+
+				}
             }
 
-            var _ = _changeStreamProcessor!.RunCSPostProcessingAsync(_cts);
+            var _ = _changeStreamProcessor!.RunChangeStreamProcessorForAllCollections(_cts);
             return Task.FromResult(TaskResult.Success);
         }
 

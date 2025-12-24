@@ -1,7 +1,9 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Models;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -22,7 +24,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         {
             _targetClient = targetClient ?? throw new ArgumentNullException(nameof(targetClient));
             _log = log ?? throw new ArgumentNullException(nameof(log));
-            _jobId = jobId ?? throw new ArgumentNullException(nameof(jobId));
+            _jobId = $"MigrationCache_{jobId}" ?? throw new ArgumentNullException(nameof(jobId));
         }
 
         
@@ -38,6 +40,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <returns>Number of successfully stored documents</returns>
         public async Task<int> StoreDocumentKeysAsync(string sourceDatabaseName, string sourceCollectionName, IEnumerable<BsonDocument> documentKeys, string operationType = "delete")
         {
+            MigrationJobContext.AddVerboseLog($"Processing StoreDocumentKeysAsync for {sourceDatabaseName}.{sourceCollectionName} documentKeysCount= {documentKeys.Count()} operationType= {operationType}");
+
             try
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
@@ -79,6 +83,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <returns>Number of successfully removed documents</returns>
         public async Task<long> RemoveDocumentKeysAsync(string sourceDatabaseName, string sourceCollectionName, IEnumerable<BsonDocument> documentKeys)
         {
+            MigrationJobContext.AddVerboseLog($"Processing RemoveDocumentKeysAsync for {sourceDatabaseName}.{sourceCollectionName} documentKeysCount= {documentKeys.Count()}");
+
             try
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
@@ -120,6 +126,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <returns>Number of documents deleted from target collection</returns>
         public async Task<long> DeleteStoredDocsAsync(string sourceDatabaseName, string sourceCollectionName)
         {
+            MigrationJobContext.AddVerboseLog($"Processing DeleteStoredDocsAsync for {sourceDatabaseName}.{sourceCollectionName}");
+
             try
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
@@ -221,6 +229,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <returns>Tuple with counts of (inserted, updated, skipped) documents</returns>
         public async Task<(long Inserted, long Updated, long Skipped)> ApplyStoredChangesAsync(string sourceDatabaseName, string sourceCollectionName, MongoClient sourceClient)
         {
+            MigrationJobContext.AddVerboseLog($"Processing ApplyStoredChangesAsync for {sourceDatabaseName}.{sourceCollectionName}");
             try
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
@@ -316,6 +325,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             IMongoCollection<BsonDocument> sourceCollection,
             List<BsonDocument> documentKeys)
         {
+            MigrationJobContext.AddVerboseLog($"Processing ReadDocumentsFromSourceAsync for {sourceCollection.Database.DatabaseNamespace.DatabaseName}.{sourceCollection.CollectionNamespace.CollectionName} documentKeysCount= {documentKeys.Count}");
+
             try
             {
                 // Extract _id values from document keys
@@ -350,6 +361,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string collectionName,
             int pageNumber)
         {
+
+            MigrationJobContext.AddVerboseLog($"Processing ProcessStoredInsertsAsync for {databaseName}.{collectionName} pageNumber= {pageNumber} batchSize={batchSize} documentsCount= {documents.Count}");
+
             long totalInserted = 0;
             long totalSkipped = 0;
 
@@ -371,6 +385,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         var result = await targetCollection.BulkWriteAsync(insertModels, new BulkWriteOptions { IsOrdered = false });
                         totalInserted += result.InsertedCount;
                         _log.ShowInMonitor($"Inserted {result.InsertedCount} documents into {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
+                        MigrationJobContext.AddVerboseLog($"ProcessStoredInsertsAsync inserted for {databaseName}.{collectionName} , {result.InsertedCount} documents into {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
@@ -387,6 +402,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
             }
 
+            MigrationJobContext.AddVerboseLog($"Completed ProcessStoredInsertsAsync for {databaseName}.{collectionName}. totalInserted ={totalInserted}, totalSkipped={totalSkipped}");
             return (totalInserted, totalSkipped);
         }
 
@@ -398,6 +414,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string collectionName,
             int pageNumber)
         {
+
+            MigrationJobContext.AddVerboseLog($"Processing ProcessStoredUpdatesAsync for {databaseName}.{collectionName} pageNumber= {pageNumber} batchSize={batchSize} documentsCount= {documents.Count}");
+
             long totalUpdated = 0;
             long totalSkipped = 0;
 
@@ -427,6 +446,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         var result = await targetCollection.BulkWriteAsync(updateModels, new BulkWriteOptions { IsOrdered = false });
                         totalUpdated += result.ModifiedCount + result.Upserts.Count;
                         _log.ShowInMonitor($"Updated {result.ModifiedCount + result.Upserts.Count} documents in {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
+                        MigrationJobContext.AddVerboseLog($"ProcessStoredInsertsAsync updated for {databaseName}.{collectionName} , {result.InsertedCount} documents into {databaseName}.{collectionName} (page {pageNumber + 1}, batch {i / batchSize + 1})");
                     }
                     catch (MongoBulkWriteException<BsonDocument> ex)
                     {
@@ -443,6 +463,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
             }
 
+            MigrationJobContext.AddVerboseLog($"Completed ProcessStoredUpdatesAsync for {databaseName}.{collectionName}. totalInserted ={totalUpdated}, totalSkipped={totalSkipped}");
             return (totalUpdated, totalSkipped);
         }
 
@@ -452,6 +473,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// <returns>True if cleanup was successful, false otherwise</returns>
         public async Task<bool> CleanupTempDatabaseAsync()
         {
+            MigrationJobContext.AddVerboseLog($"Processing CleanupTempDatabaseAsync");
             try
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);

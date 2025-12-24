@@ -143,8 +143,14 @@ namespace OnlineMongoMigrationProcessor
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
             //when resuming a job, we need to check if post-upload change stream processing is already in progress
-            if (CheckChangeStreamAlreadyProcessingAsync(ctx))
+            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
+            //    return TaskResult.Success;
+
+            if(mu.DumpComplete && mu.RestoreComplete)
+            {
+                _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} already completed.", LogType.Debug);
                 return TaskResult.Success;
+            }
 
             // starting the  regular document copy process
             _log.WriteLine($"{ctx.DatabaseName}.{ctx.CollectionName} Document copy started");
@@ -215,6 +221,8 @@ namespace OnlineMongoMigrationProcessor
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
 
+                    // Start change stream processing for the completed migration unit
+                    AddCollectionToChangeStreamQueue(mu);
 
                     MigrationJobContext.SaveMigrationUnit(mu,true);
 
@@ -222,14 +230,14 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} failed because of count mismatch.\", LogType.Error");
+                    _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} failed because of count mismatch.", LogType.Error);
                     return TaskResult.Retry;
                 }
                              
   
             }
 
-            await PostCopyChangeStreamProcessor(ctx, mu.Id);
+            StopOfflineOrInvokeChangeStreams();
 
             return TaskResult.Success;
         }

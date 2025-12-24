@@ -63,7 +63,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void AddInsert(ChangeStreamDocument<BsonDocument> change)
         {
-            MigrationJobContext.AddVerboseLog($"AccumulatedChangesTracker.AddInsert: collectionKey={_collectionKey}");
+
             lock (_lock)
             {
                 _totalEventCount++;
@@ -88,7 +88,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 
         public void AddUpdate(ChangeStreamDocument<BsonDocument> change)
         {
-            MigrationJobContext.AddVerboseLog($"AccumulatedChangesTracker.AddUpdate: collectionKey={_collectionKey}");
+
             lock (_lock)
             {
                 _totalEventCount++;
