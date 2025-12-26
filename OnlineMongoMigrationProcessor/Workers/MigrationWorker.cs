@@ -893,15 +893,18 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 _log.WriteLine($"Keep-alive mechanism enabled with base URL: {_webAppBaseUrl}", LogType.Debug);
             }
-            
+
+            int counter = 0;
             while (_migrationProcessor != null && _migrationProcessor.ProcessRunning)
             {
                 if (HandleControlPause())
                     return TaskResult.Canceled;
 
+                
                 // Call keep-alive API if configured
                 if (useKeepAlive)
                 {
+                    counter++;
                     try
                     {
                         using (var httpClient = new HttpClient())
@@ -913,7 +916,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                             if (response.IsSuccessStatusCode)
                             {
                                 var content = await response.Content.ReadAsStringAsync();
-                                _log.WriteLine($"Keep-alive response: {content}", LogType.Debug);
+                                if (counter > 100000)
+                                {
+                                    _log.WriteLine($"Keep-alive response: {content}", LogType.Debug);
+                                    counter = 0;
+                                }
                             }
                         }
                     }

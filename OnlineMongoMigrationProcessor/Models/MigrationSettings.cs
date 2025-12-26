@@ -11,6 +11,7 @@ namespace OnlineMongoMigrationProcessor
         public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
         public bool ReadBinary { get; set; }
+        public int LogPageSize { get; set; }
         public long ChunkSizeInMb { get; set; }
         public int ChangeStreamMaxDocsInBatch { get; set; }
 		public int ChangeStreamBatchDuration { get; set; }
@@ -53,6 +54,7 @@ namespace OnlineMongoMigrationProcessor
                     ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
                     MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CompareSampleSize = loadedObject.CompareSampleSize == 0 ? 50 : loadedObject.CompareSampleSize;
+                    LogPageSize = loadedObject.LogPageSize == 0 ? 5000 : loadedObject.LogPageSize;
                     CACertContentsForSourceServer = loadedObject.CACertContentsForSourceServer;
                     ObjectIdPartitioner = loadedObject.ObjectIdPartitioner;
                     
@@ -61,6 +63,10 @@ namespace OnlineMongoMigrationProcessor
                         ChangeStreamMaxDocsInBatch = 10000;
                     if (ChangeStreamBatchDuration < 20)
                         ChangeStreamBatchDuration = 120;
+                    if (LogPageSize < 1000)
+                        LogPageSize = 1000;
+                    if (LogPageSize > 100000)
+                        LogPageSize = 100000;
                 }
             }
             if (!initialized)
@@ -75,6 +81,7 @@ namespace OnlineMongoMigrationProcessor
                 ChangeStreamMaxCollsInBatch = 5;
                 CACertContentsForSourceServer = string.Empty;
                 CompareSampleSize = 50;
+                LogPageSize = 5000;
                 ObjectIdPartitioner = PartitionerType.UseTimeBoundaries;
             }
         }

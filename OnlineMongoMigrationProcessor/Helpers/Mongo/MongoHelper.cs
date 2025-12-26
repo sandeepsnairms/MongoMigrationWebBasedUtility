@@ -655,6 +655,15 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
                     // Initialize with safe defaults; will be overridden below
                     var options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup };
+                    if(job.JobType==JobType.RUOptimizedCopy)
+                    {
+                        if (string.IsNullOrEmpty(mu.OriginalResumeToken))
+                        {
+                            await WatchChangeStreamUntilChangeAsync(log, client, job, mu, collection, options, resetCS, seconds, syncBack, cts, useServerLevel);
+                        }
+                        isSucessful = true;
+                        return;
+                    }                
                                         
                     if (resetCS)
                     {
@@ -875,7 +884,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                         // Use linkedCts.Token instead of cts.Token to respect both timeout and manual cancellation
                         if (await cursor.MoveNextAsync(linkedCts.Token))
                         {
-                            if (!forced && (useServerLevel ? string.IsNullOrEmpty(job.OriginalResumeToken) : string.IsNullOrEmpty(mu.OriginalResumeToken)))
+                            if (!forced || string.IsNullOrEmpty(mu.OriginalResumeToken))
                             {
                                 var resumeTokenJson = cursor.GetResumeToken().ToJson();
 

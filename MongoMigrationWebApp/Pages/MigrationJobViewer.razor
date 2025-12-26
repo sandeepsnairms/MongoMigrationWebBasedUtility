@@ -556,7 +556,7 @@ else if (@_showLogBackupFile)
     // Paginated download fields
     private bool _showPaginatedDownloadDialog = false;
     private int _logEntryCount = 0;
-    private const int LOG_THRESHOLD = 10000; // Threshold for paginated download
+    private OnlineMongoMigrationProcessor.MigrationSettings? _config;
 
     // Loading spinner state for collection loading
     private bool _isLoadingCollections = false;
@@ -1052,7 +1052,12 @@ else if (@_showLogBackupFile)
         // First check log count
         _logEntryCount = await GetLogCount(JobId);
 
-        if (_logEntryCount > LOG_THRESHOLD)
+        // Load config to get LogPageSize threshold
+        _config ??= new OnlineMongoMigrationProcessor.MigrationSettings();
+        _config.Load();
+        int logThreshold = _config.LogPageSize;
+
+        if (_logEntryCount > logThreshold)
         {
             // Show paginated download dialog
             _showPaginatedDownloadDialog = true;

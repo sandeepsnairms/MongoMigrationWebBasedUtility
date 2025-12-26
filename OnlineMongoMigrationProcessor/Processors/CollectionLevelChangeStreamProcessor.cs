@@ -174,6 +174,17 @@ namespace OnlineMongoMigrationProcessor
                         ? mu.SyncBackCursorUtcTimestamp > DateTime.MinValue 
                         : mu.CursorUtcTimestamp > DateTime.MinValue;
 
+                    //for RUOptimizedCopy job type, also check for resume token if cursor timestamp is not set
+                    if (!hasCursorTimestamp && MigrationJobContext.CurrentlyActiveJob.JobType==JobType.RUOptimizedCopy)
+                    {
+                        var muFull = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mu.Id);
+                        hasCursorTimestamp =_syncBack
+                            ? !string.IsNullOrEmpty(muFull.SyncBackResumeToken)
+                            : !string.IsNullOrEmpty(muFull.ResumeToken);
+                    }
+
+
+
                     bool isReady=false;
                     if (hasCursorTimestamp)
                     {
