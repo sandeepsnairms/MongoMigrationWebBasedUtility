@@ -18,6 +18,7 @@ namespace MongoMigrationWebApp.Service
         private readonly IConfiguration _configuration;
         private System.Threading.Timer? _resumeTimer;
         private bool _resumeExecuted = false;
+        private string? _webAppBaseUrl = null;
 
         public JobManager(IConfiguration configuration)
         {
@@ -111,6 +112,33 @@ namespace MongoMigrationWebApp.Service
 
         
         #region _configuration Management
+
+        /// <summary>
+        /// Updates the WebAppBaseUrl from browser context. Called from Index.razor on first load.
+        /// </summary>
+        public void UpdateWebAppBaseUrlFromBrowser(string baseUri)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(baseUri))
+                    return;
+
+                // Remove trailing slash if present
+                _webAppBaseUrl = baseUri.TrimEnd('/');
+                
+                // Update existing MigrationWorker if one exists
+                if (MigrationWorker != null)
+                {
+                    MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+                }
+                
+                Helper.LogToFile($"WebAppBaseUrl updated from browser: {_webAppBaseUrl}");
+            }
+            catch (Exception ex)
+            {
+                Helper.LogToFile($"Error updating WebAppBaseUrl from browser: {ex.Message}");
+            }
+        }
 
         public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updated_config, out string errorMessage)
         {
@@ -300,6 +328,13 @@ namespace MongoMigrationWebApp.Service
             
 
             MigrationWorker = new MigrationWorker();
+            
+            // Set WebAppBaseUrl if available
+            if (!string.IsNullOrEmpty(_webAppBaseUrl))
+            {
+                MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+            }
+            
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
 
@@ -317,6 +352,12 @@ namespace MongoMigrationWebApp.Service
         public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
         {
             MigrationWorker = new MigrationWorker();
+            
+            // Set WebAppBaseUrl if available
+            if (!string.IsNullOrEmpty(_webAppBaseUrl))
+            {
+                MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+            }
 
             MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
             MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;

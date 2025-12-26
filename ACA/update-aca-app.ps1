@@ -81,6 +81,7 @@ az containerapp update `
     --resource-group $ResourceGroupName `
     --min-replicas 1 `
     --max-replicas 1 `
+    --set template.scale.rules=[] `
     --image $imageName `
     2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' }
 

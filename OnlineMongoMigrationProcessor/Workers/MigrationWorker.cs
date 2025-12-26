@@ -15,6 +15,7 @@ using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,6 +41,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         private MigrationProcessor? _migrationProcessor;
         public MigrationSettings? _config;
         bool _syncBack = false;
+        private string? _webAppBaseUrl = null;
 
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
@@ -53,6 +55,14 @@ namespace OnlineMongoMigrationProcessor.Workers
         {            
             _log = new Log();          
             MigrationJobContext.JobList.SetLog(_log);
+        }
+
+        /// <summary>
+        /// Sets the web app base URL for Keep-Alive functionality
+        /// </summary>
+        public void SetWebAppBaseUrl(string webAppBaseUrl)
+        {
+            _webAppBaseUrl = webAppBaseUrl;
         }
 
         public LogBucket? GetLogBucket(string jobId)
@@ -875,10 +885,43 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> WaitForMigrationProcessorCompletionAsync(CancellationToken ctsToken)
         {
             MigrationJobContext.AddVerboseLog("Waiting for migration processor to complete all activities");
+            
+            // Get the web app base URL from class-level variable
+            bool useKeepAlive = !string.IsNullOrEmpty(_webAppBaseUrl);
+            
+            if (useKeepAlive)
+            {
+                _log.WriteLine($"Keep-alive mechanism enabled with base URL: {_webAppBaseUrl}", LogType.Debug);
+            }
+            
             while (_migrationProcessor != null && _migrationProcessor.ProcessRunning)
             {
                 if (HandleControlPause())
                     return TaskResult.Canceled;
+
+                // Call keep-alive API if configured
+                if (useKeepAlive)
+                {
+                    try
+                    {
+                        using (var httpClient = new HttpClient())
+                        {
+                            httpClient.Timeout = TimeSpan.FromSeconds(5);
+                            var keepAliveUrl = $"{_webAppBaseUrl}/api/KeepAlive";
+                            var response = await httpClient.GetAsync(keepAliveUrl, ctsToken);
+                            
+                            if (response.IsSuccessStatusCode)
+                            {
+                                var content = await response.Content.ReadAsStringAsync();
+                                _log.WriteLine($"Keep-alive response: {content}", LogType.Debug);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"Keep-alive call failed: {ex.Message}", LogType.Debug);
+                    }
+                }
 
                 Task.Delay(10000, ctsToken).Wait(ctsToken);
             }
