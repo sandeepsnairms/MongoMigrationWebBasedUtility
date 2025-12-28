@@ -368,7 +368,7 @@ namespace OnlineMongoMigrationProcessor
                 TimeSpan gap = DateTime.UtcNow - mu.CSLastChecked.Value;
                 if (gap < TimeSpan.FromMinutes(60))
                 {
-                    _log.WriteLine($"{_syncBackPrefix}Oplog for {mu.DatabaseName}.{mu.CollectionName} shorter than: {gap.TotalMinutes:F2} minutes, this collection will not be monitored for changes", LogType.Warning);
+                    _log.WriteLine($"{_syncBackPrefix}Oplog capacity for {mu.DatabaseName}.{mu.CollectionName} is shorter than: {gap.TotalMinutes:F2} minutes, this collection will not be monitored for changes", LogType.Warning);
                     SetResumeParameters(mu, mu.CursorUtcTimestamp, string.Empty); //clear resume token to use timestamp
                     return false;        
                 }
