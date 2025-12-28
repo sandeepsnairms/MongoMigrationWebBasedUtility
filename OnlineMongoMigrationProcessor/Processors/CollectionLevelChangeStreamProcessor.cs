@@ -364,8 +364,8 @@ namespace OnlineMongoMigrationProcessor
 
                 mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
-                //calculate gap since last checked
-                TimeSpan gap = DateTime.UtcNow - mu.CSLastChecked.Value;
+                //calculate gap since current resume token
+                TimeSpan gap = DateTime.UtcNow - mu.CursorUtcTimestamp;
                 if (gap < TimeSpan.FromMinutes(60))
                 {
                     _log.WriteLine($"{_syncBackPrefix}Oplog capacity for {mu.DatabaseName}.{mu.CollectionName} is shorter than: {gap.TotalMinutes:F2} minutes, this collection will not be monitored for changes", LogType.Warning);
@@ -781,8 +781,6 @@ namespace OnlineMongoMigrationProcessor
 
                 try
 				{
-                    //last time chnage stream was checked
-                    mu.CSLastChecked=DateTime.UtcNow;
 
                     var sucess = await MongoSafeTaskExecutor.ExecuteAsync(
                     async (ct) =>
@@ -1228,6 +1226,7 @@ namespace OnlineMongoMigrationProcessor
 
                 mu.CSUpdatesInLastBatch = eventCounter; 
                 mu.CSNormalizedUpdatesInLastBatch = (long)(eventCounter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
+                mu.CSLastChecked = System.DateTime.UtcNow;
 
 
                 // Transfer latency metrics from accumulatedChangesInColl to mu

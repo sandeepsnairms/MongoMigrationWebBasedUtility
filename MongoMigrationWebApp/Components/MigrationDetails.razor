@@ -105,7 +105,7 @@
                     <div class="mb-3 checkbox-container">
                         <div class="checkbox-group">
                             <label title="Check this if all collections in your migration use MongoDB ObjectId for the _id field. This optimizes partitioning and improves migration performance.">
-                                <input type="checkbox" id="allCollectionsUseObjectId" disabled="@(!NewMode)" @bind="allCollectionsUseObjectId" />
+                                <input type="checkbox" id="allCollectionsUseObjectId" disabled="@(!NewMode || jobType == JobType.RUOptimizedCopy)" @bind="allCollectionsUseObjectId" />
                                 All collections use ObjectId for the _id field
                             </label>
                         </div>
