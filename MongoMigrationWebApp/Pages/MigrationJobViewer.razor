@@ -244,6 +244,10 @@
                             Time Since Last Change
                             <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
                         </th>
+                        <th class="sortable-header @GetSortClass("TimeSinceLastBatch")" @onclick='() => SortBy("TimeSinceLastBatch")' style="cursor: pointer;">
+                            CS Last Checked
+                            <i class="bi @GetSortIcon("TimeSinceLastBatch") ms-1"></i>
+                        </th>
                         <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
                             Last Batch – Total Changes
                             <i class="bi @GetSortIcon("LastBatchChanges") ms-1"></i>
@@ -264,6 +268,10 @@
                      <th class="sortable-header @GetSortClass("TimeSinceLastChange")" @onclick='() => SortBy("TimeSinceLastChange")' style="cursor: pointer;">
                         Time Since Last Sync Back
                         <i class="bi @GetSortIcon("TimeSinceLastChange") ms-1"></i>
+                    </th>
+                    <th class="sortable-header @GetSortClass("TimeSinceLastBatch")" @onclick='() => SortBy("TimeSinceLastBatch")' style="cursor: pointer;">
+                        CS Last Checked
+                        <i class="bi @GetSortIcon("TimeSinceLastBatch") ms-1"></i>
                     </th>
                     <th class="sortable-header @GetSortClass("LastBatchChanges")" @onclick='() => SortBy("LastBatchChanges")' style="cursor: pointer;">
                         Last Batch – Total Changes
@@ -307,7 +315,10 @@
                             @if (CurrentlyLoadedMigrationJob.JobType != OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy || CurrentlyLoadedMigrationJob.ProcessingSyncBack)
                             {
                                 <td title="Avg Read Latency: @mu.CSAvgReadLatencyInMS.ToString("F2") ms | Avg Write Latency: @mu.CSAvgWriteLatencyInMS.ToString("F2") ms">                           
-                                    @Helper.GetChangeStreamLag(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack)
+                                    @Helper.GetTimestampDiff(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack)
+                                </td>
+                                <td>
+                                    @GetTimeSinceLastBatch(mu)
                                 </td>
                             }
                             <td>
@@ -643,7 +654,7 @@ else if (@_showLogBackupFile)
             // Change Stream Lag (Time Since Last Change/Sync Back)
             if (CurrentlyLoadedMigrationJob!=null & Helper.IsOnline(CurrentlyLoadedMigrationJob) == true)
             {
-                var lagText = Helper.GetChangeStreamLag(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack);
+                var lagText = Helper.GetTimestampDiff(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack);
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
@@ -740,6 +751,10 @@ else if (@_showLogBackupFile)
                 ? units.OrderBy(u => GetSortValueForTimestamp(u)).ToList()
                 : units.OrderByDescending(u => GetSortValueForTimestamp(u)).ToList(),
 
+            "TimeSinceLastBatch" => _sortAscending
+                ? units.OrderBy(u => GetSortValueForLastBatch(u)).ToList()
+                : units.OrderByDescending(u => GetSortValueForLastBatch(u)).ToList(),
+
             "LastBatchChanges" => _sortAscending
                 ? units.OrderBy(u => u.CSUpdatesInLastBatch).ToList()
                 : units.OrderByDescending(u => u.CSUpdatesInLastBatch).ToList(),
@@ -776,6 +791,36 @@ else if (@_showLogBackupFile)
             return mu.SyncBackCursorUtcTimestamp;
         else
             return mu.CursorUtcTimestamp;
+    }
+
+    private string GetTimeSinceLastBatch(MigrationUnitBasic mu)
+    {
+        MigrationUnit migrationUnit;
+
+        if (MigrationJobContext.MigrationUnitsCache==null)
+            migrationUnit = migrationUnit = MigrationJobContext.GetMigrationUnit(CurrentlyLoadedMigrationJob.Id, mu.Id);
+        else
+            migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mu.Id);
+
+        if (migrationUnit == null || migrationUnit.CSLastChecked == null || migrationUnit.CSLastChecked == DateTime.MinValue)
+            return "NA";
+
+        return Helper.GetTimestampDiff(migrationUnit.CSLastChecked.Value);
+    }
+
+    private DateTime GetSortValueForLastBatch(MigrationUnitBasic mu)
+    {
+        MigrationUnit migrationUnit;
+
+        if (MigrationJobContext.MigrationUnitsCache == null)
+            migrationUnit = migrationUnit = MigrationJobContext.GetMigrationUnit(CurrentlyLoadedMigrationJob.Id, mu.Id);
+        else
+            migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mu.Id);
+
+        if (migrationUnit == null || migrationUnit.CSLastChecked == null || migrationUnit.CSLastChecked == DateTime.MinValue)
+            return DateTime.MinValue;
+
+        return migrationUnit.CSLastChecked.Value;
     }
 
     #endregion
@@ -1307,19 +1352,21 @@ else if (@_showLogBackupFile)
             await InvokeAsync(StateHasChanged);
         }
 
-        // Run the long task on a separate thread
-        await Task.Run(() =>
+        // Fire-and-forget: Run the long task on a separate thread without blocking
+        _ = Task.Run(async () =>
         {
             // JobManager.DisposeLogs();
 
             if (CurrentlyLoadedMigrationJob.ProcessingSyncBack && !CurrentlyLoadedMigrationJob.IsSimulatedRun)
             {
-                JobManager.SyncBackToSource(MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
-                MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty, CurrentlyLoadedMigrationJob);
+                await JobManager.SyncBackToSource(
+                    MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
+                    MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty, 
+                    CurrentlyLoadedMigrationJob);
             }
             else
             {
-                JobManager.StartMigrationAsync(CurrentlyLoadedMigrationJob,
+                await JobManager.StartMigration(CurrentlyLoadedMigrationJob,
                     MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
                     MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
                     CurrentlyLoadedMigrationJob.NameSpaces ?? string.Empty,
@@ -1573,12 +1620,13 @@ else if (@_showLogBackupFile)
             }
             else if (result.DiaLogType == YesNoDialog.Category.SyncBackNot)
             {
-
+                //fire and forget
                 if (CurrentlyLoadedMigrationJob != null)
                 {
-                    JobManager.SyncBackToSource(MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
-                                                MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id] ?? string.Empty,
-                                                CurrentlyLoadedMigrationJob);
+                     _ = Task.Run(async () =>
+                    {
+                        await JobManager.SyncBackToSource(MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], MigrationJobContext.CurrentlyActiveJob);
+                    });
                 }
                 if (MigrationJobContext.SaveMigrationJob(CurrentlyLoadedMigrationJob))
                     return;

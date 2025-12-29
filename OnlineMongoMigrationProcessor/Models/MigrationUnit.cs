@@ -113,9 +113,6 @@ namespace OnlineMongoMigrationProcessor
         public long CSNormalizedUpdatesInLastBatch { get; set; }
         public int CSLastBatchDurationSeconds { get; set; }
 
-
-		public int CSAddHours { get; set; }
-        public int SyncBackAddHours { get; set; }
         public string? UserFilter { get; set; }
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }

@@ -262,7 +262,14 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics == null || MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics.Count == 0)
                     return TaskResult.FailedAfterRetries;
 
-                var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics[0].Id);
+                MigrationUnit migrationUnit;
+
+                if (MigrationJobContext.MigrationUnitsCache == null)
+                    migrationUnit = migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics[0].Id);
+                else
+                    migrationUnit = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics[0].Id);
+
+                
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, _config.CACertContentsForSourceServer ?? string.Empty, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], migrationUnit);
                 MigrationJobContext.CurrentlyActiveJob.SourceServerVersion = retValue.Version;
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
@@ -403,7 +410,17 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     try
                     {
-                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts,true);                            
+                        MongoClient mongoClient = new MongoClient();
+                        if(syncBack)
+                        {
+                            mongoClient= MongoClientFactory.Create(_log, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], false, string.Empty);
+                        }
+                        else
+                        {
+                            mongoClient = _sourceClient!;
+                        }
+
+                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts, true);                            
                     }
                     catch (Exception ex)
                     {
@@ -835,6 +852,33 @@ namespace OnlineMongoMigrationProcessor.Workers
             return await StartMigrationProcessorAsync(migrationUnit);
         }
 
+
+        private async Task<TaskResult> SetSyncBackResumeTokenAsync(CancellationToken ctsToken)
+        {
+            if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob!))
+            {
+                List<Task> resumeTokenTasks = new List<Task>();
+
+                var units = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
+                foreach (MigrationUnit mub in units)
+                {
+                    var mu= MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mub.Id);
+
+                    if (!mu.SyncBackChangeStreamStartedOn.HasValue)
+                    {
+                        mu.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
+                        mu.CSLastChecked = DateTime.MinValue;
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                        var setResumeResult = await SetCollectionResumeToken(mu, true, ctsToken, resumeTokenTasks);
+                        if (setResumeResult != TaskResult.Success)
+                            return setResumeResult;
+                    }                    
+                }
+            }
+            return TaskResult.Success;
+        }
+
+
         private async Task<TaskResult> StartMigrationProcessorAsync(MigrationUnit migrationUnit)
         {
             MigrationJobContext.AddVerboseLog($"StartMigrationProcessorAsync: mu={migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
@@ -924,13 +968,26 @@ namespace OnlineMongoMigrationProcessor.Workers
                             }
                         }
                     }
+                    catch (OperationCanceledException)
+                    {
+                        _log.WriteLine("Keep-alive cancelled - migration is stopping", LogType.Debug);
+                        return TaskResult.Canceled;
+                    }
                     catch (Exception ex)
                     {
                         _log.WriteLine($"Keep-alive call failed: {ex.Message}", LogType.Debug);
                     }
                 }
 
-                Task.Delay(10000, ctsToken).Wait(ctsToken);
+                try
+                {
+                    await Task.Delay(10000, ctsToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    _log.WriteLine("Wait cancelled - migration is stopping", LogType.Debug);
+                    return TaskResult.Canceled;
+                }
             }
 
             _log.WriteLine("MigrateJobCollections completed - all activities finished", LogType.Debug);
@@ -1328,13 +1385,32 @@ namespace OnlineMongoMigrationProcessor.Workers
              _config.Load();
         }
 
+        public void SyncBackToSource()
+        {
 
-        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString)
+            var dummySourceClient = MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
+            _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!, this);
+            _syncBack = true;
+            _migrationProcessor.ProcessRunning = true;
+            JobStarting = false;
+            var dummyUnit = new MigrationUnit(MigrationJobContext.CurrentlyActiveJob, "", "", new List<MigrationChunk>());
+
+            //async  call
+            _ = SetSyncBackResumeTokenAsync(_cts.Token);
+            MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack = true;
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
+            _migrationProcessor.StartProcessAsync(dummyUnit.Id, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]).GetAwaiter().GetResult();
+        }
+
+        public async Task SyncBackToSourceAsync(string sourceConnectionString, string targetConnectionString)
         {
             MigrationJobContext.AddVerboseLog($"SyncBackToSource: sourceCS length={sourceConnectionString?.Length}, targetCS length={targetConnectionString?.Length}");
             JobStarting= true;
 
-            if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id)) 
+            if (!InitializeJob())
+                return;
+
+            if (string.IsNullOrWhiteSpace(MigrationJobContext.CurrentlyActiveJob.Id))
             {
                 StopMigration(); //stop any existing
                 return;
@@ -1369,10 +1445,10 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             MigrationJobContext.SaveMigrationUnit(dummyUnit,false);
 
+            _cts = new CancellationTokenSource();
             //if run comparison is set by customer.
             if (MigrationJobContext.CurrentlyActiveJob.RunComparison)
-            {
-                _cts = new CancellationTokenSource();
+            {               
                 var compareHelper = new ComparisonHelper();
                 compareHelper.CompareRandomDocumentsAsync(_log, MigrationJobContext.CurrentlyActiveJob, _config!, _cts.Token).GetAwaiter().GetResult();
                 compareHelper = null;
@@ -1383,7 +1459,14 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("Resuming SyncBack.");
             }
 
+            //async  call
+            _=SetSyncBackResumeTokenAsync(_cts.Token);
+
             _migrationProcessor.StartProcessAsync(dummyUnit.Id, sourceConnectionString, targetConnectionString).GetAwaiter().GetResult();
+
+            MigrationJobContext.AddVerboseLog($"Before WaitForMigrationProcessorCompletionAsync");
+            
+            WaitForMigrationProcessorCompletionAsync(_cts.Token).GetAwaiter().GetResult();
 
         }
 

@@ -64,19 +64,23 @@ namespace OnlineMongoMigrationProcessor.Processors
             {
                 foreach (MigrationUnit mu in units)
                 {
-                    if (!mu.SyncBackChangeStreamStartedOn.HasValue)
-                    {
-                        mu.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
-                    }
+                    //if (!mu.SyncBackChangeStreamStartedOn.HasValue)
+                    //{
+                    //    mu.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
+                    //    SetCollectionResumeToken(mu, true, ctsToken, resumeTokenTasks);
+                    //}
 
+                    
                     AddCollectionToChangeStreamQueue(mu);
-
+                    //MigrationJobContext.SaveMigrationUnit(mu, true);
 				}
             }
+
 
             var _ = _changeStreamProcessor!.RunChangeStreamProcessorForAllCollections(_cts);
             return Task.FromResult(TaskResult.Success);
         }
+
 
         public override async Task<TaskResult> StartProcessAsync(string MigrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
@@ -88,6 +92,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             if (string.IsNullOrWhiteSpace(targetConnectionString)) throw new ArgumentNullException(nameof(targetConnectionString));
             var sourceClient = MongoClientFactory.Create(_log, sourceConnectionString, false);
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
+
 
             _changeStreamProcessor = null;
             _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, MigrationJobContext.MigrationUnitsCache, _config, true, _migrationWorker);

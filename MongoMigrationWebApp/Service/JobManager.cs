@@ -19,6 +19,7 @@ namespace MongoMigrationWebApp.Service
         private System.Threading.Timer? _resumeTimer;
         private bool _resumeExecuted = false;
         private string? _webAppBaseUrl = null;
+        private readonly SemaphoreSlim _syncBackLock = new SemaphoreSlim(1, 1);
 
         public JobManager(IConfiguration configuration)
         {
@@ -85,7 +86,7 @@ namespace MongoMigrationWebApp.Service
 
                                     Helper.LogToFile("Job Starting");
 
-                                    StartMigrationAsync(mj, sourceConnectionString, targetConnectionString, mj.NameSpaces ?? string.Empty, mj.JobType, Helper.IsOnline(mj));
+                                    StartMigration(mj, sourceConnectionString, targetConnectionString, mj.NameSpaces ?? string.Empty, mj.JobType, Helper.IsOnline(mj));
 
                                     Helper.LogToFile("Job Started");
                                 }
@@ -323,7 +324,7 @@ namespace MongoMigrationWebApp.Service
             return Task.CompletedTask;
         }
 
-        public Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
+        public Task StartMigration(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
         {
             
 
@@ -348,22 +349,64 @@ namespace MongoMigrationWebApp.Service
             return Task.CompletedTask;
         }
 
-
-        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        public async Task SyncBackToSourceAsync()
         {
-            MigrationWorker = new MigrationWorker();
-            
-            // Set WebAppBaseUrl if available
-            if (!string.IsNullOrEmpty(_webAppBaseUrl))
+            // Try to acquire lock with zero timeout - if already locked, skip this operation
+            //if (!await _syncBackLock.WaitAsync(0))
+            //{
+            //    Helper.LogToFile($"SyncBackToSource already running for job, skipping duplicate call");
+            //    return;
+            //}
+            MigrationWorker?.SyncBackToSource();
+           
+            //_syncBackLock.Release();            
+        }
+
+        /// Only one SyncBack operation can run at a time to prevent race conditions.
+        /// </summary>
+        public Task SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        {
+            //// Try to acquire lock with zero timeout - if already locked, skip this operation
+            //if (!_syncBackLock.Wait(0))
+            //{
+            //    Helper.LogToFile($"SyncBackToSource already running for job {job.Id}, skipping duplicate call");
+            //    return Task.CompletedTask;
+            //}
+
+            try
             {
-                MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+
+                job.ProcessingSyncBack = true;
+                MigrationJobContext.SaveMigrationJob(job);
+
+                //// Check if a migration worker is already processing this or another job
+                //if (MigrationWorker != null && MigrationWorker.IsProcessRunning(job.Id))
+                //{
+                //    Helper.LogToFile($"MigrationWorker already processing job {job.Id}, skipping");
+                //    return Task.CompletedTask;
+                //}
+
+                MigrationWorker = new MigrationWorker();
+                
+                // Set WebAppBaseUrl if available
+                if (!string.IsNullOrEmpty(_webAppBaseUrl))
+                {
+                    MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+                }
+
+                MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
+                MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
+                MigrationJobContext.ActiveMigrationJobId = job.Id;
+
+                // Call synchronous method since it starts async work internally
+                _ = MigrationWorker?.SyncBackToSourceAsync(sourceConnectionString, targetConnectionString);
+            }
+            finally
+            {
+                //_syncBackLock.Release();
             }
 
-            MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
-            MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
-            MigrationJobContext.ActiveMigrationJobId = job.Id;
-
-            MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString);
+            return Task.CompletedTask;
         }
         public string GetRunningJobId()
         {

@@ -77,6 +77,25 @@ public class FileController : ControllerBase
         return File(fileBytes, contentType, $"{migrationUnitId}.json");
     }
 
+    [HttpGet("download/job/{jobId}")]
+    public IActionResult DownloadJob(string jobId)
+    {
+        var job = MigrationJobContext.GetMigrationJob(jobId);
+        
+        if (job == null)
+        {
+            return NotFound("Job file not found.");
+        }
+
+        // Pretty print the JSON
+        var prettyJson = Newtonsoft.Json.JsonConvert.SerializeObject(job, Newtonsoft.Json.Formatting.Indented);
+        
+        var fileBytes = Encoding.UTF8.GetBytes(prettyJson);
+        var contentType = "application/json";
+
+        return File(fileBytes, contentType, $"{jobId}.json");
+    }
+
     [HttpGet("download/log/{Id}/count")]
     public IActionResult GetLogCount(string Id)
     {

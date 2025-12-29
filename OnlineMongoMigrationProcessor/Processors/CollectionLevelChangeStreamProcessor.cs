@@ -369,17 +369,17 @@ namespace OnlineMongoMigrationProcessor
                 if (gap < TimeSpan.FromMinutes(60))
                 {
                     _log.WriteLine($"{_syncBackPrefix}Oplog capacity for {mu.DatabaseName}.{mu.CollectionName} is shorter than: {gap.TotalMinutes:F2} minutes, this collection will not be monitored for changes", LogType.Warning);
-                    SetResumeParameters(mu, mu.CursorUtcTimestamp, string.Empty); //clear resume token to use timestamp
+                    SetResumeParameters(mu, mu.CursorUtcTimestamp, string.Empty,_syncBack); //clear resume token to use timestamp
                     return false;        
                 }
 
                 //adjust cursor time to last checked time
-                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu, applyHourAdjustment: false);
+                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu);
                 if (currentTimestamp > DateTime.MinValue && !string.IsNullOrEmpty(currentResumeToken))
                 {
-                    SetResumeParameters(mu, mu.CSLastChecked.Value, string.Empty); //clear resume token to use timestamp
+                    SetResumeParameters(mu, mu.CSLastChecked.Value, string.Empty,_syncBack); //clear resume token to use timestamp
                 }                   
-               MigrationJobContext.SaveMigrationUnit(mu, false);
+               MigrationJobContext.SaveMigrationUnit(mu, true);
                return true;
             }
             catch (Exception ex)
@@ -406,7 +406,14 @@ namespace OnlineMongoMigrationProcessor
                         continue;
 
                     // Check if both ResumeToken and OriginalResumeToken are not set
-                    if (string.IsNullOrEmpty(mu.ResumeToken) && string.IsNullOrEmpty(mu.OriginalResumeToken) && !mu.ResetChangeStream)
+                    bool needToSetToken = false;
+                    if(_syncBack)
+                        needToSetToken = string.IsNullOrEmpty(mu.SyncBackResumeToken) && !mu.ResetChangeStream;
+                    else
+                        needToSetToken = string.IsNullOrEmpty(mu.ResumeToken) && !mu.ResetChangeStream;
+
+                    
+                    if (needToSetToken)
                     {
                         if(shownlog==false)
                         {
@@ -418,6 +425,7 @@ namespace OnlineMongoMigrationProcessor
                         
                         try
                         {
+
                             await MongoHelper.SetChangeStreamResumeTokenAsync(
                                 _log,
                                 _syncBack ? _targetClient : _sourceClient,
@@ -583,7 +591,7 @@ namespace OnlineMongoMigrationProcessor
             return options;
         }
 
-        private (DateTime timeStamp, string resumeToken, string version, DateTime startedOn) GetResumeParameters(MigrationUnit mu, bool applyHourAdjustment = true)
+        private (DateTime timeStamp, string resumeToken, string version, DateTime startedOn) GetResumeParameters(MigrationUnit mu)
         {
             DateTime timeStamp;
             string resumeToken;
@@ -592,39 +600,22 @@ namespace OnlineMongoMigrationProcessor
 
             if (!_syncBack)
             {
-                timeStamp = applyHourAdjustment ? mu.CursorUtcTimestamp.AddHours(mu.CSAddHours) : mu.CursorUtcTimestamp;
+                timeStamp = mu.CursorUtcTimestamp;
                 resumeToken = mu.ResumeToken ?? string.Empty;
                 version = MigrationJobContext.CurrentlyActiveJob.SourceServerVersion;
-                startedOn = mu.ChangeStreamStartedOn.HasValue 
-                    ? (applyHourAdjustment ? mu.ChangeStreamStartedOn.Value.AddHours(mu.CSAddHours) : mu.ChangeStreamStartedOn.Value)
-                    : DateTime.MinValue;
+                startedOn = mu.ChangeStreamStartedOn.HasValue ? mu.ChangeStreamStartedOn.Value : DateTime.MinValue;
             }
             else
             {
-                timeStamp = applyHourAdjustment ? mu.SyncBackCursorUtcTimestamp.AddHours(mu.SyncBackAddHours) : mu.SyncBackCursorUtcTimestamp;
+                timeStamp = mu.SyncBackCursorUtcTimestamp;
                 resumeToken = mu.SyncBackResumeToken ?? string.Empty;
                 version = "8";
-                startedOn = mu.SyncBackChangeStreamStartedOn.HasValue 
-                    ? (applyHourAdjustment ? mu.SyncBackChangeStreamStartedOn.Value.AddHours(mu.SyncBackAddHours) : mu.SyncBackChangeStreamStartedOn.Value)
-                    : DateTime.MinValue;
+                startedOn = mu.SyncBackChangeStreamStartedOn.HasValue ? mu.SyncBackChangeStreamStartedOn.Value : DateTime.MinValue;
             }
 
             return (timeStamp, resumeToken, version!, startedOn);
         }
 
-        private void SetResumeParameters(MigrationUnit mu, DateTime timestamp, string resumeToken)
-        {
-            if (!_syncBack)
-            {
-                mu.CursorUtcTimestamp = timestamp;
-                mu.ResumeToken = resumeToken;
-            }
-            else
-            {
-                mu.SyncBackCursorUtcTimestamp = timestamp;
-                mu.SyncBackResumeToken = resumeToken;
-            }
-        }
 
         private async Task HandleAutoReplayIfNeeded(MigrationUnit mu, string collectionKey, IMongoCollection<BsonDocument>? targetCollection)
         {
@@ -725,13 +716,13 @@ namespace OnlineMongoMigrationProcessor
             // Update resume token after successful flush
             if (!string.IsNullOrEmpty(accumulatedChangesInColl.LatestResumeToken))
             {
-                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu, applyHourAdjustment: false);
+                var (currentTimestamp, currentResumeToken, _, _) = GetResumeParameters(mu);
                 string collectionNamespace = $"{mu.DatabaseName}.{mu.CollectionName}";
                 
                 // We don't allow going backwards in time
                 if (accumulatedChangesInColl.LatestTimestamp - currentTimestamp >= TimeSpan.FromSeconds(0))
                 {
-                    SetResumeParameters(mu, accumulatedChangesInColl.LatestTimestamp, accumulatedChangesInColl.LatestResumeToken);
+                    SetResumeParameters(mu, accumulatedChangesInColl.LatestTimestamp, accumulatedChangesInColl.LatestResumeToken,_syncBack);
                     MigrationJobContext.SaveMigrationUnit(mu, true);
                 }
                 else
@@ -1263,15 +1254,15 @@ namespace OnlineMongoMigrationProcessor
         // This method retrieves the event associated with the ResumeToken
         private bool AutoReplayFirstChangeInResumeToken(string? documentId, ChangeStreamOperationType opType, IMongoCollection<BsonDocument> sourceCollection, IMongoCollection<BsonDocument> targetCollection, MigrationUnit mu)
         {
-            MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.AutoReplayFirstChangeInResumeToken: documentId={documentId}, opType={opType}, collection={sourceCollection.CollectionNamespace}");
+            MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}CollectionLevelChangeStreamProcessor.AutoReplayFirstChangeInResumeToken: documentId={documentId}, opType={opType}, collection={sourceCollection.CollectionNamespace}");
             if (documentId == null || string.IsNullOrEmpty(documentId))
             {
-                _log.WriteLine($"Auto replay is empty for {sourceCollection.CollectionNamespace}.", LogType.Debug);
+                _log.WriteLine($"{_syncBackPrefix}Auto replay is empty for {sourceCollection.CollectionNamespace}.", LogType.Debug);
                 return true; // Skip if no document ID is provided
             }
             else
             {
-                _log.ShowInMonitor($"Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.");
+                _log.ShowInMonitor($"{_syncBackPrefix}Auto replay for {opType} operation with _id {documentId} in {sourceCollection.CollectionNamespace}.");
             }
 
             var bsonDoc = BsonDocument.Parse(documentId);
@@ -1286,7 +1277,7 @@ namespace OnlineMongoMigrationProcessor
                     case ChangeStreamOperationType.Insert:
                         if (result == null || result.IsBsonNull)
                         {
-                            _log.WriteLine($"No document found for insert operation with _id {documentId} in {sourceCollection.CollectionNamespace}. Skipping insert.", LogType.Warning);
+                            _log.WriteLine($"{_syncBackPrefix}No document found for insert operation with _id {documentId} in {sourceCollection.CollectionNamespace}. Skipping insert.", LogType.Warning);
                             return true; // Skip if no document found
                         }
                         targetCollection.InsertOne(result);
@@ -1296,7 +1287,7 @@ namespace OnlineMongoMigrationProcessor
                     case ChangeStreamOperationType.Replace:
                         if (result == null || result.IsBsonNull)
                         {
-                            _log.WriteLine($"Processing {opType} operation for {sourceCollection.CollectionNamespace} with _id {documentId}. No document found on source, deleting it from target.", LogType.Info);
+                            _log.WriteLine($"{_syncBackPrefix}Processing {opType} operation for {sourceCollection.CollectionNamespace} with _id {documentId}. No document found on source, deleting it from target.", LogType.Info);
                             var deleteTTLFilter = MongoHelper.BuildFilterFromDocumentKey(bsonDoc);
                             try
                             {
@@ -1319,7 +1310,7 @@ namespace OnlineMongoMigrationProcessor
                         IncrementDocCounter(mu, opType);
                         return true;
                     default:
-                        _log.WriteLine($"Unhandled operation type: {opType}", LogType.Error);
+                        _log.WriteLine($"{_syncBackPrefix}Unhandled operation type: {opType}", LogType.Error);
                         return false;
                 }
             }
@@ -1330,7 +1321,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error processing operation {opType} on {sourceCollection.CollectionNamespace} with _id {documentId}. Details: {ex}", LogType.Error);
+                _log.WriteLine($"{_syncBackPrefix}Error processing operation {opType} on {sourceCollection.CollectionNamespace} with _id {documentId}. Details: {ex}", LogType.Error);
                 return false; // Return false to indicate failure in processing
             }
         }

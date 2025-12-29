@@ -54,7 +54,11 @@
                                 <i class="bi bi-star-fill text-warning"></i>
                             }
                         </td>
-                        <td>@migration.Name</td>
+                        <td>
+                            <i class="bi bi-download me-2 collection-info-icon" title="Download Job JSON" style="cursor: pointer;"
+                               @onclick="() => DownloadJob(migration)"></i>
+                            @migration.Name
+                        </td>
                         <td>@GetToolName(migration.JobType)</td>
                         <td>@migration.StartedOn</td>
                         <td class="tooltip-text" title="@GetTootTip(migration)">@migration.SourceEndpoint<br /> to <br /> @migration.TargetEndpoint</td>
@@ -302,5 +306,30 @@
         }
         await InvokeAsync(StateHasChanged);
         return true;
+    }
+
+    private async Task DownloadJob(MigrationJob job)
+    {
+        if (string.IsNullOrEmpty(job?.Id))
+        {
+            return;
+        }
+
+        var url = $"/api/File/download/job/{job.Id}";
+        var response = await HttpClient.GetAsync(url);
+
+        if (response.IsSuccessStatusCode)
+        {
+            var fileBytes = await response.Content.ReadAsByteArrayAsync();
+            var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+            var fileName = $"{job.Name}_{job.Id}.json";
+
+            // Use JavaScript to trigger the file download
+            await JS.InvokeVoidAsync("downloadFile", fileBytes, fileName, contentType);
+        }
+        else
+        {
+            await JS.InvokeVoidAsync("open", url, "_blank"); // browser navigates directly
+        }
     }
 }

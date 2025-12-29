@@ -336,16 +336,16 @@ namespace OnlineMongoMigrationProcessor
             return (total, inserted, skipped, failed);
         }
 
-        public static string GetChangeStreamLag(MigrationUnitBasic mu, bool isSyncBack)
+        public static string GetTimestampDiff(MigrationUnitBasic mu, bool isSyncBack)
         {
             DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
             if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return "NA";
             
-            return GetChangeStreamLag(timestamp);
+            return GetTimestampDiff(timestamp);
         }
 
-        public static string GetChangeStreamLag(DateTime timestamp)
+        public static string GetTimestampDiff(DateTime timestamp)
         {
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
@@ -359,23 +359,23 @@ namespace OnlineMongoMigrationProcessor
                 return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
         }
 
-        public static double GetChangeStreamLagSeconds(MigrationUnit mu, bool isSyncBack)
-        {
-            DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
-            if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
-                return 0;
-            var lag = DateTime.UtcNow - timestamp;
-            return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
-        }
+        //public static double GetChangeStreamLagSeconds(MigrationUnit mu, bool isSyncBack)
+        //{
+        //    DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+        //    if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
+        //        return 0;
+        //    var lag = DateTime.UtcNow - timestamp;
+        //    return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
+        //}
 
-        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit mu, bool isSyncBack, double maxAcceptableLagSeconds = 30)
-        {
-            var lagSeconds = GetChangeStreamLagSeconds(mu, isSyncBack);
-            var lagDisplay = GetChangeStreamLag(mu, isSyncBack);
-            var isHighLag = lagSeconds > maxAcceptableLagSeconds;
+        //public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit mu, bool isSyncBack, double maxAcceptableLagSeconds = 30)
+        //{
+        //    var lagSeconds = GetChangeStreamLagSeconds(mu, isSyncBack);
+        //    var lagDisplay = GetTimestampDiff(mu, isSyncBack);
+        //    var isHighLag = lagSeconds > maxAcceptableLagSeconds;
             
-            return (lagDisplay, lagSeconds, isHighLag);
-        }
+        //    return (lagDisplay, lagSeconds, isHighLag);
+        //}
 
         public static string GetChangeStreamMode(MigrationJob job)
         {

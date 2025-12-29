@@ -121,7 +121,7 @@ else
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.ChangeStreamStartedOn?.ToString() ?? "N/A")</div>
                     <div><span class="lbl">Mode:</span> @Helper.GetChangeStreamMode(MigrationJob)</div>
-                    <div><span class="lbl">Last Event Age:</span> @Helper.GetChangeStreamLag(mu, false)</div>
+                    <div><span class="lbl">Last Event Age:</span> @Helper.GetTimestampDiff(mu, false)</div>
                     <div><span class="lbl">Last Batch Count:</span> @FormatLong(mu.CSUpdatesInLastBatch)</div>
                     <div><span class="lbl">Inserted:</span> @FormatLong(mu.CSDocsInserted) (from @FormatLong(mu.CSDInsertEvents) events)</div>
                     <div><span class="lbl">Deleted:</span> @FormatLong(mu.CSDocsDeleted) (from @FormatLong(mu.CSDeleteEvents) events)</div>
@@ -135,7 +135,7 @@ else
                 </td>
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.SyncBackChangeStreamStartedOn?.ToString() ?? "N/A")</div>
-                    <div><span class="lbl">Last Event Age:</span> @Helper.GetChangeStreamLag(mu, true)</div>
+                    <div><span class="lbl">Last Event Age:</span> @Helper.GetTimestampDiff(mu, true)</div>
                     <div><span class="lbl">Last Batch Count:</span> @FormatLong(mu.SyncBackUpdateEvents)</div>
                     <div><span class="lbl">Inserted:</span> @FormatLong(mu.SyncBackDocsInserted) (from @FormatLong(mu.SyncBackInsertEvents) events)</div>
                     <div><span class="lbl">Deleted:</span> @FormatLong(mu.SyncBackDocsDeleted) (from @FormatLong(mu.SyncBackDeleteEvents) events)</div>

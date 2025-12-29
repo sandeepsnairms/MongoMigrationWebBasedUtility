@@ -260,6 +260,18 @@ Initially, you may not see updates here until the application cutover is complet
 - Ensure the Sync Back process is running and not paused.
 - Monitor for incoming changes on the target. If no new writes are occurring, the lag may grow, which is expected in the absence of new data.
 
+#### Time Since Last Batch (CS Last Checked)
+
+Time Since Last Batch displays the time elapsed since the change stream was last checked for updates. This metric is shown in the Job Viewer UI as **CS Last Checked** and indicates how recently the change stream processor examined the collection for new changes.
+
+This value helps monitor the health and activity of the change stream processing:
+
+- A small value (e.g., seconds or a few minutes) indicates active monitoring and regular checks of the change stream.
+- A large or increasing value may suggest the change stream processor is not running, the job is paused, or there's an issue preventing regular checks.
+- If this value is "NA", it means the change stream has not yet been initialized or checked for this collection.
+
+This is different from "Time Since Last Change" which shows when the last actual change was processed, whereas "Time Since Last Batch" shows when the change stream was last polled for updates.
+
 
 ### Update Web App Settings
 1. From the home page  

@@ -157,14 +157,14 @@
                     <div class="mb-3 checkbox-container">
                         <div class="checkbox-group">
                             <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
-                                <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline)" @bind="enableSyncBack" />
+                                <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline || isSimulatedRun)" @bind="enableSyncBack" />
                                 Post Migration Sync Back
                             </label>
                         </div>
                     </div>
                     <div class="mb-3">
                         <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
-                            <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" />
+                            <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" @bind:after="OnSimulationModeChanged" />
                             Simulation Mode (No Writes to Target)
                         </label>
                     </div>
@@ -301,6 +301,15 @@
         {
             // Calculate default values when enabled
             CalculateDefaultWorkerCounts();
+        }
+    }
+
+    private void OnSimulationModeChanged()
+    {
+        // When simulation mode is turned on, disable sync back
+        if (isSimulatedRun)
+        {
+            enableSyncBack = false;
         }
     }
 

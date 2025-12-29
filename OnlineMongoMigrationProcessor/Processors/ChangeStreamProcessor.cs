@@ -152,7 +152,7 @@ namespace OnlineMongoMigrationProcessor
         {
             //no checks on what collections can be added, caller is responsible for that
 
-            var mu = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id,migrationUnitId);
+            var mu = MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(migrationUnitId);
             string key = $"{mu.DatabaseName}.{mu.CollectionName}";
 
             _log.WriteLine($"{_syncBackPrefix} AddCollectionsToProcess invoked for {key}", LogType.Debug);
@@ -679,7 +679,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}. Lag: {Helper.GetChangeStreamLag(timeStamp)}");
+                    _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]} with TS (UTC): {timeStamp}. Sequence in batch #{counter}. Lag: {Helper.GetTimestampDiff(timeStamp)}");
                 }
             }
 
