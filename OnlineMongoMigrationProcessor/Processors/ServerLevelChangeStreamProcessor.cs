@@ -1,5 +1,7 @@
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using Newtonsoft.Json.Linq;
 using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.JobManagement;
@@ -65,7 +67,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             long loop = 0;
-
+            DateTime lastResumeTokenCheck = DateTime.MinValue;
             while (!token.IsCancellationRequested && !ExecutionCancelled)
             {
                 try
@@ -75,13 +77,31 @@ namespace OnlineMongoMigrationProcessor
                     var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                     CancellationToken cancellationToken = cancellationTokenSource.Token;
 
-                    _log.WriteLine($"{_syncBackPrefix}Processing round{loop} for server - level change stream. Batch Duration {seconds} seconds");
+                    _log.WriteLine($"{_syncBackPrefix}Processing round {loop} for server - level change stream. Batch Duration {seconds} seconds");
 
-                    await WatchServerLevelChangeStream(cancellationToken);
+                    string resumeToken = GetResumeToken();
+
+                    if(!string.IsNullOrEmpty(resumeToken))
+                    {
+                        //await Task.Delay(60 * 1000, cancellationToken);
+                        await WatchServerLevelChangeStream(cancellationToken);
+                    }
+                    else
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}No resume token found for server-level change stream. Waiting for 60 seconds before retrying.", LogType.Warning);
+
+                        // Wait for 60 seconds before checking again
+                        
+                        await InitializeResumeTokensAsync(cancellationToken);
+                        await Task.Delay(60 * 1000, cancellationToken);
+                        lastResumeTokenCheck = DateTime.UtcNow;
+                    }
 
                     //cleanup for aggressive CS mode
-                    if (loop%4==0)                    
+                    if (loops == 1 || loops % 4 == 0)
+                    {
                         await AggressiveCSCleanupAsync();
+                    }
 
                 }
                 catch (OperationCanceledException)
@@ -96,12 +116,50 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        private async Task InitializeResumeTokensAsync(CancellationToken token)
+        {
+            _log.WriteLine($"{_syncBackPrefix}Rechecking server for resume token.", LogType.Info);
+
+            try
+            {
+
+                await MongoHelper.SetChangeStreamResumeTokenAsync(
+                    _log,
+                    _syncBack ? _targetClient : _sourceClient,
+                    MigrationJobContext.CurrentlyActiveJob,
+                    null,
+                    30,
+                    _syncBack,
+                    token);
+            }
+            catch (Exception ex)
+            {
+                // do nothing
+            }
+        }
+
+
+        private DateTime GetChangeTime(ChangeStreamDocument<BsonDocument> change)
+        {
+            if (!MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.ClusterTime != null)
+            {
+                return  MongoHelper.BsonTimestampToUtcDateTime(change.ClusterTime);
+            }
+            else if (!MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3") && change.WallTime != null)
+            {
+                return change.WallTime.Value;
+            }
+            return DateTime.MinValue;
+        }
+
         private async Task WatchServerLevelChangeStream(CancellationToken cancellationToken)
         {
             MigrationJobContext.AddVerboseLog("ServerLevelChangeStreamProcessor.WatchServerLevelChangeStream: starting");
 
             long counter = 0;            
             string collectionKey = string.Empty;
+            string latestResumeToken = string.Empty;
+            DateTime latestTimestamp = DateTime.MinValue;
 
             try
             {
@@ -137,7 +195,7 @@ namespace OnlineMongoMigrationProcessor
                 // Get resume information from MigrationJob for server-level streams
 
                 DateTime timeStamp = GetCursorUtcTimestamp();
-                string resumeToken = GetResumeToken();
+                string tokenJson = GetResumeToken();
                 DateTime startedOn = GetChangeStreamStartedOn();
                 string? version = string.Empty;
 
@@ -170,24 +228,27 @@ namespace OnlineMongoMigrationProcessor
                     MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); ;
                 }
 
-                if (timeStamp > DateTime.MinValue && resumeToken == null && !(MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
-                {
-                    var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
-                    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
-                }
-                else if (!string.IsNullOrEmpty(resumeToken))  //both version  having resume token
-                {
-                    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(resumeToken), MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
-                }
-                else if (string.IsNullOrEmpty(resumeToken) && version.StartsWith("3")) //for Mongo 3.6
-                {
-                    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
-                }
-                else if (startedOn > DateTime.MinValue && !version.StartsWith("3"))  //newer version
-                {
-                    var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
-                    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
-                }
+                //if (timeStamp > DateTime.MinValue && resumeToken == null && !(MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy && !MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack)) //skip CursorUtcTimestamp if its reset 
+                //{
+                //    var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp(timeStamp.ToLocalTime());
+                //    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
+                //}
+                //else if (!string.IsNullOrEmpty(resumeToken))  //both version  having resume token
+                //{
+                //    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter = BsonDocument.Parse(resumeToken), MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
+                //}
+                //else if (string.IsNullOrEmpty(resumeToken) && version.StartsWith("3")) //for Mongo 3.6
+                //{
+                //    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
+                //}
+                //else if (startedOn > DateTime.MinValue && !version.StartsWith("3"))  //newer version
+                //{
+                //    var bsonTimestamp = MongoHelper.ConvertToBsonTimestamp((DateTime)startedOn);
+                //    options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
+                //}
+                var resumeToken = BsonSerializer.Deserialize<BsonDocument>(tokenJson);
+
+                options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, ResumeAfter =resumeToken, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
 
                 var pipelineArray = pipeline.ToArray();
 
@@ -195,11 +256,14 @@ namespace OnlineMongoMigrationProcessor
                 using var cursor = _sourceClient.Watch<ChangeStreamDocument<BsonDocument>>(pipelineArray, options, cancellationToken);
 
                 long changeCount = 0;
+                long ignoreCount = 0;
 
                 if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
                 {
                     foreach (var change in cursor.ToEnumerable(cancellationToken))
                     {
+                        latestResumeToken=change.ResumeToken.ToJson();
+                        latestTimestamp = GetChangeTime(change);
                         collectionKey = change.CollectionNamespace.ToString();
                         var id = Helper.GenerateMigrationUnitId(collectionKey);
                         if (_migrationUnitsToProcess.ContainsKey(id) || _monitorAllCollections)
@@ -213,6 +277,11 @@ namespace OnlineMongoMigrationProcessor
                             counter = result.counter;
                             changeCount=counter;
                         }
+                        else
+                        {
+                            ignoreCount++;
+                            ShowInMonitor(change, collectionKey, GetChangeTime(change), changeCount+ ignoreCount, true);
+                        }
                         if (ExecutionCancelled)
                             break;
                     }
@@ -222,6 +291,7 @@ namespace OnlineMongoMigrationProcessor
                         if (changeCount > _config.ChangeStreamMaxDocsInBatch)
                         {
                             await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                            SetJobResumeToken(latestResumeToken, latestTimestamp);
                             changeCount = 0;
                         }
                     }
@@ -242,7 +312,8 @@ namespace OnlineMongoMigrationProcessor
 
                         foreach (var change in cursor.Current)
                         {
-
+                            latestResumeToken = change.ResumeToken.ToJson();
+                            latestTimestamp = GetChangeTime(change);
                             collectionKey = change.CollectionNamespace.ToString();
 
                             var id= Helper.GenerateMigrationUnitId(collectionKey);
@@ -261,6 +332,12 @@ namespace OnlineMongoMigrationProcessor
 
 
                             }
+                            else
+                            {
+                                ignoreCount++;
+                                ShowInMonitor(change, collectionKey, GetChangeTime(change), changeCount + ignoreCount, true);
+                            }
+
                             if (ExecutionCancelled)
                                 break;
 
@@ -271,6 +348,7 @@ namespace OnlineMongoMigrationProcessor
                             if (counter > _config.ChangeStreamMaxDocsInBatch)
                             {
                                 await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                                SetJobResumeToken(latestResumeToken, latestTimestamp);
                                 changeCount = 0;
                             }
                         }
@@ -300,7 +378,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         try
                         {
-                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);
+                            await BulkProcessAllChangesAsync(_accumulatedChangesPerCollection);                            
                         }
                         catch (InvalidOperationException ex) when (ex.Message.Contains("CRITICAL"))
                         {
@@ -309,6 +387,7 @@ namespace OnlineMongoMigrationProcessor
                             throw; // Re-throw to stop processing
                         }
                     }
+                    SetJobResumeToken(latestResumeToken, latestTimestamp);
 
                 }
                 catch (Exception ex)
@@ -316,6 +395,13 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Error processing changes in batch for {collectionKey}. Details: {ex}", LogType.Error);
                 }
             }
+        }
+
+        private void SetJobResumeToken(string latestResumeToken, DateTime latestTimestamp)
+        {
+            MigrationJobContext.CurrentlyActiveJob.SyncBackOriginalResumeToken = latestResumeToken;
+            MigrationJobContext.CurrentlyActiveJob.SyncBackCursorUtcTimestamp = latestTimestamp;
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         private async Task<(bool success, long counter)> PreProcessChange(ChangeStreamDocument<BsonDocument> change, long counter)
@@ -451,15 +537,10 @@ namespace OnlineMongoMigrationProcessor
                             {
                                 UpdateResumeToken(docs.LatestResumeToken, docs.LatestOperationType, docs.LatestDocumentKey, collectionKey);
                                 if (!_syncBack)
-                                {
                                     migrationUnit.CursorUtcTimestamp = docs.LatestTimestamp;
-                                    MigrationJobContext.CurrentlyActiveJob.CursorUtcTimestamp = docs.LatestTimestamp;
-                                }
                                 else
-                                {
-                                    migrationUnit.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
-                                    MigrationJobContext.CurrentlyActiveJob.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;
-                                }
+                                    migrationUnit.SyncBackCursorUtcTimestamp = docs.LatestTimestamp;     
+                                
                                 MigrationJobContext.SaveMigrationUnit(migrationUnit,true);
 
                                 MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Checkpoint updated for {collectionKey}: Resume token persisted after successful batch write");

@@ -95,10 +95,6 @@ namespace OnlineMongoMigrationProcessor
                 ctx.DownloadCount = docCount;
             }
 
-
-            //checkCounts(ctx.Collection, mu.MigrationChunks[chunkIndex], MongoHelper.GetFilterDoc(mu.UserFilter));
-
-
             if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
@@ -141,10 +137,6 @@ namespace OnlineMongoMigrationProcessor
             ProcessorContext ctx;
 
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
-
-            //when resuming a job, we need to check if post-upload change stream processing is already in progress
-            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
-            //    return TaskResult.Success;
 
             if(mu.DumpComplete && mu.RestoreComplete)
             {

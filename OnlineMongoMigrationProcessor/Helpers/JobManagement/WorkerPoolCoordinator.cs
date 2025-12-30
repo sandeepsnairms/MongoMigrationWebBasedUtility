@@ -91,13 +91,13 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             {
                 if (_currentJobId != jobId)
                 {
-                    throw new InvalidOperationException($"WorkerPoolCoordinator is tracking job {_currentJobId}, cannot get pool for job {jobId}. Call Reset() first.");
+                    throw new InvalidOperationException($"WorkerPoolCoordinator is tracking job {_currentJobId}, cannot get pool. Call Reset() first.");
                 }
                 
                 if (_dumpPool == null)
                 {
                     _dumpPool = new WorkerPoolManager(log, $"Dump-{jobId}", initialMaxWorkers);
-                    log.WriteLine($"Created shared dump pool for job {jobId} with {initialMaxWorkers} workers");
+                    log.WriteLine($"Created shared dump pool with {initialMaxWorkers} workers");
                 }
                 
                 return _dumpPool;
@@ -114,13 +114,13 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             {
                 if (_currentJobId != jobId)
                 {
-                    throw new InvalidOperationException($"WorkerPoolCoordinator is tracking job {_currentJobId}, cannot get pool for job {jobId}. Call Reset() first.");
+                    throw new InvalidOperationException($"WorkerPoolCoordinator is tracking job {_currentJobId}, cannot get pool. Call Reset() first.");
                 }
                 
                 if (_restorePool == null)
                 {
                     _restorePool = new WorkerPoolManager(log, $"Restore-{jobId}", initialMaxWorkers);
-                    log.WriteLine($"Created shared restore pool for job {jobId} with {initialMaxWorkers} workers");
+                    log.WriteLine($"Created shared restore pool with {initialMaxWorkers} workers");
                 }
                 
                 return _restorePool;
@@ -283,7 +283,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static int AdjustDumpWorkers(string jobId, int newCount, Log log)
         {
-            MigrationJobContext.AddVerboseLog($"Adjusting dump workers for job {jobId} to {newCount}");
+            MigrationJobContext.AddVerboseLog($"Adjusting dump workers to {newCount}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Cannot adjust dump workers"))
@@ -306,7 +306,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         /// </summary>
         public static int AdjustRestoreWorkers(string jobId, int newCount, Log log)
         {
-            MigrationJobContext.AddVerboseLog($"Adjusting restore workers for job {jobId} to {newCount}");
+            MigrationJobContext.AddVerboseLog($"Adjusting restore workers to {newCount}");
             lock (_lock)
             {
                 if (!ValidateJobId(jobId, log, "Cannot adjust restore workers"))

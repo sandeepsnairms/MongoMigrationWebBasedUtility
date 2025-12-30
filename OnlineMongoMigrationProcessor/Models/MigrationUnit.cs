@@ -76,7 +76,6 @@ namespace OnlineMongoMigrationProcessor
         public bool Persist()
         {
 
-            //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.JobId}");
             var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
 
             string json = JsonConvert.SerializeObject(this, Formatting.Indented);

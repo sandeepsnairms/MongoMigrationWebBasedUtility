@@ -26,8 +26,6 @@ namespace OnlineMongoMigrationProcessor
 
         protected MongoClient _sourceClient;
         protected MongoClient _targetClient;
-        //protected JobList? _jobList;
-        //protected MigrationJob? MigrationJobContext.CurrentlyActiveJob;
 
         protected MigrationSettings? _config;
         protected bool _syncBack = false;
@@ -157,19 +155,11 @@ namespace OnlineMongoMigrationProcessor
 
             _log.WriteLine($"{_syncBackPrefix} AddCollectionsToProcess invoked for {key}", LogType.Debug);
 
-            //_log.WriteLine($"{_syncBackPrefix}Evaluating {key} for change streams processing. IsValid:{Helper.IsMigrationUnitValid(mu)} DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Debug);
-            //if (!Helper.IsMigrationUnitValid(mu)|| ((mu.DumpComplete != true || mu.RestoreComplete != true) && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive))
-            //{
-            //    _log.WriteLine($"{_syncBackPrefix}Cannot add {key} to change streams for processing.", LogType.Debug);
-            //    return false;
-            //}
-
             if (!_migrationUnitsToProcess.ContainsKey(mu.Id))
             {
                 _migrationUnitsToProcess.TryAdd(mu.Id, 0);
                 _log.WriteLine($"{_syncBackPrefix}Collection added to change stream queue - Key: {key}, DumpComplete: {mu.DumpComplete}, RestoreComplete: {mu.RestoreComplete}", LogType.Debug);
                 _log.ShowInMonitor($"Change stream processor added {mu.DatabaseName}.{mu.CollectionName} to the monitoring queue.");
-                //_ = RunChangeStreamProcessorForAllCollections(cts); // fire-and-forget by design
                 return true;
             }
             else
@@ -197,70 +187,6 @@ namespace OnlineMongoMigrationProcessor
                 cts = new CancellationTokenSource();
                 var token = cts.Token;
                 await ProcessChangeStreamsAsync(token);
-
-                //_migrationUnitsToProcess.Clear();
-                //foreach (var mu in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
-                //{
-                //    _log.WriteLine($"{_syncBackPrefix}RunChangeStreamProcessorForAllCollections looping for {mu.Id} ", LogType.Debug);
-
-                //    var migrationUnit = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, mu.Id);
-                //    if (migrationUnit != null && (Helper.IsMigrationUnitValid(migrationUnit) && ((migrationUnit.DumpComplete == true && migrationUnit.RestoreComplete == true) || MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive)))
-                //    {
-                //        _migrationUnitsToProcess[migrationUnit.Id] = migrationUnit.CSNormalizedUpdatesInLastBatch;
-
-                //        // For aggressive change stream, trigger cleanup for completed collections (only if not already processed)
-                //        if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive && migrationUnit.RestoreComplete && !_syncBack && !migrationUnit.AggressiveCacheDeleted)
-                //        {
-                //            string collKey = $"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName}";
-                //            _log.WriteLine($"{_syncBackPrefix}Aggressive cleanup queued for {collKey}", LogType.Debug);
-
-                //            try
-                //            {
-                //                _ = Task.Run(async () =>
-                //                {
-                //                    try
-                //                    {
-                //                        _log.WriteLine($"{_syncBackPrefix}Starting aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
-                //                        await CleanupAggressiveCSForCollectionAsync(migrationUnit);
-                //                    }
-                //                    catch (Exception ex)
-                //                    {
-                //                        _log.WriteLine($"{_syncBackPrefix}Exception in aggressive cleanup Task.Run for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error);
-                //                        // Don't re-throw for fire-and-forget tasks
-                //                    }
-                //                });
-                //            }
-                //            catch
-                //            {
-                //            }
-                //        }
-                //        else
-                //        { 
-                //            _log.WriteLine($"{_syncBackPrefix}Skipping aggressive cleanup for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} - RestoreComplete: {migrationUnit.RestoreComplete}, AggressiveCacheDeleted: {migrationUnit.AggressiveCacheDeleted}", LogType.Debug);
-                //        }
-                //    }
-                //}
-
-                //MigrationJobContext.CurrentlyActiveJob.CSPostProcessingStarted = true;
-
-                //MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob); // persist state
-
-
-                //if (_migrationUnitsToProcess.Count == 0)
-                //{
-                //    _log.WriteLine($"{_syncBackPrefix}No change streams to process.");
-
-                //    _isCSProcessing = false;
-                //    return;
-                //}
-
-                //_log.WriteLine($"{_syncBackPrefix}Starting change stream processing for {_migrationUnitsToProcess.Count} collections.",LogType.Debug);
-
-                //await ProcessChangeStreamsAsync(token);
-
-                //_log.WriteLine($"{_syncBackPrefix}Change stream processing completed or paused.");
-
-                //MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
 
             }
             catch (OperationCanceledException)
@@ -615,21 +541,6 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        //public async Task CleanupAggressiveCSForCollectionAsync(MigrationUnit mu)
-        //{
-        //    if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode != ChangeStreamMode.Aggressive || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
-        //        return;
-
-        //    if (!mu.AggressiveCacheDeleted)
-        //    {
-        //        await CleanupAggressiveCSForCollectionAsync(mu);
-        //    }
-        //    else
-        //    {
-        //        _log.ShowInMonitor($"Skipping aggressive cleanup for {mu.DatabaseName}.{mu.CollectionName} - already processed");
-        //    }
-        //}
-
         public async Task CleanupAggressiveTempDBAsync()
         {
             // Final cleanup of any remaining temp collections
@@ -645,18 +556,8 @@ namespace OnlineMongoMigrationProcessor
 
             _log.WriteLine($"Aggressive change stream cleanup completed.");
         }
-        /*
-        protected bool IsReadyForFlush(AccumulatedChangesTracker accumulatedChangesInColl, out int totalAccumulated)
-        {
-            totalAccumulated = accumulatedChangesInColl.DocsToBeInserted.Count +
-                                  accumulatedChangesInColl.DocsToBeUpdated.Count +
-                                  accumulatedChangesInColl.DocsToBeDeleted.Count;
-            if (totalAccumulated >= _config?.ChangeStreamMaxCollsInBatch)
-                return true;
-            else
-                return false;
-        }*/
-        protected bool ShowInMonitor(ChangeStreamDocument<BsonDocument> change, string collNameSpace, DateTime timeStamp, long counter)
+
+        protected bool ShowInMonitor(ChangeStreamDocument<BsonDocument> change, string collNameSpace, DateTime timeStamp, long counter, bool ignoredServerLevelChange=false)
         {
             DateTime now = DateTime.UtcNow;
             bool shouldUpdateUI = false;
@@ -673,6 +574,13 @@ namespace OnlineMongoMigrationProcessor
             // Show on monitor only if global UI update is allowed (once per 500ms), but always log to file
             if (shouldUpdateUI)
             {
+                if(ignoredServerLevelChange)
+                {
+                     _log.ShowInMonitor($"{_syncBackPrefix}Ignored server-level change: {change.OperationType} operation in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");
+                    return shouldUpdateUI;
+
+                }
+
                 if (timeStamp == DateTime.MinValue)
                 {
                     _log.ShowInMonitor($"{_syncBackPrefix}{change.OperationType} operation detected in {collNameSpace} for _id: {change.DocumentKey["_id"]}. Sequence in batch #{counter}");

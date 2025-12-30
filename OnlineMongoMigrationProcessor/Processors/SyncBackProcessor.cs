@@ -60,19 +60,14 @@ namespace OnlineMongoMigrationProcessor.Processors
             _log.WriteLine($"SyncBack to source starting.");
 
             var units = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
+                       
+            
+
             if (units != null)
             {
                 foreach (MigrationUnit mu in units)
-                {
-                    //if (!mu.SyncBackChangeStreamStartedOn.HasValue)
-                    //{
-                    //    mu.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
-                    //    SetCollectionResumeToken(mu, true, ctsToken, resumeTokenTasks);
-                    //}
-
-                    
+                {                   
                     AddCollectionToChangeStreamQueue(mu);
-                    //MigrationJobContext.SaveMigrationUnit(mu, true);
 				}
             }
 

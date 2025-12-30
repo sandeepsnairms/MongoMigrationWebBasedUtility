@@ -116,8 +116,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                         return false;
                     }
                 }
-                //Console.WriteLine($"IsProcessRunning :{_activeJobId == id}");
-                //return _activeJobId == id;
             }                        
         }
 
@@ -417,10 +415,18 @@ namespace OnlineMongoMigrationProcessor.Workers
                         }
                         else
                         {
-                            mongoClient = _sourceClient!;
+                            if(_sourceClient!=null)
+                            {
+                                mongoClient = _sourceClient!;
+                            }
+                            else
+                            {
+                                mongoClient= MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], false, string.Empty);
+                            }
+
                         }
 
-                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts, true);                            
+                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts);                            
                     }
                     catch (Exception ex)
                     {
@@ -514,7 +520,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 MigrationJobContext.SaveMigrationUnit(mu, true);
 
                 await UpdateDocumentCountsAsync(mu, _cts);
-                await SetupServerLevelResumeTokenAsync(mu, context, _cts);
+                await SetupServerLevelResumeTokenAsync(mu, context, _cts, MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack);
 
                 if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
                 {
@@ -588,17 +594,40 @@ namespace OnlineMongoMigrationProcessor.Workers
             }, _cts);
         }
 
-        private async Task SetupServerLevelResumeTokenAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+
+        private async Task SetupServerLevelResumeTokenAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts, bool syncBack)
         {
             if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
                 return;
 
             if (context.UseServerLevel && !context.ServerLevelResumeTokenSet)
             {
-                _log.WriteLine($"Setting up server-level change stream resume token for job {MigrationJobContext.CurrentlyActiveJob.Id}.");
+                if(syncBack)
+                    _log.WriteLine($"SyncBack: Setting up server-level change stream resume token.");
+                else
+                    _log.WriteLine($"Setting up server-level change stream resume token.");
+
+
+                MongoClient mongoClient;
+                if (syncBack)
+                {
+                    mongoClient = MongoClientFactory.Create(_log, MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], false, string.Empty);
+                }
+                else
+                {
+                    if (_sourceClient != null)
+                    {
+                        mongoClient = _sourceClient!;
+                    }
+                    else
+                    {
+                        mongoClient = MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], false, string.Empty);
+                    }
+                }
+
                 _ = Task.Run(async () =>
                 {
-                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, _sourceClient!, MigrationJobContext.CurrentlyActiveJob, mu, 300, false, _cts, false);
+                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, syncBack, _cts);
                 });
 
                 context.ServerLevelResumeTokenSet = true;
@@ -857,9 +886,36 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob!))
             {
+
+                MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack = true;
+                if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server)
+                {
+                    if (MigrationJobContext.CurrentlyActiveJob.SyncBackChangeStreamStartedOn==null||MigrationJobContext.CurrentlyActiveJob.SyncBackChangeStreamStartedOn.HasValue == false)
+                        MigrationJobContext.CurrentlyActiveJob.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
+                }
+                else
+                {
+                    if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamStartedOn==null|| MigrationJobContext.CurrentlyActiveJob.ChangeStreamStartedOn.HasValue == false)
+                        MigrationJobContext.CurrentlyActiveJob.ChangeStreamStartedOn = DateTime.UtcNow;
+                }
+
                 List<Task> resumeTokenTasks = new List<Task>();
 
                 var units = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
+
+                // Setup server-level resume token if applicable
+                if (MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && units.Count > 0)
+                {
+                    PartitionPrepContext ctx= new PartitionPrepContext();
+                    ctx.UseServerLevel = true;
+                    ctx.ServerLevelResumeTokenSet = false;
+
+                    await SetupServerLevelResumeTokenAsync(units[0], ctx, ctsToken, MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack);
+                    return TaskResult.Success;
+                }
+
+
+
                 foreach (MigrationUnit mub in units)
                 {
                     var mu= MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(mub.Id);
@@ -1397,7 +1453,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             //async  call
             _ = SetSyncBackResumeTokenAsync(_cts.Token);
-            MigrationJobContext.CurrentlyActiveJob.ProcessingSyncBack = true;
+            
+
+
             MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
             _migrationProcessor.StartProcessAsync(dummyUnit.Id, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]).GetAwaiter().GetResult();
         }

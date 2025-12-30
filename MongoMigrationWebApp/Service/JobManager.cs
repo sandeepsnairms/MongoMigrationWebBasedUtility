@@ -369,7 +369,7 @@ namespace MongoMigrationWebApp.Service
             //// Try to acquire lock with zero timeout - if already locked, skip this operation
             //if (!_syncBackLock.Wait(0))
             //{
-            //    Helper.LogToFile($"SyncBackToSource already running for job {job.Id}, skipping duplicate call");
+            //    Helper.LogToFile($"SyncBackToSource already running , skipping duplicate call");
             //    return Task.CompletedTask;
             //}
 

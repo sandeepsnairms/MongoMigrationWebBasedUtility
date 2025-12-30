@@ -478,12 +478,12 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             {
                 var tempDb = _targetClient.GetDatabase(_jobId);
                 await _targetClient.DropDatabaseAsync(_jobId);
-                _log.WriteLine($"Cleaned up all temporary collections for job {_jobId}", LogType.Debug);
+                _log.WriteLine($"Cleaned up all temporary collections", LogType.Debug);
                 return true;
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error cleaning up temporary collections for job {_jobId}: {ex.Message}", LogType.Error);
+                _log.WriteLine($"Error cleaning up temporary collections: {ex.Message}", LogType.Error);
                 return false;
             }
         }

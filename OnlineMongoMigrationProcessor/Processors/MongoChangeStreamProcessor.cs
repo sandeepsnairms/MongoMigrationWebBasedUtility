@@ -100,15 +100,5 @@ namespace OnlineMongoMigrationProcessor
             MigrationJobContext.AddVerboseLog("MongoChangeStreamProcessor.RunChangeStreamProcessorForAllCollections: starting post-processing");
             await _processor.RunChangeStreamProcessorForAllCollections(cts);
         }
-
-        //public async Task CleanupAggressiveCSForCollectionAsync(MigrationUnit mu)
-        //{
-        //    await _processor.CleanupAggressiveCSForCollectionAsync(mu);
-        //}
-
-        //public async Task CleanupAggressiveTempDBAsync()
-        //{
-        //    await _processor.CleanupAggressiveTempDBAsync();
-        //}
     }
 }

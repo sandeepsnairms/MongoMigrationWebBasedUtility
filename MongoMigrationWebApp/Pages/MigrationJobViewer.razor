@@ -318,7 +318,7 @@
                                     @Helper.GetTimestampDiff(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack)
                                 </td>
                                 <td>
-                                    @GetTimeSinceLastBatch(mu)
+                                    @GetTimeSinceLastBatch(CurrentlyLoadedMigrationJob, mu)
                                 </td>
                             }
                             <td>
@@ -793,8 +793,16 @@ else if (@_showLogBackupFile)
             return mu.CursorUtcTimestamp;
     }
 
-    private string GetTimeSinceLastBatch(MigrationUnitBasic mu)
+    private string GetTimeSinceLastBatch(MigrationJob job,MigrationUnitBasic mu)
     {
+        if (job.ChangeStreamLevel == OnlineMongoMigrationProcessor.Models.ChangeStreamLevel.Server)
+        {
+            if (job.CSLastChecked == null || job.CSLastChecked == DateTime.MinValue)
+                return "NA";
+            else
+                return Helper.GetTimestampDiff(job.CSLastChecked.Value);
+        }
+
         MigrationUnit migrationUnit;
 
         if (MigrationJobContext.MigrationUnitsCache==null)

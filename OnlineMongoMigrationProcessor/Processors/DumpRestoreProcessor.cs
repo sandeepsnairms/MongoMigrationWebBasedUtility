@@ -138,13 +138,7 @@ namespace OnlineMongoMigrationProcessor
             }
 
             var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
-            PrepareDumpProcess(mu);
-
-            // Check if post-upload change stream processing is already in progress
-            // This is a processor-level concern, not coordinator concern
-            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
-            //    return TaskResult.Success;
-                        
+            PrepareDumpProcess(mu);                                
 
             //initialize coordinator if not already done
             InitializeCoordinator();
@@ -155,45 +149,9 @@ namespace OnlineMongoMigrationProcessor
 
             _log.WriteLine($"Started coordinated dump/restore processing for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
 
-            //// Fire and forget - monitor completion in background
-            //_ = WaitForMigrationUnitCompletionAsync(mu, ctx);
             
             return TaskResult.Success;
-        }
-
-        /// <summary>
-        /// Polls the coordinator until migration unit processing completes and handles post-completion logic
-        /// </summary>
-        //private async Task<TaskResult> WaitForMigrationUnitCompletionAsync(MigrationUnit mu, ProcessorContext ctx)
-        //{
-        //    // Poll coordinator until job processing completes
-        //    const int pollingIntervalMs = 1000; // Poll every 1 second
-        //    while (!_coordinator.IsMigrationUnitCompleted(mu.Id))
-        //    {
-        //        // Check for cancellation or controlled pause
-        //        if (MigrationJobContext.ControlledPauseRequested)
-        //        {
-        //            _log.WriteLine($"Controlled pause requested - exiting wait loop for {mu.DatabaseName}.{mu.CollectionName}");
-        //            return TaskResult.Canceled;
-        //        }
-
-        //        // Wait before next poll
-        //        await Task.Delay(pollingIntervalMs);
-        //    }
-
-        //    PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
-        //    PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);
-
-        //    _log.WriteLine($"Offline dump/restore processing paused/completed for {mu.DatabaseName}.{mu.CollectionName}");
-
-        //    // Handle post-completion logic -stop if offline, else invoke change streams
-        //    StopOfflineOrInvokeChangeStreams(ctx);
-
-        //    // Return success after completion
-        //    return TaskResult.Success;
-        //}
-
-        
+        }     
 
         public override void InitiateControlledPause()
         {

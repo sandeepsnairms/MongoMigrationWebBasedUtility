@@ -99,10 +99,6 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
-        // Context class for coordinated dump/restore processing
-
-
-
         // Migration unit tracker for coordinated processing
         private class MigrationUnitTracker
         {
@@ -188,7 +184,7 @@ namespace OnlineMongoMigrationProcessor
 
                     _coordinatorInitialized = true;
 
-                    log.WriteLine($"MongoDumpRestore Cordinator initialized for job {jobId}", LogType.Debug);
+                    log.WriteLine($"MongoDumpRestore Cordinator initialized", LogType.Debug);
                 }
             }
             catch (Exception ex)
@@ -461,6 +457,7 @@ namespace OnlineMongoMigrationProcessor
                 var mu = ctx.Item;
 
                 // Add to active migration units
+#pragma warning disable CS8601 // Possible null reference assignment.
                 var tracker = new MigrationUnitTracker
                 {
                     MigrationUnit = mu,
@@ -469,6 +466,7 @@ namespace OnlineMongoMigrationProcessor
                     RestoredChunks = mu.MigrationChunks.Count(c => c.IsUploaded == true),
                     AddedAt = DateTime.UtcNow
                 };
+#pragma warning restore CS8601 // Possible null reference assignment.
 
                 _activeMigrationUnits.TryAdd(mu.Id, tracker);
 

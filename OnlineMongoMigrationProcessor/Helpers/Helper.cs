@@ -359,23 +359,6 @@ namespace OnlineMongoMigrationProcessor
                 return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
         }
 
-        //public static double GetChangeStreamLagSeconds(MigrationUnit mu, bool isSyncBack)
-        //{
-        //    DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
-        //    if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
-        //        return 0;
-        //    var lag = DateTime.UtcNow - timestamp;
-        //    return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
-        //}
-
-        //public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit mu, bool isSyncBack, double maxAcceptableLagSeconds = 30)
-        //{
-        //    var lagSeconds = GetChangeStreamLagSeconds(mu, isSyncBack);
-        //    var lagDisplay = GetTimestampDiff(mu, isSyncBack);
-        //    var isHighLag = lagSeconds > maxAcceptableLagSeconds;
-            
-        //    return (lagDisplay, lagSeconds, isHighLag);
-        //}
 
         public static string GetChangeStreamMode(MigrationJob job)
         {

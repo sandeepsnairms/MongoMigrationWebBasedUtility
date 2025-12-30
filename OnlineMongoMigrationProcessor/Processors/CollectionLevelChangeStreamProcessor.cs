@@ -126,18 +126,6 @@ namespace OnlineMongoMigrationProcessor
             return (sortedKeys, emptyLoops, lastResumeTokenCheck);
         }
 
-        //private async Task<DateTime> CheckAndInitializeResumeTokensIfNeeded(long emptyLoops, DateTime lastResumeTokenCheck, CancellationToken token)
-        //{
-        //    // Check if we should initialize resume tokens (every 10 loops or every 10 minutes)
-        //    TimeSpan timeSinceLastCheck = DateTime.UtcNow - lastResumeTokenCheck;
-        //    if (emptyLoops % 10 == 0 || timeSinceLastCheck.TotalMinutes >= 10)
-        //    {                
-        //        _= InitializeResumeTokensForUnsetUnitsAsync(token);
-        //        return DateTime.UtcNow;
-        //    }
-        //    return lastResumeTokenCheck;
-        //}
-
         private long ResetEmptyLoopsCounterIfNeeded(long emptyLoops, int totalKeys)
         {
             if (emptyLoops > 0)
@@ -146,8 +134,7 @@ namespace OnlineMongoMigrationProcessor
                 return 0;
             }
             return emptyLoops;
-        }
-       
+        }      
 
 
         private void WriteBasicLog()
@@ -433,8 +420,7 @@ namespace OnlineMongoMigrationProcessor
                                 mu,
                                 30,
                                 _syncBack,
-                                token,
-                                true);
+                                token);
                         }
                         catch (Exception ex)
                         {
@@ -452,27 +438,6 @@ namespace OnlineMongoMigrationProcessor
                 _log.WriteLine($"{_syncBackPrefix}Error in InitializeResumeTokensForUnsetUnitsAsync: {ex.Message}", LogType.Error);
             }
         }
-
-        //private bool AdjustCusrsorTimeForStaticCollections()
-        //{
-        //    MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.AdjustCusrsorTimeForStaticCollections: unitsToProcess={_migrationUnitsToProcess.Count}");
-        //    try
-        //    {
-        //        foreach (var unitId in _migrationUnitsToProcess.Keys)
-        //        {
-        //            var mu = MigrationJobContext.GetMigrationUnit(MigrationJobContext.CurrentlyActiveJob.Id, unitId);
-        //            AdjustCursorTimeForOplogError(mu);
-        //        }
-        //        return true;
-        //    }
-        //    catch (Exception ex)
-        //    {
-        //        _log.WriteLine($"{_syncBackPrefix}Error adjusting cursor time for static collections: {ex}", LogType.Error);
-        //        StopProcessing = true;
-        //        return false;
-        //    }
-
-        //}
 
         private async Task SetChangeStreamOptionandWatch(MigrationUnit mu, bool IsCSProcessingRun = false, int seconds = 0)
         {
@@ -682,14 +647,6 @@ namespace OnlineMongoMigrationProcessor
                 options = new ChangeStreamOptions { BatchSize = 500, FullDocument = ChangeStreamFullDocumentOption.UpdateLookup, StartAtOperationTime = bsonTimestamp, MaxAwaitTime = TimeSpan.FromSeconds(maxAwaitSeconds) };
                 _log.WriteLine($"{_syncBackPrefix}Resume strategy: StartAtOperationTime from ChangeStreamStartedOn - StartedOn: {startedOn} for {collectionKey}", LogType.Debug);
                 
-                //if (mu.ResetChangeStream)
-                //{
-                //    ResetCounters(mu);
-                //    _log.WriteLine($"{_syncBackPrefix}Counters reset for {collectionKey}", LogType.Debug);
-                //}
-
-                //mu.ResetChangeStream = false;
-                //MigrationJobContext.SaveMigrationUnit(mu, true);
             }
             else
             {
@@ -1058,10 +1015,6 @@ namespace OnlineMongoMigrationProcessor
                     // Restart stopwatch for next read iteration
                     readStopwatch.Restart();
                 }
-                //if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
-                //{
-                //    _log.WriteLine($"{_syncBackPrefix}Change stream processing cancelled for {changeStreamCollection!.CollectionNamespace}", LogType.Info);                    
-                //}
                 readStopwatch.Stop();
             } 
 

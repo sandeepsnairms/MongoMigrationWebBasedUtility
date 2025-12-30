@@ -16,10 +16,7 @@ namespace OnlineMongoMigrationProcessor
         public string? Name { get; set; }
         public string? SourceEndpoint { get; set; }
         public string? TargetEndpoint { get; set; }
-        //[JsonIgnore]
-        //public string? SourceConnectionString { get; set; }
-        //[JsonIgnore]
-        //public string? TargetConnectionString { get; set; }
+
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
         
@@ -30,40 +27,9 @@ namespace OnlineMongoMigrationProcessor
 
         public bool IsCancelled { get; set; }
         public bool IsStarted { get; set; }
-        public JobType JobType { get; set; } = JobType.MongoDriver;
-        
-        // Legacy property for backward compatibility - will be removed in future versions
-        // This will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("UseMongeDump", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _useMongoDumpLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy UseMongoDump property
-                if (value.HasValue)
-                {
-                    JobType = value.Value ? JobType.DumpAndRestore : JobType.MongoDriver;
-                }
-            }
-        }
+        public JobType JobType { get; set; } = JobType.MongoDriver;        
+       
         public CDCMode CDCMode { get; set; } = CDCMode.Offline;
-
-         // Legacy property for backward compatibility - will be removed in future versions
-        // This will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("IsOnline", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _isOnlineLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy IsOnline property
-                if (value.HasValue)
-                {
-                    CDCMode = value.Value ? CDCMode.Online : CDCMode.Offline;
-                }
-            }
-        }
 
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
@@ -71,39 +37,12 @@ namespace OnlineMongoMigrationProcessor
         public bool SyncBackEnabled { get; set; }
         public bool ProcessingSyncBack { get; set; }
         public bool RunComparison { get; set; }
-        
+
+        public DateTime? CSLastChecked { get; set; }
+
         public ChangeStreamMode ChangeStreamMode { get; set; } = ChangeStreamMode.Immediate;
         
-        // Legacy properties for backward compatibility - will be removed in future versions
-        // These will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("AggresiveChangeStream", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _aggresiveChangeStreamLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy AggresiveChangeStream property
-                if (value.HasValue && value.Value)
-                {
-                    ChangeStreamMode = ChangeStreamMode.Aggressive;
-                }
-            }
-        }
-        
-        [JsonProperty("CSDelayedMode", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _csDelayedModeLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy CSDelayedMode property
-                if (value.HasValue && value.Value)
-                {
-                    ChangeStreamMode = ChangeStreamMode.Delayed;
-                }
-            }
-        }
-        
+               
         public bool CSPostProcessingStarted { get; set; }
         public ChangeStreamLevel ChangeStreamLevel { get; set; }
         
@@ -175,17 +114,6 @@ namespace OnlineMongoMigrationProcessor
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
         public List<MigrationUnitBasic>? MigrationUnitBasics { get; set; }
-
-
-        [JsonProperty("MigrationUnits")]
-        private List<MigrationUnit>? _migrationUnitsBackingField
-        {
-            get => null; // Never serialize this property - returns null so JSON.NET won't include it
-            set => MigrationUnits = value; // Allow deserialization - set the public property
-        }
-
-        [JsonIgnore]
-        public List<MigrationUnit>? MigrationUnits { get; set; }
 
         public bool Persist()
         {

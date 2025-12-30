@@ -426,10 +426,6 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             var ctx = SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
-            // Check if post-upload change stream processing is already in progress
-            //if (CheckChangeStreamAlreadyProcessingAsync(ctx))
-            //    return TaskResult.Success;
-
             _log.WriteLine($"RU copy Processor started for {ctx.DatabaseName}.{ctx.CollectionName}");
 
             if (!mu.DumpComplete && !_cts.Token.IsCancellationRequested)
