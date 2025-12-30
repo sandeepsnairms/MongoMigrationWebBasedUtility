@@ -10,7 +10,7 @@ namespace OnlineMongoMigrationProcessor.Models
 {
     public class ProcessorContext
     {
-        public required MigrationUnit Item { get; set; }
+        public required string MigrationUnitId { get; set; }
         public required string SourceConnectionString { get; set; }
         public required string TargetConnectionString { get; set; }
         public required string JobId { get; set; }

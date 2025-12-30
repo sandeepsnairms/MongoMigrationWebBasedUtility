@@ -1,5 +1,7 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,12 +14,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
     {
         public async Task CompareRandomDocumentsAsync(
         Log log,
-        JobList joblist,
         MigrationJob job,
         MigrationSettings config,
         CancellationToken cancellationToken = default
         )
         {
+            MigrationJobContext.AddVerboseLog($"ComparisonHelper.CompareRandomDocumentsAsync: jobId={job.Id}, sampleSize={config.CompareSampleSize}");
             MongoClient sourceClient;
             MongoClient targetClient;
 
@@ -32,10 +34,11 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                 log.WriteLine($"Running hash comparison using {config.CompareSampleSize} sample documents.");
 
-                sourceClient = MongoClientFactory.Create(log, job.SourceConnectionString ?? string.Empty, false, config.CACertContentsForSourceServer);
-                targetClient = MongoClientFactory.Create(log, job.TargetConnectionString ?? string.Empty);
+                sourceClient = MongoClientFactory.Create(log, MigrationJobContext.SourceConnectionString[job.Id] ?? string.Empty, false, config.CACertContentsForSourceServer);
+                targetClient = MongoClientFactory.Create(log, MigrationJobContext.TargetConnectionString[job.Id] ?? string.Empty);
 
-                foreach (var mu in job.MigrationUnits ?? new List<MigrationUnit>())
+
+                foreach (var mu in Helper.GetMigrationUnitsToMigrate(job) ?? new List<MigrationUnit>())
                 {
 
                     log.WriteLine($"Processing {mu.DatabaseName}.{mu.CollectionName}.");
@@ -111,7 +114,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
                     mu.VarianceCount = mismatched;
                     mu.ComparedOn = currTime;
-                    joblist.Save();
+                    MigrationJobContext.SaveMigrationUnit(mu,false);
                 }
             }           
             catch (Exception ex)

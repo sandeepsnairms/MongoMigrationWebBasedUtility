@@ -1,21 +1,27 @@
 ﻿using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using static System.Reflection.Metadata.BlobBuilder;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Context;
 
 namespace OnlineMongoMigrationProcessor.Processors
 {
     internal class SyncBackProcessor : MigrationProcessor
     {
 
-        public SyncBackProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-           : base(log, jobList, job, sourceClient, config)
+        public SyncBackProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+           : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("SyncBackProcessor: Constructor called");
             // Constructor body can be empty or contain initialization logic if needed
         }
 
@@ -42,6 +48,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         private Task<TaskResult> SyncBackAttemptAsync()
         {
+            MigrationJobContext.AddVerboseLog("SyncBackProcessor.SyncBackAttemptAsync: starting");
             if (_cts == null)
             {
                 _log.WriteLine("Cancellation token source not initialized for SyncBack.", LogType.Error);
@@ -52,35 +59,38 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             _log.WriteLine($"SyncBack to source starting.");
 
-            var units = _job.MigrationUnits;
+            var units = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
+                       
+            
+
             if (units != null)
             {
-                foreach (MigrationUnit unit in units)
-                {
-                    if (!unit.SyncBackChangeStreamStartedOn.HasValue)
-                    {
-                        unit.SyncBackChangeStreamStartedOn = DateTime.UtcNow;
-                    }
-                }
+                foreach (MigrationUnit mu in units)
+                {                   
+                    AddCollectionToChangeStreamQueue(mu);
+				}
             }
 
-            var _ = _changeStreamProcessor!.RunCSPostProcessingAsync(_cts);
+
+            var _ = _changeStreamProcessor!.RunChangeStreamProcessorForAllCollections(_cts);
             return Task.FromResult(TaskResult.Success);
         }
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+
+        public override async Task<TaskResult> StartProcessAsync(string MigrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
             ProcessRunning = true;
 
-            _job.IsStarted = true;
+             MigrationJobContext.CurrentlyActiveJob.IsStarted = true;
 
             if (string.IsNullOrWhiteSpace(sourceConnectionString)) throw new ArgumentNullException(nameof(sourceConnectionString));
             if (string.IsNullOrWhiteSpace(targetConnectionString)) throw new ArgumentNullException(nameof(targetConnectionString));
             var sourceClient = MongoClientFactory.Create(_log, sourceConnectionString, false);
             var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
 
+
             _changeStreamProcessor = null;
-            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, _jobList, _job, _config, true);
+            _changeStreamProcessor = new MongoChangeStreamProcessor(_log, sourceClient, targetClient, MigrationJobContext.MigrationUnitsCache, _config, true, _migrationWorker);
 
             _cts=new CancellationTokenSource();
 

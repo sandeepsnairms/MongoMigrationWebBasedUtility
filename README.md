@@ -17,15 +17,11 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 ## Table of Contents
 
 - [Key Features](#key-features)
-- [Azure Deployment](#azure-deployment)
-  - [Prerequisites](#prerequisites)
-  - [Deploy on Azure using Source Files (option 1)](#deploy-on-azure-using-source-files-option-1)
-  - [Deploy on Azure using precompiled binaries (option 2)](#deploy-on-azure-using-precompiled-binaries-option-2)
-  - [Enable App Authentication](#enable-app-authentication-optional-but-recommended)
-  - [Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional)
-  - [Enable Private Endpoint on the Azure Web App (Optional)](#enable-private-endpoint-on-the-azure-web-app-optional)
+- [Azure Deployment Options](#azure-deployment-options)
+  - [Option 1: Azure Web App (App Service)](#option-1-azure-web-app-app-service)
+  - [Option 2: Azure Container Apps (ACA)](#option-2-azure-container-apps-aca)
+  - [Choosing the Right Deployment](#choosing-the-right-deployment)
 - [On-Premises Deployment](#on-premises-deployment)
-  - [Steps to Deploy on a Windows Server](#steps-to-deploy-on-a-windows-server)
 - [How to Use](#how-to-use)
   - [Add a New Job](#add-a-new-job)
   - [Migration modes](#migration-modes)
@@ -61,7 +57,7 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
   Migration resumes automatically in case of connection loss, ensuring uninterrupted reliability.
 
 - **Private Deployment**  
-  Deploy the tool within your private virtual network (VNet) for enhanced security. (Update `main.bicep` for VNet configuration.)
+  Deploy the tool within your private virtual network (VNet) for enhanced security. (Update `WebApp/main.bicep` for VNet configuration.)
 
 - **Standalone Solution**  
   Operates independently, with no dependencies on other Azure resources.
@@ -69,7 +65,7 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 - **Scalable Performance**  
   Select your Azure Web App pricing plan based on performance requirements:  
   - Default: **B1**  
-  - Recommended for large workloads: **Premium v3 P2V3** (Update `main.bicep` accordingly.)
+  - Recommended for large workloads: **Premium v3 P2V3** (Update `WebApp/main.bicep` accordingly.)
 
 - **Customizable**  
   Modify the provided C# code to suit your specific use cases.
@@ -78,352 +74,62 @@ Streamline your migration to Azure DocumentDB with a reliable, easy‑to‑use w
 
 Effortlessly migrate your MongoDB collections while maintaining control, security, and scalability. Begin your migration today and unlock the full potential of Azure Cosmos DB!
 
-## Azure Deployment
+## Azure Deployment Options
 
-Follow these steps to migrate data from a cloud-based MongoDB VM or MongoDB Atlas. You can deploy the utility either by building it from the source files or using the precompiled binaries.
+The MongoDB Migration Web-Based Utility can be deployed to Azure using two different options, each optimized for different workload requirements:
 
-### Prerequisites
+### Option 1: Azure Web App (App Service)
 
-1. Azure Subscription
-1. Azure CLI Installed
-1. PowerShell
+**Best for**: Small to medium workloads and short-running migrations
 
+- ✅ Quick and simple deployment
+- ✅ Lower cost for smaller workloads
+- ✅ Standard web application hosting
+- ✅ Ideal for migrations under 24 hours
 
-### Deploy on Azure using Source Files (option 1)
-This option involves cloning the repository and building the C# project source files locally on a Windows machine. If you’re not comfortable working with code, consider using Option 2 below.
+**[📖 Deploy to Azure Web App Guide](WebApp/DeployToWebApp_README.md)**
 
+### Option 2: Azure Container Apps (ACA)
 
-1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
-2. Clone/Download the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
-2. Open PowerShell.
-2. Navigate to the cloned project folder.
-3. Run the following commands in PowerShell:
+**Best for**: Medium to large workloads and long-running migrations
 
-   ```powershell
-   # Variables to be updated
-   $resourceGroupName = <Replace with Existing Resource Group Name>
-   $webAppName = <Replace with Web App Name>
-   $projectFolderPath = <Replace with path to cloned repo on local>
+- ✅ Configurable high-performance compute (up to 32 vCores, 64GB RAM)
+- ✅ Persistent storage that survives deployments (100GB Azure File Share)
+- ✅ Dedicated resources for intensive migrations
+- ✅ Enterprise networking with VNet integration
+- ✅ Ideal for migrations over 24 hours
 
+**[📖 Deploy to Azure Container Apps Guide](ACA/DeployToACA_README.md)**
 
-   # Paths - No changes required
-   $projectFilePath = "$projectFolderPath\MongoMigrationWebApp\MongoMigrationWebApp.csproj"
-   $publishFolder = "$projectFolderPath\publish"
-   $zipPath = "$publishFolder\app.zip"
+### Choosing the Right Deployment
 
-   # Login to Azure
-   az login
+| Feature | Azure Web App | Azure Container Apps |
+|---------|---------------|----------------------|
+| **Workload Size** | Small to Medium | Medium to Large |
+| **Migration Duration** | < 24 hours | 24+ hours |
+| **CPU** | Shared/Basic tier | Up to 32 dedicated vCores |
+| **Memory** | Up to 14GB (P3V3) | Up to 64GB |
+| **Persistent Storage** | App Service storage | 100GB Azure File Share |
+| **Deployment Time** | < 10 minutes | ~ 15-20 minutes |
+| **Cost** | Lower for small workloads | Optimized for large workloads |
+| **Best Use Case** | Quick migrations, dev/test | Production, large-scale migrations |
 
-   # Set subscription (optional)
-   # az account set --subscription "your-subscription-id"
+### Need Help Deciding?
 
-   # Deploy Azure Web App
-   Write-Host "Deploying Azure Web App..."
-   az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
-
-
-    # Configure NuGet path (execute only once on a machine)
-   dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
-
-    # Delete the existing publish folder (if it exists)
-   if (Test-Path $publishFolder) {
-		Remove-Item -Path $publishFolder -Recurse -Force -Confirm:$false
-   }
-	
-	
-   # Build the Blazor app
-   Write-Host "Building Blazor app..."
-   dotnet publish $projectFilePath -c Release -o $publishFolder -warnaserror:none --nologo
-	
-	# Delete the existing zip file if it exists
-	if (Test-Path $zipPath) {
-		Remove-Item $zipPath -Force
-	}
-
-		
-   # Archive published files
-   Compress-Archive -Path "$publishFolder\*" -DestinationPath $zipPath -Update
-
-   # Deploy files to Azure Web App
-   Write-Host "Deploying to Azure Web App..."
-   az webapp deploy --resource-group $resourceGroupName --name $webAppName --src-path $zipPath --type zip
-
-   Write-Host "Deployment completed successfully!"
-   ```
-
-4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
-5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
-
-### Deploy on Azure using precompiled binaries (option 2)
-
-1. Clone/Download the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
-1. Download the .zip file (excluding source code.zip and source code.tar.gz) from the latest release available at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`.
-1. Open PowerShell.
-1. Navigate to the cloned project folder.
-1. Run the following commands in PowerShell:
-
-   ```powershell
-   # Variables to be updated
-   $resourceGroupName = <Replace with Existing Resource Group Name>
-   $webAppName = <Replace with Web App Name>
-   $zipPath = <Replace with full path of downloaded latest release zip file on local>
-
-   # Login to Azure
-   az login
-
-   # Set subscription (optional)
-   # az account set --subscription "your-subscription-id"
-
-   # Deploy Azure Web App 
-   Write-Host "Deploying Azure Web App..."
-   az deployment group create --resource-group $resourceGroupName --template-file main.bicep --parameters location=WestUs3 webAppName=$webAppName
-
-   # Deploy files to Azure Web App
-   Write-Host "Deploying to Azure Web App..."
-   az webapp deploy --resource-group $resourceGroupName --name $webAppName --src-path $zipPath --type zip
-
-   Write-Host "Deployment completed successfully!"
-   ```
-
-4. Open `https://<WebAppName>.azurewebsites.net` to access the tool.
-5. [Enable the use of a single public IP for consistent firewall rules](#integrating-azure-web-app-with-a-vnet-to-use-a-single-public-ip-optional) or [Enable Private Endpoint](#steps-to-enable-private-endpoint-on-the-azure-web-app-optional) if required.
-
-## Enable App Authentication (Optional but Recommended)
-
-The WebApp deployed using the above steps will be publicly accessible to anyone with the URL. To secure the application, it is recommended to enable App Service Authentication.  
-
-For more details, see [Add app authentication to your web app](https://learn.microsoft.com/en-us/azure/app-service/scenario-secure-app-authentication-app-service?tabs=workforce-configuration).
-
-
-
-## Integrating Azure Web App with a VNet to Use a Single Public IP (Optional)
-
-### VNet Integration for MongoDB servers within a private Virtual Network (VNet)
-
-Accessing MongoDB servers within a VNet requires VNet injection. To enable connectivity to MongoDB servers located within a private VNet, ensure that [VNet integration](#1-enable-vnet-integration-for-the-web-app) is configured for your application.
-
-
-#### 1. Create a VNet (If Not Already Existing)
-
-1. **Create a Virtual Network**:
-   - Go to **Create a resource** in the Azure Portal.
-   - Search for **Virtual Network** and click **Create**.
-   - Provide a **Name** for the VNet.
-   - Choose the desired **Region** (ensure it matches the Web App's region for integration).
-   - Define the **Address Space** (e.g., `10.0.0.0/16`).
-
-2. **Add a Subnet**:
-   - In the **Subnet** section, create a new subnet.
-   - Provide a **Name** (e.g., `WebAppSubnet`).
-   - Define the **Subnet Address Range** (e.g., `10.0.1.0/24`).
-   - Set the **Subnet Delegation** to `Microsoft.Web` for VNet integration.
-
-3. **Create the VNet**:
-   - Click **Review + Create** and then **Create**.
-#### 1. Enable VNet Integration for the Web App
-
-1. **Go to the Web App**:
-   - Navigate to your Azure Web App in the Azure Portal.
-
-2. **Enable VNet Integration**:
-   - In the left-hand menu, select **Networking**.
-   - Under **Outbound Traffic**, click **VNet Integration**.
-   - Click **Add VNet** and choose an existing VNet and subnet.
-   - Ensure the subnet is delegated to **Microsoft.Web**.
-3. **Save** the configuration.
-
-#### 2. Configure a NAT Gateway for the VNet
-1. **Create a Public IP Address**:
-   - Go to **Create a resource** in the Azure Portal.
-   - Search for **Public IP Address** and click **Create**.
-   - Assign a name and ensure it's set to **Static**.
-   - Complete the setup.
-
-2. **Create a NAT Gateway**:
-   - Go to **Create a resource** in the Azure Portal.
-   - Search for **NAT Gateway** and click **Create**.
-   - Assign a name and link it to the **Public IP Address** created earlier.
-   - Attach the NAT Gateway to the same subnet used for the Web App.
-
-3. **Save** the configuration.
-
-#### 3. Update Firewall Rules
-
-  - In your firewall (e.g., Azure Firewall, third-party), allow traffic from the single public IP address used by the NAT Gateway.
-   - Test access to MongoDB Source and Destination that have been configured with the new IP in their firewall rules.
-
-
-
-## Enable Private Endpoint on the Azure Web App (Optional)
-
-### Prerequisites
-
-Ensure you have:
-
-- An existing **Azure Virtual Network (VNet)**.
-- A subnet dedicated to private endpoints (e.g., `PrivateEndpointSubnet`).
-- Permissions to configure networking and private endpoints in Azure.
-
-### Enable Private Endpoint
-
-#### 1. Navigate to the Web App
-
-- Open the **Azure Portal**.
-- In the left-hand menu, select **App Services**.
-- Click the desired web app.
-
-#### 2. Access Networking Settings
-
-- In the web app's blade, select **Networking**.
-- Under the **Private Endpoint** section, click **+ Private Endpoint**.
-
-#### 3. Create the Private Endpoint
-
-Follow these steps in the **Add Private Endpoint** Advanced wizard:
-
-##### a. Basics
-
-- **Name**: Enter a name for the private endpoint (e.g., `WebAppPrivateEndpoint`).
-- **Region**: Ensure it matches your VNet’s region.
-
-##### b. Resource
-
-- **Resource Type**: Select `Microsoft.Web/sites` for the web app.
-- **Resource**: Choose your web app.
-- **Target Sub-resource**: Select `sites`.
-
-##### c. Configuration
-
-- **Virtual Network**: Select your VNet.
-- **Subnet**: Choose the `PrivateEndpointSubnet`.
-- **Integrate with private DNS zone**: Enable this to link the private endpoint with an Azure Private DNS zone (recommended).
-
-#### 4. Review and Create
-
-- Click **Next** to review the configuration.
-- Click **Create** to finalize.
-
-#### 5. Verify Private Endpoint Connection
-
-- Return to the **Networking** tab of your web app.
-- Verify the private endpoint status under **Private Endpoint Connections** as `Approved`.
-
-### Configure DNS (Optional but Recommended)
-
-If using a private DNS zone:
-
-1. **Validate DNS Resolution**:
-   Run the following command to ensure DNS resolves to the private IP:
-
-   ```bash
-   nslookup <WebAppName>.azurewebsites.net
-   ```
-
-2. **Update Custom DNS Servers (if applicable)**:
-   Configure custom DNS servers to resolve the private endpoint using Azure Private DNS.
-
-### Test Connectivity
-
-1. Deploy a **VM in the same VNet**.
-2. From the VM, access the web app via its URL (e.g., `https://<WebAppName>.azurewebsites.net`).
-3. Confirm that the web app is accessible only within the VNet.
-
+- **Start small?** Use [Azure Web App](WebApp/DeployToWebApp_README.md) for quick setup and testing
+- **Production migration?** Use [Azure Container Apps](ACA/DeployToACA_README.md) for reliability and performance
+- **Not sure?** Start with Web App and migrate to Container Apps if needed
 
 ## On-Premises Deployment
 
-Follow these steps to migrate data from an on-premises MongoDB VM. You can deploy the utility by either compiling the source files or using the precompiled binaries.
+**Best for**: Migrating from on-premises MongoDB VMs directly to Azure DocumentDB
 
-### Steps to Deploy on a Windows Server
+- ✅ Eliminates need for Azure VPN setup
+- ✅ Direct local access to source MongoDB
+- ✅ Deploy on existing Windows Server infrastructure
+- ✅ Full IIS-based hosting with .NET 9
 
-1. Prepare the Windows Server
-    - Log in to the Windows Server using Remote Desktop or a similar method.
-    - Ensure the server has internet access to download required components.
-2. Install .NET 9 Runtime
-    - Download the [.NET 9 Hosting Bundle](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-9.0.6-windows-hosting-bundle-installer):
-    - Visit the .NET Download Page.
-    - Download the Hosting Bundle under the Runtime section.
-    - Install the Hosting Bundle:
-        - Run the installer and follow the instructions.
-        - This will install the ASP.NET Core Runtime and configure IIS to work with .NET applications.
-3. Install and Configure IIS (Internet Information Services)
-    - Open Server Manager.
-    - Click Add Roles and Features and follow these steps:
-        - Select Role-based or feature-based installation.
-        - Choose the current server.
-        - Under Server Roles, select Web Server (IIS).
-        - In the Role Services section, ensure the following are selected:
-            - Web Server > Common HTTP Features > Static Content, Default Document.
-            - Web Server > Application Development > .NET Extensibility 4.8, ASP.NET 4.8.
-            - Management Tools > IIS Management Console.
-        - Click Install to complete the setup.
-        - 
-4. Enable Required Windows Features by running the following PowerShell command
-
-    ```powershell
-
-    Enable-WindowsOptionalFeature -Online -FeatureName IIS-ASPNET45, IIS-NetFxExtensibility45
-
-    ```
-5. Create the App Directory
-    - On the server, create an empty folder to store the MongoMigrationWebApp files. This folder will be referred to as the app directory.
-    - Recommended path: C:\inetpub\wwwroot\MongoMigrationWeb
-    - Configure File Permissions
-        - Right-click the app directory, select Properties > Security.
-        - Ensure that the **IIS_IUSRS** group has **Read** & **Execute** permissions.
-6. Configure IIS for WebApp
-    - Open IIS Manager (search IIS in the Start menu).
-    - Right-click Sites in the left-hand pane and select Add Website.
-        - Site Name: Enter a name for your site (e.g., MongoMigrationWeb).
-        - Physical Path: Point to the app directory.
-        - Binding: Configure the site to use the desired port (e.g., 8080 for HTTPS).
-7. Set Up Application Pool
-    - In IIS Manager, select Application Pools.
-    - Create a new Application Pool:
-        - Right-click and select Add Application Pool.
-        - Name it (e.g., MongoMigrationWebPool).
-        - Set the .NET CLR version to No Managed Code.
-    - Select the site, click Basic Settings, and set the application pool to the one created.
-8. Deploy the binaries to the app directory
-    - Use precompiled binaries
-        - Download the .zip file (excluding source code.zip and source code.tar.gz) from the latest release available at `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility/releases`.
-        - Unzip the files to the app directory.
-        - Ensure the web.config file is present in the root of your app directory. This file is critical for configuring the IIS hosting.
-      or
-    - Use Source Files
-        1. Install [.NET SDK](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)
-        2. Clone/Download the repository: `https://github.com/AzureCosmosDB/MongoMigrationWebBasedUtility`
-        3. Open PowerShell.
-        4. Navigate to the cloned project folder.
-        5. Run the following commands in PowerShell:
-    
-               ```powershell
-               # Variables to be updated
-    
-               $webAppName = <Replace with Web App Name>
-               $projectFolderPath = <Replace with path to cloned repo on local>
-            
-            
-               # Paths - No changes required
-               $projectFilePath = "$projectFolderPath\MongoMigrationWebApp\MongoMigrationWebApp.csproj"
-               $publishFolder = "$projectFolderPath\publish"
-               $zipPath = "$publishFolder\app.zip"
-                 
-            
-               # Configure Nuget Path. Execute only once on a machine
-               dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org
-            
-            
-               # Build the Blazor app
-               Write-Host "Building Blazor app..."
-               dotnet publish $projectFilePath -c Release -o $publishFolder -warnaserror:none --nologo        	
-            
-           
-               Write-Host "Published to "$publishFolder
-               ```
-
-        6. Copy the contents of the published folder to  the app directory.
-
-10. Restart IIS from the right-hand pane.
+**[📖 Deploy to On-Premises Windows Server Guide](OnPremise/DeployToOnPremise_README.md)**
 
 ## How to Use
 
@@ -553,6 +259,18 @@ Initially, you may not see updates here until the application cutover is complet
 - Confirm that the target account is live and actively receiving traffic.
 - Ensure the Sync Back process is running and not paused.
 - Monitor for incoming changes on the target. If no new writes are occurring, the lag may grow, which is expected in the absence of new data.
+
+#### Time Since Last Batch (CS Last Checked)
+
+Time Since Last Batch displays the time elapsed since the change stream was last checked for updates. This metric is shown in the Job Viewer UI as **CS Last Checked** and indicates how recently the change stream processor examined the collection for new changes.
+
+This value helps monitor the health and activity of the change stream processing:
+
+- A small value (e.g., seconds or a few minutes) indicates active monitoring and regular checks of the change stream.
+- A large or increasing value may suggest the change stream processor is not running, the job is paused, or there's an issue preventing regular checks.
+- If this value is "NA", it means the change stream has not yet been initialized or checked for this collection.
+
+This is different from "Time Since Last Change" which shows when the last actual change was processed, whereas "Time Since Last Batch" shows when the change stream was last polled for updates.
 
 
 ### Update Web App Settings

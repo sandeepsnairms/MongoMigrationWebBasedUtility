@@ -1,19 +1,24 @@
-﻿using Newtonsoft.Json;
+﻿using MongoDB.Bson;
+using MongoDB.Driver;
+using Newtonsoft.Json;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 using System.Xml.Linq;
-using MongoDB.Driver;
-using MongoDB.Bson;
-using OnlineMongoMigrationProcessor.Helpers;
 #pragma warning disable CS8600 // Converting null literal or possible null value to non-nullable type.
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 #pragma warning disable CS8604 // Possible null reference argument.
@@ -42,7 +47,8 @@ namespace OnlineMongoMigrationProcessor
         {
             if (!Directory.Exists(folderPath))
             {
-                Console.WriteLine("Folder does not exist.");
+                //Console.WriteLine("Folder does not exist.");
+                Helper.LogToFile($"Folder {folderPath} does not exist", "HelperLogs.txt");
                 return 0;
             }
 
@@ -55,25 +61,27 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (UnauthorizedAccessException e)
             {
-                Console.WriteLine($"Access denied: {e.ToString()}");
+                //Console.WriteLine($"Access denied: {e.ToString()}");
+                Helper.LogToFile($"Access denied: {e.ToString()}", "HelperLogs.txt");
                 return 0;
             }
             catch (Exception e)
             {
-                Console.WriteLine($"Error: {e.ToString()}");
+                Helper.LogToFile($"Unknown exception: {e.ToString()}", "HelperLogs.txt");
                 return 0;
             }
         }
 
         
 
-        public static bool IsMigrationUnitValid(MigrationUnit mu)
+        public static bool IsMigrationUnitValid(MigrationUnitBasic mu)
         {
             return mu.SourceStatus == CollectionStatus.OK;
         }
 
         public static bool CanProceedWithDownloads(string directoryPath,long spaceRequiredInMb, out double folderSizeInGB, out double freeSpaceGB)
         {
+            
             freeSpaceGB = 0;
             folderSizeInGB = 0;
 
@@ -96,7 +104,7 @@ namespace OnlineMongoMigrationProcessor
 
                 folderSizeInGB = Math.Round(GetFolderSizeInGB(dirInfo.FullName), 2);
                 freeSpaceGB = Math.Round(freeSpaceInMb /1024, 2);
-
+                MigrationJobContext.AddVerboseLog($"CanProceedWithDownloads returned false: directoryPath={directoryPath}, spaceRequiredInMb={spaceRequiredInMb}");
                 return false;
             }
             else
@@ -109,6 +117,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static string EncodeMongoPasswordInConnectionString(string connectionString)
         {
+       
             // Regex pattern to capture the password part (assuming mongodb://user:password@host)
             string pattern = @"(mongodb(?:\+srv)?:\/\/[^:]+:)(.*)@([^@]+)$";
 
@@ -126,15 +135,42 @@ namespace OnlineMongoMigrationProcessor
             return connectionString;
         }
 
+        public static async Task<bool> ValidateMongoToolsAvailableAsync(Log log)
+        {
+            MigrationJobContext.AddVerboseLog("ValidateMongoToolsAvailableAsync: checking mongodump/mongorestore");
+            try
+            {
+                var mongodumpCheck = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "mongodump",
+                    Arguments = "--version",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                mongodumpCheck?.WaitForExit();
 
+                if (mongodumpCheck?.ExitCode != 0)
+                {
+                    throw new Exception("mongodump not found in PATH");
+                }
+
+                log.WriteLine("MongoDB tools validated successfully");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"MongoDB tools not available: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
         public static async Task<string> EnsureMongoToolsAvailableAsync(Log log,string toolsDestinationFolder, MigrationSettings config)
         {
+            MigrationJobContext.AddVerboseLog($"EnsureMongoToolsAvailableAsync: toolsDestinationFolder={toolsDestinationFolder}");
             string toolsDownloadUrl = config.MongoToolsDownloadUrl;
 
             try
             {
-
-
                 string toolsLaunchFolder = Path.Combine(toolsDestinationFolder, Path.GetFileNameWithoutExtension(toolsDownloadUrl), "bin");
 
                 string mongodumpPath = Path.Combine(toolsLaunchFolder, "mongodump.exe");
@@ -188,23 +224,56 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        #region Logging
 
+        /// <summary>
+        /// Logs a message to the debug log file with timestamp
+        /// </summary>
+        /// <param name="message">The message to log</param>
+        public static void LogToFile(string message, string striFileName = "AutoStartLog.txt")
+        {
+            try
+            {
+                string path = path = Path.Combine(Helper.GetWorkingFolder(),striFileName);
+                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
+                System.IO.File.AppendAllText(path, logEntry);
+            }
+            catch
+            {
+                // Silently ignore logging errors to prevent application crashes
+            }
+        }
+
+        #endregion 
 
         public static string GetWorkingFolder()
         {
+            MigrationJobContext.AddVerboseLog($"GetWorkingFolder: _workingFolder={_workingFolder}");
 
             if (!string.IsNullOrEmpty(_workingFolder))
             {
                 return _workingFolder;
             }
 
+            if (!IsWindows())
+            {
+                _workingFolder = $"{Environment.GetEnvironmentVariable("ResourceDrive")}/{MigrationJobContext.AppId}/";
+
+                if (!System.IO.Directory.Exists(_workingFolder))
+                    System.IO.Directory.CreateDirectory(_workingFolder);
+
+                return _workingFolder;
+            }
+
             //back ward compatibility, old code used to create a folder in temp path
-            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))                
+            if (System.IO.Directory.Exists($"{Path.GetTempPath()}migrationjobs"))
             {
                 _workingFolder = Path.GetTempPath();
                 return _workingFolder;
             }
             //back ward compatibility end
+
 
             string homePath = Environment.GetEnvironmentVariable("ResourceDrive");
 
@@ -212,8 +281,9 @@ namespace OnlineMongoMigrationProcessor
             {
                 _workingFolder = Path.GetTempPath();
             }
-            
-            if(! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
+
+
+            if (! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
             {
                 _workingFolder = Path.Combine(homePath, "home//");
             }
@@ -222,6 +292,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static string UpdateAppName(string connectionString, string appName)
         {
+            MigrationJobContext.AddVerboseLog($"UpdateAppName: appName={appName}");
             try
             {
                 if (string.IsNullOrWhiteSpace(connectionString))
@@ -265,14 +336,20 @@ namespace OnlineMongoMigrationProcessor
             return (total, inserted, skipped, failed);
         }
 
-        public static string GetChangeStreamLag(MigrationUnit unit, bool isSyncBack)
+        public static string GetTimestampDiff(MigrationUnitBasic mu, bool isSyncBack)
         {
-            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
-            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
+            DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+            if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return "NA";
+            
+            return GetTimestampDiff(timestamp);
+        }
+
+        public static string GetTimestampDiff(DateTime timestamp)
+        {
             var lag = DateTime.UtcNow - timestamp;
             if (lag.TotalSeconds < 0) return "Invalid";
-            
+
             // Enhanced lag reporting with more granular information
             if (lag.TotalSeconds < 60)
                 return $"{(int)lag.TotalSeconds} sec";
@@ -282,35 +359,13 @@ namespace OnlineMongoMigrationProcessor
                 return $"{(int)lag.TotalHours}h {(int)lag.Minutes}m";
         }
 
-        public static double GetChangeStreamLagSeconds(MigrationUnit unit, bool isSyncBack)
-        {
-            DateTime timestamp = isSyncBack ? unit.SyncBackCursorUtcTimestamp : unit.CursorUtcTimestamp;
-            if (timestamp == DateTime.MinValue || unit.ResetChangeStream)
-                return 0;
-            var lag = DateTime.UtcNow - timestamp;
-            return lag.TotalSeconds < 0 ? 0 : lag.TotalSeconds;
-        }
-
-        public static (string Display, double Seconds, bool IsHighLag) GetChangeStreamLagMetrics(MigrationUnit unit, bool isSyncBack, double maxAcceptableLagSeconds = 30)
-        {
-            var lagSeconds = GetChangeStreamLagSeconds(unit, isSyncBack);
-            var lagDisplay = GetChangeStreamLag(unit, isSyncBack);
-            var isHighLag = lagSeconds > maxAcceptableLagSeconds;
-            
-            return (lagDisplay, lagSeconds, isHighLag);
-        }
 
         public static string GetChangeStreamMode(MigrationJob job)
         {
             if (job == null || !Helper.IsOnline(job))
                 return "N/A";
 
-            if (job.AggresiveChangeStream)
-                return "Aggressive";
-            else if (job.CSStartsAfterAllUploads)
-                return "Delayed";
-            else
-                return "Immediate";
+            return job.ChangeStreamMode.ToString();
         }
 
        
@@ -319,8 +374,10 @@ namespace OnlineMongoMigrationProcessor
             return connectionString.Contains("mongo.cosmos.azure.com");
         }         
 
-        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
+        public static async Task<List<MigrationUnit>> PopulateJobCollectionsAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool allCollectionsUseObjectId = false)
         {
+            MigrationJobContext.AddVerboseLog($"PopulateJobCollectionsAsync: jobId={job?.Id}, allCollectionsUseObjectId={allCollectionsUseObjectId}");
+
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
             if (string.IsNullOrWhiteSpace(namespacesToMigrate))
             {
@@ -344,8 +401,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 foreach (var item in loadedObject)
                 {
-                    
-                    var tmpList = await PopulateJobCollectionsFromCSVAsync($"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString,false);
+
+                    var tmpList = await PopulateJobCollectionsFromCSVAsync(job,$"{item.DatabaseName.Trim()}.{item.CollectionName.Trim()}", connectionString,false);
                     if (tmpList.Count > 0)
                     {
                         foreach (var mu in tmpList)
@@ -372,45 +429,75 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(namespacesToMigrate, connectionString);
+                unitsToAdd = await PopulateJobCollectionsFromCSVAsync(job,namespacesToMigrate, connectionString);
                 
-                // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
-                if (allCollectionsUseObjectId)
+                
+            }
+            // If allCollectionsUseObjectId is true, set DataTypeFor_Id to ObjectId for all units
+            if (allCollectionsUseObjectId)
+            {
+                foreach (var mu in unitsToAdd)
                 {
-                    foreach (var mu in unitsToAdd)
-                    {
-                        mu.DataTypeFor_Id = DataType.ObjectId;
-                    }
+                    mu.DataTypeFor_Id = DataType.ObjectId;
                 }
             }
 
-           
 
             return unitsToAdd;
         }
 
+        public static bool CreateFolderIfNotExists(string folderPath)
+        {
+            if (!Directory.Exists(folderPath))
+            {
+                Directory.CreateDirectory(folderPath);
+            }
+            return true;
+        }
 
+        public static bool  AddMigrationUnits(List<MigrationUnit> unitsToAdd, MigrationJob job, Log log=null)
+        {
+            var newUnits = unitsToAdd
+                .Where(mu => !job.MigrationUnitBasics
+                .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
+                .ToList();
 
-        public static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
+            if (newUnits.Count > 0)
+            {
+                if(log!=null)
+                    log.WriteLine($"Adding {newUnits.Count} migration units to job", LogType.Debug);
+
+                foreach (var mu in newUnits)
+                {
+                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    AddMigrationUnit(mu,job);
+                }
+                MigrationJobContext.SaveMigrationJob(job);
+            }
+            return true;
+        }
+
+        private static void AddMigrationUnit(MigrationUnit mu, MigrationJob job)
         {
             if (job == null)
             {
                 return;
             }
-            if (job?.MigrationUnits == null)
+            if (job?.MigrationUnitBasics == null)
             {
-                job!.MigrationUnits = new List<MigrationUnit>();
+                job!.MigrationUnitBasics = new List<MigrationUnitBasic>();
             }
 
             // Check if the MigrationUnit already exists
-            if (job.MigrationUnits.Any(existingMu => existingMu.DatabaseName == mu.DatabaseName && existingMu.CollectionName == mu.CollectionName))
+            if (job.MigrationUnitBasics.Find(m => m.Id == mu.Id) != null)
             {
                 return;
             }
-            job.MigrationUnits.Add(mu);
+            mu.ParentJob = job;
+            job.MigrationUnitBasics.Add(mu.GetBasic());
         }
 
-        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(string namespacesToMigrate, string connectionString, bool split=true)
+        private static async Task<List<MigrationUnit>> PopulateJobCollectionsFromCSVAsync(MigrationJob job,string namespacesToMigrate, string connectionString, bool split=true)
         {
             List<MigrationUnit> unitsToAdd = new List<MigrationUnit>();
 
@@ -454,7 +541,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == collection))
                             {
-                                var migrationUnit = new MigrationUnit(database, collection, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job, database, collection, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -471,7 +558,7 @@ namespace OnlineMongoMigrationProcessor
                         {
                             if (!unitsToAdd.Any(x => x.DatabaseName == database && x.CollectionName == colName))
                             {
-                                var migrationUnit = new MigrationUnit(database, colName, new List<MigrationChunk>());
+                                var migrationUnit = new MigrationUnit( job, database, colName, new List<MigrationChunk>());
                                 unitsToAdd.Add(migrationUnit);
                             }
                         }
@@ -485,7 +572,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == collection))
                         {
-                            var migrationUnit = new MigrationUnit(dbName, collection, new List<MigrationChunk>());
+                            var migrationUnit = new MigrationUnit( job, dbName, collection, new List<MigrationChunk>());
                             unitsToAdd.Add(migrationUnit);
                         }
                     }
@@ -495,7 +582,7 @@ namespace OnlineMongoMigrationProcessor
                     // No wildcards, use as-is
                     if (!unitsToAdd.Any(x => x.DatabaseName == dbName && x.CollectionName == colName))
                     {
-                        var migrationUnit = new MigrationUnit(dbName, colName, new List<MigrationChunk>());
+                        var migrationUnit = new MigrationUnit( job, dbName, colName, new List<MigrationChunk>());
                         unitsToAdd.Add(migrationUnit);
                     }
                 }
@@ -622,14 +709,148 @@ namespace OnlineMongoMigrationProcessor
             return sanitizedFileName;
         }
 
+        public static bool WriteAtomicFile(string filePath, string content, int maxRetries = 5)
+        {
+            string tempFile = filePath + ".tmp";
+            bool isNewFile = false;
+            if (!System.IO.File.Exists(filePath))
+            {
+                tempFile = filePath;
+                isNewFile = true;
+            }
+                        
+
+            //Log($"WriteAtomicFile: Writing to {filePath}");
+
+            // Write to temp file (fully flushed)
+            using (var fs = new FileStream(
+                tempFile,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.WriteThrough))
+
+            using (var sw = new StreamWriter(fs))
+            {
+                sw.Write(content);
+                sw.Flush();
+                fs.Flush(true);
+            }
+
+            //Log($"Flush complete {filePath}");
+
+            if (isNewFile)
+            {
+                return true;
+            }
+
+            int attempt = 0;
+
+            while (attempt < maxRetries)
+            {
+                try
+                {
+                    string backupFile = $"{filePath}.backup";
+
+                    // If original exists → back it up
+                    if (File.Exists(filePath))
+                    {
+                        SafeDelete(backupFile);
+                        SafeMove(filePath, backupFile);
+                    }
+
+                    // Move new file into place
+                    SafeMove(tempFile, filePath);
+
+                    // Cleanup backup (best effort)
+                    SafeDelete(backupFile);
+
+                    return true; // DONE
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    attempt++;
+                    //Log($"{ex.GetType().Name} attempt {attempt}/{maxRetries} for {filePath}: {ex.Message}");
+
+                    if (attempt >= maxRetries)
+                    {
+                        SafeDelete(tempFile);
+                        throw new IOException(
+                            $"Failed to write atomic file '{filePath}' after {maxRetries} attempts.",
+                            ex);
+                    }
+
+                    Thread.Sleep(1000);
+                }
+            }
+
+            return false;
+        }
+
+        private static void SafeDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch { }
+        }
+
+        private static void SafeMove(string src, string dest)
+        {
+            File.Move(src, dest); // keep exceptions — this is the "atomic" part
+        }
+
+
+        public static string GenerateMigrationUnitId(string databaseName, string collectionName)
+        {
+            using var sha256 = SHA256.Create();
+            var input = $"{databaseName}.{collectionName}";
+            return GenerateMigrationUnitId(input);
+        }
+
+        public static string GenerateMigrationUnitId(string collectionKey)
+        {
+            using var sha256 = SHA256.Create();
+            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(collectionKey));
+
+            // Take first 8 bytes (64 bits) -> convert to 16-digit hex
+            ulong part = BitConverter.ToUInt64(hashBytes, 0);
+            return part.ToString("X16"); // 16 hex digits
+        }
+
+
+        public static List<MigrationUnit> GetMigrationUnitsToMigrate(MigrationJob job)
+        {
+            var unitsForMigrate = new List<MigrationUnit>();
+
+            if(job.MigrationUnitBasics==null || job.MigrationUnitBasics.Count==0)
+            {
+                return unitsForMigrate;
+            }
+            foreach (var mub in job.MigrationUnitBasics!)
+            {
+
+                var mu = MigrationJobContext.GetMigrationUnit(mub.Id,job.Id);
+                if (mu != null)
+                {
+                    unitsForMigrate.Add((MigrationUnit)mu);
+                }
+            }
+            return unitsForMigrate;
+        }
+
         public static bool IsOfflineJobCompleted(MigrationJob migrationJob)
         {
             if (migrationJob == null) return true;
 
             if (migrationJob.IsSimulatedRun)
             {
-                foreach (var mu in migrationJob.MigrationUnits)
+                foreach (var mu in migrationJob.MigrationUnitBasics)
                 {
+                    //var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.DumpComplete)
@@ -642,8 +863,9 @@ namespace OnlineMongoMigrationProcessor
             else
             {
 
-                foreach (var mu in migrationJob.MigrationUnits)
+                foreach (var mu  in migrationJob.MigrationUnitBasics)
                 {
+                    //var mu = jobList.GetMigrationUnit(migrationJob.Id, id);
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.RestoreComplete || !mu.DumpComplete)
@@ -652,6 +874,22 @@ namespace OnlineMongoMigrationProcessor
                 }
                 return true;
             }
+        }
+
+
+        public static bool AnyValidCollection(MigrationJob migrationJob)
+        {
+            if (migrationJob == null) return false;
+
+            foreach (var mu in migrationJob.MigrationUnitBasics)
+            {
+                if (Helper.IsMigrationUnitValid(mu))
+                {
+                    return true;
+                }
+            }
+            return false;
+
         }
 
         public static string ExtractHost(string connectionString)
@@ -683,86 +921,14 @@ namespace OnlineMongoMigrationProcessor
                 return string.Empty;
             }
         }
+
+        /// <summary>
+        /// Checks if the current operating system is Windows.
+        /// </summary>
+        /// <returns>True if running on Windows, false otherwise</returns>
+        public static bool IsWindows()
+        {
+            return OperatingSystem.IsWindows();
+        }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

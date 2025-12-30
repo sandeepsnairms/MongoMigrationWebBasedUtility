@@ -1,8 +1,9 @@
 ﻿using OnlineMongoMigrationProcessor.Models;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Threading.Tasks;
 
-namespace OnlineMongoMigrationProcessor.Helpers
+namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
 {
     public class RetryHelper
     {
@@ -13,6 +14,7 @@ namespace OnlineMongoMigrationProcessor.Helpers
             int maxTries=10,
             int initialDelayMs = 2000)
         {
+
             int attempt = 0;
             int delay = initialDelayMs;
 

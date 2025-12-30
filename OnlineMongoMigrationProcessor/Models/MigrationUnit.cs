@@ -1,12 +1,13 @@
-using Microsoft.VisualBasic;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 using MongoDB.Driver;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Generic;
-using static System.Runtime.InteropServices.JavaScript.JSType;
+using System.IO;
+using System.Text;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -18,10 +19,79 @@ namespace OnlineMongoMigrationProcessor
         public string? Value { get; set; }
     }
 
-    public class MigrationUnit
+    public  class MigrationUnitBasic
     {
+
+        [JsonIgnore]
+        public MigrationJob? ParentJob;
+
+        public string Id { get; set; }
+        public string JobId { get; set; }
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
+        public long CSUpdatesInLastBatch { get; set; }
+
+        public double CSAvgReadLatencyInMS { get; set; }
+        public double CSAvgWriteLatencyInMS { get; set; }
+
+        public DateTime? CSLastChecked { get; set; }
+
+        public DateTime CursorUtcTimestamp { get; set; }
+        public DateTime SyncBackCursorUtcTimestamp { get; set; }
+        public double DumpPercent { get; set; }
+        public double RestorePercent { get; set; }
+        public bool DumpComplete { get; set; }
+        public bool RestoreComplete { get; set; }
+
+        public CollectionStatus SourceStatus { get; set; }
+        public bool ResetChangeStream { get; set; }
+        public DataType? DataTypeFor_Id { get; set; } = null;
+
+        public bool Remove()
+        {
+
+            if (this.ParentJob == null) return false;
+
+            try
+            {
+                var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
+                if (index == -1) return false; // not found
+
+                ParentJob.MigrationUnitBasics.RemoveAt(index);
+
+                var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
+                MigrationJobContext.Store.DeleteDocument(filePath);
+
+                return MigrationJobContext.SaveMigrationJob(ParentJob);
+
+            }
+            catch
+            {
+                return false;
+            }
+            
+        }
+
+
+        public bool Persist()
+        {
+
+            var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
+
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+
+            return MigrationJobContext.Store.UpsertDocument(filePath, json);
+        }
+
+       
+
+    }
+
+
+    public class MigrationUnit:MigrationUnitBasic
+    {
+       
+       
         public string? ResumeToken { get; set; }
         public string? OriginalResumeToken { get; set; }
 
@@ -29,35 +99,6 @@ namespace OnlineMongoMigrationProcessor
         public ChangeStreamOperationType ResumeTokenOperation { get; set; }
 
         public string? ResumeDocumentId { get; set; }
-
-        //[JsonProperty("ResumeDocumentId")]
-        //public List<NameValuePair>? ResumeDocumentIdRaw { get; set; }
-
-        //[JsonIgnore]
-        //public BsonDocument? ResumeDocumentId
-        //{
-        //    get
-        //    {
-        //        if (ResumeDocumentIdRaw == null) return null;
-        //        var doc = new BsonDocument();
-        //        foreach (var nv in ResumeDocumentIdRaw)
-        //        {
-        //            doc[nv.Name] = string.IsNullOrEmpty(nv.Value)
-        //                ? BsonNull.Value
-        //                : BsonValue.Create(nv.Value);
-        //        }
-        //        return doc;
-        //    }
-        //    set
-        //    {
-        //        if (value == null) { ResumeDocumentIdRaw = null; return; }
-        //        ResumeDocumentIdRaw = value.Elements
-        //            .Select(e => new NameValuePair { Name = e.Name, Value = e.Value.ToString() })
-        //            .ToList();
-        //    }
-        //}
-
-
         public DateTime? BulkCopyStartedOn { get; set; }
         public DateTime? BulkCopyEndedOn { get; set; }
         public bool TargetCreated { get; set; }
@@ -67,26 +108,16 @@ namespace OnlineMongoMigrationProcessor
         public int VarianceCount { get; set; }
 
         public DateTime? ChangeStreamStartedOn { get; set; }
-        public DateTime CursorUtcTimestamp { get; set; }
-        public long CSUpdatesInLastBatch { get; set; }
+        
         public long CSNormalizedUpdatesInLastBatch { get; set; }
         public int CSLastBatchDurationSeconds { get; set; }
-
-        public int CSAddHours { get; set; }
-        public int SyncBackAddHours { get; set; }
 
         public string? UserFilter { get; set; }
         public string? SyncBackResumeToken { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
-        public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
-        public double DumpPercent { get; set; }
-        public double RestorePercent { get; set; }
-        public bool DumpComplete { get; set; }
-        public bool RestoreComplete { get; set; }
-        public bool ResetChangeStream { get; set; }
         public long EstimatedDocCount { get; set; }
-        public CollectionStatus SourceStatus { get; set; }
+       
         public long ActualDocCount { get; set; }
         public long SourceCountDuringCopy { get; set; }
         public long DumpGap { get; set; }
@@ -111,20 +142,68 @@ namespace OnlineMongoMigrationProcessor
         public long SyncBackDocsDeleted { get; set; }
         public long SyncBackDocsUpdated { get; set; }
         public long SyncBackDuplicateDocsSkipped { get; set; }
-
-        public DataType? DataTypeFor_Id { get; set; } = null;
-
-        // Aggressive Change Stream cleanup tracking
+         // Aggressive Change Stream cleanup tracking
         public bool AggressiveCacheDeleted { get; set; } = false;
         public DateTime? AggressiveCacheDeletedOn { get; set; }
 
         public List<MigrationChunk> MigrationChunks { get; set; }
 
-        public MigrationUnit(string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
+        public MigrationUnit(MigrationJob job, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
         {
-            DatabaseName = databaseName;
-            CollectionName = collectionName;
-            MigrationChunks = migrationChunks;
+            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);            
+            this.DatabaseName = databaseName;
+            this.CollectionName = collectionName;
+            this.MigrationChunks = migrationChunks;
+            if (job !=null)
+            {
+                this.JobId = job.Id;
+                this.ParentJob = job;
+            }
         }
+
+
+        public bool UpdateParentJob()
+        {
+            if (this.ParentJob == null) return false;
+
+            try
+            {
+                var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
+                if (index == -1) return false; // not found
+
+                GetBasic(ParentJob.MigrationUnitBasics[index]);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public MigrationUnitBasic GetBasic(MigrationUnitBasic? mub=null)
+        {
+            if (mub == null)
+                mub = new MigrationUnitBasic();
+
+            mub.Id = Helper.GenerateMigrationUnitId(this.DatabaseName, this.CollectionName);
+            mub.JobId = this.JobId;
+            mub.DatabaseName = this.DatabaseName;
+            mub.CollectionName = this.CollectionName;
+            mub.CSUpdatesInLastBatch = this.CSUpdatesInLastBatch;
+            mub.CSAvgReadLatencyInMS = this.CSAvgReadLatencyInMS;
+            mub.CSAvgWriteLatencyInMS = this.CSAvgWriteLatencyInMS;
+            mub.CursorUtcTimestamp = this.CursorUtcTimestamp;
+            mub.SyncBackCursorUtcTimestamp = this.SyncBackCursorUtcTimestamp;
+            mub.DumpPercent = this.DumpPercent;
+            mub.RestorePercent = this.RestorePercent;
+            mub.DumpComplete = this.DumpComplete;
+            mub.RestoreComplete = this.RestoreComplete;
+            mub.SourceStatus = this.SourceStatus;
+            mub.ResetChangeStream = this.ResetChangeStream;
+            mub.DataTypeFor_Id = this.DataTypeFor_Id;
+            return mub;
+        }
+
     }
 }

@@ -81,6 +81,8 @@
                                         <div><span class="lbl">Updated:</span> @FormatLong(MigrationUnit.CSDocsUpdated) (from @FormatLong(MigrationUnit.CSUpdateEvents) events)</div>
                                         <div><span class="lbl">Duplicate Processed:</span> @FormatLong(MigrationUnit.CSDuplicateDocsSkipped) skipped</div>
                                         <div><span class="lbl">Failed (with retries):</span> @FormatLong(MigrationUnit.CSErrors)</div>
+                                        <div><span class="lbl">Avg Read Latency (ms):</span> @MigrationUnit.CSAvgReadLatencyInMS.ToString("F2")</div>
+                                        <div><span class="lbl">Avg Write Latency (ms):</span> @MigrationUnit.CSAvgWriteLatencyInMS.ToString("F2")</div>
                                         @if (Helper.GetChangeStreamMode(MigrationJob) == "Aggressive" && MigrationUnit.AggressiveCacheDeleted)
                                         {
                                             <div><span class="lbl">Aggressive:</span> Completed on @(MigrationUnit.AggressiveCacheDeletedOn?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A") UTC</div>

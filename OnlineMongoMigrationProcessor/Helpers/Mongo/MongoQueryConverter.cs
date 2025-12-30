@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
-namespace OnlineMongoMigrationProcessor.Helpers
+namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
     /// <summary>
     /// Converts relaxed MongoDB queries into strict Extended JSON for mongodump.
