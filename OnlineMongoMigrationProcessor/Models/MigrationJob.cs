@@ -3,6 +3,7 @@ using OnlineMongoMigrationProcessor.Models;
 using MongoDB.Driver;
 using System;
 using System.Collections.Generic;
+using OnlineMongoMigrationProcessor.Context;
 
 #pragma warning disable CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider adding the 'required' modifier or declaring as nullable.
 
@@ -10,22 +11,15 @@ namespace OnlineMongoMigrationProcessor
 {
     public class MigrationJob
     {
-        public string? Id { get; set; }
+
+        public string Id { get; set; }
         public string? Name { get; set; }
         public string? SourceEndpoint { get; set; }
         public string? TargetEndpoint { get; set; }
-        [JsonIgnore]
-        public string? SourceConnectionString { get; set; }
-        [JsonIgnore]
-        public string? TargetConnectionString { get; set; }
+
         public string? SourceServerVersion { get; set; }
         public string? NameSpaces { get; set; }
         
-        /// <summary>
-        /// Transient flag (not persisted) used during job creation to indicate all collections use ObjectId for _id field.
-        /// This is only used as input when creating migration units.
-        /// </summary>
-        [JsonIgnore]
         public bool AllCollectionsUseObjectId { get; set; }
         
         public DateTime? StartedOn { get; set; }
@@ -33,40 +27,9 @@ namespace OnlineMongoMigrationProcessor
 
         public bool IsCancelled { get; set; }
         public bool IsStarted { get; set; }
-        public JobType JobType { get; set; } = JobType.MongoDriver;
-        
-        // Legacy property for backward compatibility - will be removed in future versions
-        // This will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("UseMongeDump", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _useMongoDumpLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy UseMongoDump property
-                if (value.HasValue)
-                {
-                    JobType = value.Value ? JobType.DumpAndRestore : JobType.MongoDriver;
-                }
-            }
-        }
+        public JobType JobType { get; set; } = JobType.MongoDriver;        
+       
         public CDCMode CDCMode { get; set; } = CDCMode.Offline;
-
-         // Legacy property for backward compatibility - will be removed in future versions
-        // This will only be deserialized if present in JSON, but never serialized
-        [JsonProperty("IsOnline", DefaultValueHandling = DefaultValueHandling.Ignore)]
-        private bool? _isOnlineLegacy
-        {
-            get => null; // Never serialize this
-            set
-            {
-                // Handle deserialization of legacy IsOnline property
-                if (value.HasValue)
-                {
-                    CDCMode = value.Value ? CDCMode.Online : CDCMode.Offline;
-                }
-            }
-        }
 
         public bool IsSimulatedRun { get; set; }
         public bool SkipIndexes { get; set; }
@@ -74,15 +37,19 @@ namespace OnlineMongoMigrationProcessor
         public bool SyncBackEnabled { get; set; }
         public bool ProcessingSyncBack { get; set; }
         public bool RunComparison { get; set; }
-        public bool AggresiveChangeStream { get; set; }
-        public bool CSStartsAfterAllUploads { get; set; }
+
+        public DateTime? CSLastChecked { get; set; }
+
+        public ChangeStreamMode ChangeStreamMode { get; set; } = ChangeStreamMode.Immediate;
+        
+               
         public bool CSPostProcessingStarted { get; set; }
         public ChangeStreamLevel ChangeStreamLevel { get; set; }
         
         /// <summary>
         /// Minimum log level to write to logs. Default is Info (Error=0, Info=1, Debug=2, Verbose=3)
         /// </summary>
-        public LogType MinimumLogLevel { get; set; } = LogType.Info;
+        public LogType LogLevel { get; set; } = LogType.Info;
         
         /// <summary>
         /// UI auto-refresh enabled state. Default is true. Not persisted - transient UI state only.
@@ -146,6 +113,19 @@ namespace OnlineMongoMigrationProcessor
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
         public DateTime SyncBackCursorUtcTimestamp { get; set; }
 
-        public List<MigrationUnit>? MigrationUnits { get; set; }
+        public List<MigrationUnitBasic>? MigrationUnitBasics { get; set; }
+
+        public bool Persist()
+        {
+            MigrationJobContext.AddVerboseLog($"MigrationJob.Persist: jobId={this.Id}, jobName={this.Name}");
+
+            //Helper.CreateFolderIfNotExists($"{Helper.GetWorkingFolder()}migrationjobs\\{this.Id}");
+            var filePath = $"migrationjobs\\{this.Id}\\jobdefinition.json";
+
+            string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+
+            return MigrationJobContext.Store.UpsertDocument(filePath, json);
+ 
+        }
     }
 }

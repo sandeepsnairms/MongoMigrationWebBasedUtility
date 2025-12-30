@@ -76,7 +76,7 @@ else
                 <tr><td class="nowrap">Sync Back Enabled</td><td>@(MigrationJob.SyncBackEnabled ? "Yes" : "No")</td></tr>
                 <tr><td class="nowrap">Source Endpoint</td><td class="wrap">@MigrationJob.SourceEndpoint</td></tr>
                 <tr><td class="nowrap">Target Endpoint</td><td class="wrap">@MigrationJob.TargetEndpoint</td></tr>
-                <tr><td class="nowrap">Collection Count</td><td>@(MigrationJob.MigrationUnits?.Count ?? 0)</td></tr>
+                <tr><td class="nowrap">Collection Count</td><td>@(@JobManager.GetMigrationUnits(MigrationJob)?.Count ?? 0)</td></tr>
             </tbody>
         </table>
     </div>
@@ -93,7 +93,7 @@ else
             </tr>
         </thead>
         <tbody>
-        @foreach (var mu in (MigrationJob.MigrationUnits ?? new List<MigrationUnit>()))
+        @foreach (var mu in (@JobManager.GetMigrationUnits(MigrationJob) ?? new List<MigrationUnit>()))
         {
             var duration = GetDuration(mu.BulkCopyStartedOn, mu.BulkCopyEndedOn);
             <tr>
@@ -121,7 +121,7 @@ else
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.ChangeStreamStartedOn?.ToString() ?? "N/A")</div>
                     <div><span class="lbl">Mode:</span> @Helper.GetChangeStreamMode(MigrationJob)</div>
-                    <div><span class="lbl">Last Event Age:</span> @Helper.GetChangeStreamLag(mu, false)</div>
+                    <div><span class="lbl">Last Event Age:</span> @Helper.GetTimestampDiff(mu, false)</div>
                     <div><span class="lbl">Last Batch Count:</span> @FormatLong(mu.CSUpdatesInLastBatch)</div>
                     <div><span class="lbl">Inserted:</span> @FormatLong(mu.CSDocsInserted) (from @FormatLong(mu.CSDInsertEvents) events)</div>
                     <div><span class="lbl">Deleted:</span> @FormatLong(mu.CSDocsDeleted) (from @FormatLong(mu.CSDeleteEvents) events)</div>
@@ -135,7 +135,7 @@ else
                 </td>
                 <td class="group-cell">
                         <div><span class="lbl">Started On (UTC):</span> @(mu.SyncBackChangeStreamStartedOn?.ToString() ?? "N/A")</div>
-                    <div><span class="lbl">Last Event Age:</span> @Helper.GetChangeStreamLag(mu, true)</div>
+                    <div><span class="lbl">Last Event Age:</span> @Helper.GetTimestampDiff(mu, true)</div>
                     <div><span class="lbl">Last Batch Count:</span> @FormatLong(mu.SyncBackUpdateEvents)</div>
                     <div><span class="lbl">Inserted:</span> @FormatLong(mu.SyncBackDocsInserted) (from @FormatLong(mu.SyncBackInsertEvents) events)</div>
                     <div><span class="lbl">Deleted:</span> @FormatLong(mu.SyncBackDocsDeleted) (from @FormatLong(mu.SyncBackDeleteEvents) events)</div>
@@ -162,7 +162,8 @@ else
 
     protected override void OnParametersSet()
     {
-        MigrationJob = JobManager.GetMigrations(out _, true)?.Find(m => m.Id == JobId);
+
+        MigrationJob = JobManager.GetMigrationJobById(JobId);
     }
 
     private void GoBack()

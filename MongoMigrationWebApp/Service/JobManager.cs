@@ -1,18 +1,16 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using OnlineMongoMigrationProcessor;
-using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Workers;
-using System;
-using System.Collections.Generic;
-
+using OnlineMongoMigrationProcessor.Context;
 
 namespace MongoMigrationWebApp.Service
 {
 
     public class JobManager
     {
-        private JobList? _jobList;
         private MigrationWorker? MigrationWorker { get; set; }
 
         private DateTime _lastJobHeartBeat = DateTime.MinValue;
@@ -20,16 +18,25 @@ namespace MongoMigrationWebApp.Service
         private readonly IConfiguration _configuration;
         private System.Threading.Timer? _resumeTimer;
         private bool _resumeExecuted = false;
+        private string? _webAppBaseUrl = null;
+        private readonly SemaphoreSlim _syncBackLock = new SemaphoreSlim(1, 1);
 
         public JobManager(IConfiguration configuration)
         {
             _configuration = configuration;
-            LogToFile("Starting Timer");
+
+            MigrationJobContext.Initialize(_configuration);
+
+            Helper.LogToFile("Invoking Timer");
+
+            if (!Helper.IsWindows())
+                return;
+
             // Start a timer that fires once after 1 minute
             _resumeTimer = new System.Threading.Timer(
                 ResumeTimerCallback,
                 null,
-                TimeSpan.FromSeconds(60),
+                TimeSpan.FromMinutes(1),
                 System.Threading.Timeout.InfiniteTimeSpan
             );
         }
@@ -44,48 +51,57 @@ namespace MongoMigrationWebApp.Service
 
             try
             {
-                LogToFile("Resuming migration job after application restart...");
-                var migrationJobs = GetMigrations(out string errorMessage);
+                Helper.LogToFile("Resuming migration job after application restart...");
+                var migrationJobIds = GetMigrationIds();
 
-                LogToFile("Step 0");
+                Helper.LogToFile("Step 0");
 
-                if (migrationJobs != null && migrationJobs.Count == 1)
+                if (migrationJobIds != null && migrationJobIds.Count == 1)
                 {
+                    var mj= GetMigrationJobById(migrationJobIds[0]);
+                    if (mj == null)
+                        return;
+                        
+                    Helper.LogToFile($"Step1 : {mj.IsStarted}-{mj.IsCompleted} -{string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id])} - {string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id])} ");
 
-                    LogToFile($"Step1 : {migrationJobs[0].IsStarted}-{migrationJobs[0].IsCompleted} -{string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString)} - {string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString)} ");
-                    if (migrationJobs[0].IsStarted && !migrationJobs[0].IsCompleted && string.IsNullOrEmpty(migrationJobs[0].SourceConnectionString) && string.IsNullOrEmpty(migrationJobs[0].TargetConnectionString))
+                    if (mj.IsStarted && !mj.IsCompleted && string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[mj.Id]) && string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[mj.Id]))
                     {
                         try
                         {
-                            LogToFile("Step2 : before reading config");
-
+                            Helper.LogToFile("Step2 : before reading config");
 
                             var sourceConnectionString = _configuration.GetConnectionString("SourceConnectionString");
                             var targetConnectionString = _configuration.GetConnectionString("TargetConnectionString");
 
                             if (sourceConnectionString != null && targetConnectionString != null)
                             {
-                                LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("mongocluster"));
+                                Helper.LogToFile($"Step 3 :Cluster found" + targetConnectionString.Contains("cluster"));
 
                                 var tmpSrcEndpoint = Helper.ExtractHost(sourceConnectionString);
                                 var tmpTgtEndpoint = Helper.ExtractHost(targetConnectionString);
-                                if (migrationJobs[0].SourceEndpoint == tmpSrcEndpoint && migrationJobs[0].TargetEndpoint == tmpTgtEndpoint)
+                                if (mj.SourceEndpoint == tmpSrcEndpoint && mj.TargetEndpoint == tmpTgtEndpoint)
                                 {
-                                    LogToFile($"Step 4 :Startig Job");
-                                    migrationJobs[0].SourceConnectionString = sourceConnectionString;
-                                    migrationJobs[0].TargetConnectionString = targetConnectionString;
-                                    //ViewMigration(migrationJobs[0].Id);
-                                    StartMigrationAsync(migrationJobs[0], sourceConnectionString, targetConnectionString, migrationJobs[0].NameSpaces ?? string.Empty, migrationJobs[0].JobType, Helper.IsOnline(migrationJobs[0]));
-                                    LogToFile($"Step 5 :Started Job");
+                                    MigrationJobContext.SourceConnectionString[mj.Id] = sourceConnectionString;
+                                    MigrationJobContext.TargetConnectionString[mj.Id] = targetConnectionString;
+
+                                    Helper.LogToFile("Job Starting");
+
+                                    StartMigration(mj, sourceConnectionString, targetConnectionString, mj.NameSpaces ?? string.Empty, mj.JobType, Helper.IsOnline(mj));
+
+                                    Helper.LogToFile("Job Started");
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            LogToFile($"Exception : {ex}");
+                            Helper.LogToFile($"Exception : {ex}");
                         }
                     }
                 }
+            }
+            catch (Exception ex)
+            {
+                Helper.LogToFile($"Exception : {ex}");
             }
             finally
             {
@@ -95,30 +111,35 @@ namespace MongoMigrationWebApp.Service
             }
         }
 
-
-        #region Logging
+        
+        #region _configuration Management
 
         /// <summary>
-        /// Logs a message to the debug log file with timestamp
+        /// Updates the WebAppBaseUrl from browser context. Called from Index.razor on first load.
         /// </summary>
-        /// <param name="message">The message to log</param>
-        private void LogToFile(string message)
+        public void UpdateWebAppBaseUrlFromBrowser(string baseUri)
         {
             try
             {
-                string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                string logEntry = $"[{timestamp} UTC] {message}{Environment.NewLine}";
-                System.IO.File.AppendAllText($"{Helper.GetWorkingFolder()}logabc.txt", logEntry);
+                if (string.IsNullOrEmpty(baseUri))
+                    return;
+
+                // Remove trailing slash if present
+                _webAppBaseUrl = baseUri.TrimEnd('/');
+                
+                // Update existing MigrationWorker if one exists
+                if (MigrationWorker != null)
+                {
+                    MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+                }
+                
+                Helper.LogToFile($"WebAppBaseUrl updated from browser: {_webAppBaseUrl}");
             }
-            catch
+            catch (Exception ex)
             {
-                // Silently ignore logging errors to prevent application crashes
+                Helper.LogToFile($"Error updating WebAppBaseUrl from browser: {ex.Message}");
             }
         }
-
-        #endregion
-
-        #region _configuration Management
 
         public bool UpdateConfig(OnlineMongoMigrationProcessor.MigrationSettings updated_config, out string errorMessage)
         {
@@ -141,83 +162,51 @@ namespace MongoMigrationWebApp.Service
         #endregion 
         #region Job Management
 
-        private JobList EnsureJobList()
-        {
-            return _jobList ??= new JobList();
+        public List<MigrationUnit> GetMigrationUnits(MigrationJob mj)
+        {            
+            return Helper.GetMigrationUnitsToMigrate(mj);
         }
 
-
-        public DateTime GetJobBackupDate()
+        
+        public MigrationJob? GetMigrationJobById(string id, bool active =true)
         {
-            return EnsureJobList().GetBackupDate();
-        }
-
-
-        public bool RestoreJobsFromBackup(out string errorMessage)
-        {
-            _jobList = null;
-            _jobList = new JobList();
-
-            var success = _jobList.LoadJobs(out errorMessage, true);
-            if (!success)
-            {
-                return false;
-            }
-
-            if (MigrationWorker != null)
-            {
-                MigrationWorker.StopMigration();
-                MigrationWorker = null;
-            }
-
-            MigrationWorker = new MigrationWorker(_jobList);
-
-            errorMessage = string.Empty;
-            return success;
-        }
-
-        public bool SaveJobs(out string errorMessage)
-        {
-            return EnsureJobList().Save(out errorMessage);
+            var job = MigrationJobContext.GetMigrationJob(id);
+            return job;
         }
 
 
 
-        public List<MigrationJob> GetMigrations(out string errorMessage, bool force = false)
-        {
-            errorMessage = string.Empty;
-            bool isSucess = true;
-            if (_jobList == null)
-            {
-                _jobList = new JobList();
-                isSucess = _jobList.LoadJobs(out errorMessage, false);
-            }
-            else
-            {
-                errorMessage = string.Empty;
-                return _jobList.MigrationJobs ?? new List<MigrationJob>();
-            }
-            // Ensure we always return a non-null list
-            if (_jobList.MigrationJobs == null)
-            {
-                _jobList.MigrationJobs = new List<MigrationJob>();
-                if (isSucess || force)
-                {
-                    SaveJobs(out errorMessage);
-                }
-            }
-            return _jobList.MigrationJobs;
+
+        public List<string> GetMigrationIds()
+        {  
+
+            return MigrationJobContext.JobList.MigrationJobIds;
         }
 
         public void ClearJobFiles(string jobId)
         {
+            MigrationJobContext.JobList.MigrationJobIds?.Remove(jobId);
+            MigrationJobContext.SaveJobList();
+;
             try
             {
-                System.IO.Directory.Delete($"{Helper.GetWorkingFolder()}mongodump\\{jobId}", true);
+                Task.Run(() =>
+                {
+                    MigrationJobContext.Store.DeleteDocument($"{Path.Combine("migrationjobs", jobId)}");
+                    MigrationJobContext.Store.DeleteLogs(jobId);
+                    //clearing  dumped files
+
+                    string dumpPath = Path.Combine(Helper.GetWorkingFolder(), "mongodump", jobId);
+                    if (System.IO.Directory.Exists(dumpPath))
+                        System.IO.Directory.Delete(dumpPath, true);
+
+                });
             }
             catch
             {
             }
+
+            
         }
 
         #endregion 
@@ -264,6 +253,12 @@ namespace MongoMigrationWebApp.Service
             isLiveLog = false;
             Log log = new Log();
             return log.ReadLogFile(id, out fileName) ?? new LogBucket { Logs = new List<LogObject>() };
+        }
+
+        public int GetLogCount(string jobId)
+        {
+            Log log = new Log();
+            return log.GetLogCount(jobId);
         }
 
         #endregion
@@ -314,44 +309,110 @@ namespace MongoMigrationWebApp.Service
         /// </summary>
         public bool IsControlledPauseRequested()
         {
-            return MigrationWorker?.ControlledPauseRequested ?? false;
+            return MigrationJobContext.ControlledPauseRequested;
         }
 
         public Task CancelMigration(string id)
         {
-            var list = EnsureJobList().MigrationJobs;
-            if (list != null)
+
+            var migration = MigrationJobContext.GetMigrationJob(id);
+            if (migration != null)
             {
-                var migration = list.Find(m => m.Id == id);
-                if (migration != null)
-                {
-                    migration.IsCancelled = true;
-                    migration.IsStarted = false;
-                }
+                migration.IsCancelled = true;
+                migration.IsStarted = false;
             }
             return Task.CompletedTask;
         }
 
-        public Task StartMigrationAsync(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
+        public Task StartMigration(MigrationJob job, string sourceConnectionString, string targetConnectionString, string namespacesToMigrate, OnlineMongoMigrationProcessor.Models.JobType jobType,bool trackChangeStreams)
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
+            
+
+            MigrationWorker = new MigrationWorker();
+            
+            // Set WebAppBaseUrl if available
+            if (!string.IsNullOrEmpty(_webAppBaseUrl))
+            {
+                MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+            }
+            
+            MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
+            MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
+
+            MigrationJobContext.ActiveMigrationJobId = job.Id;
+
             // Fire-and-forget: UI should not block on long-running migration
-            _ = MigrationWorker?.StartMigrationAsync(job, sourceConnectionString, targetConnectionString, namespacesToMigrate, jobType, trackChangeStreams);
+            _ = MigrationWorker?.StartMigrationAsync(namespacesToMigrate, jobType, trackChangeStreams);
+            
+            Console.WriteLine($"Started migration for Job ID: {job.Id}");
+
             return Task.CompletedTask;
         }
 
-
-        public void SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        public async Task SyncBackToSourceAsync()
         {
-            MigrationWorker = new MigrationWorker(EnsureJobList());
-            MigrationWorker?.SyncBackToSource(sourceConnectionString, targetConnectionString, job);
+            // Try to acquire lock with zero timeout - if already locked, skip this operation
+            //if (!await _syncBackLock.WaitAsync(0))
+            //{
+            //    Helper.LogToFile($"SyncBackToSource already running for job, skipping duplicate call");
+            //    return;
+            //}
+            MigrationWorker?.SyncBackToSource();
+           
+            //_syncBackLock.Release();            
         }
 
+        /// Only one SyncBack operation can run at a time to prevent race conditions.
+        /// </summary>
+        public Task SyncBackToSource(string sourceConnectionString, string targetConnectionString, MigrationJob job)
+        {
+            //// Try to acquire lock with zero timeout - if already locked, skip this operation
+            //if (!_syncBackLock.Wait(0))
+            //{
+            //    Helper.LogToFile($"SyncBackToSource already running , skipping duplicate call");
+            //    return Task.CompletedTask;
+            //}
 
+            try
+            {
+
+                job.ProcessingSyncBack = true;
+                MigrationJobContext.SaveMigrationJob(job);
+
+                //// Check if a migration worker is already processing this or another job
+                //if (MigrationWorker != null && MigrationWorker.IsProcessRunning(job.Id))
+                //{
+                //    Helper.LogToFile($"MigrationWorker already processing job {job.Id}, skipping");
+                //    return Task.CompletedTask;
+                //}
+
+                MigrationWorker = new MigrationWorker();
+                
+                // Set WebAppBaseUrl if available
+                if (!string.IsNullOrEmpty(_webAppBaseUrl))
+                {
+                    MigrationWorker.SetWebAppBaseUrl(_webAppBaseUrl);
+                }
+
+                MigrationJobContext.SourceConnectionString[job.Id] = sourceConnectionString;
+                MigrationJobContext.TargetConnectionString[job.Id] = targetConnectionString;
+                MigrationJobContext.ActiveMigrationJobId = job.Id;
+
+                // Call synchronous method since it starts async work internally
+                _ = MigrationWorker?.SyncBackToSourceAsync(sourceConnectionString, targetConnectionString);
+            }
+            finally
+            {
+                //_syncBackLock.Release();
+            }
+
+            return Task.CompletedTask;
+        }
         public string GetRunningJobId()
         {
             return MigrationWorker?.GetRunningJobId() ?? string.Empty;
         }
+               
 
         public bool IsProcessRunning(string id)
         {

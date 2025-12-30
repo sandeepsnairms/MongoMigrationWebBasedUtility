@@ -9,10 +9,11 @@
 /MongoMigrationWebApp/bin
 /MongoMigrationWebApp/publish
 /OnlineMongoMigrationProcessor/bin
-/MongoMigrationWebApp/Properties/PublishProfiles
 /publish
 /.vs/ProjectEvaluation
 /.vs/CopilotSnapshots/
 /tests/OnlineMongoMigrationProcessor.Tests/bin
 /tests/OnlineMongoMigrationProcessor.Tests/obj
 *.dll
+/MongoMigrationWebApp/appsettings.Development.json
+/MongoMigrationWebApp/Properties/PublishProfiles

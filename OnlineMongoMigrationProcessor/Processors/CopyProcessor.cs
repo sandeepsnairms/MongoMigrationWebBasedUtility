@@ -1,7 +1,10 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
 using OnlineMongoMigrationProcessor.Processors;
 using OnlineMongoMigrationProcessor.Workers;
@@ -11,9 +14,10 @@ namespace OnlineMongoMigrationProcessor
 {
     internal class CopyProcessor: MigrationProcessor
     {
-        public CopyProcessor(Log log, JobList jobList, MigrationJob job, MongoClient sourceClient, MigrationSettings config)
-            : base(log, jobList, job, sourceClient, config)
+        public CopyProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
+            : base(log, sourceClient, config, migrationWorker)
         {
+            MigrationJobContext.AddVerboseLog("CopyProcessor: Constructor called");
             // Constructor body can be empty or contain initialization logic if needed
         }
 
@@ -22,6 +26,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         public override void InitiateControlledPause()
         {
+            MigrationJobContext.AddVerboseLog("CopyProcessor.InitiateControlledPause: called");
             base.InitiateControlledPause();
             _log.WriteLine("CopyProcessor: Controlled pause initiated");
         }
@@ -29,6 +34,7 @@ namespace OnlineMongoMigrationProcessor
         // Custom exception handler delegate with logic to control retry flow
         private Task<TaskResult> CopyProcess_ExceptionHandler(Exception ex, int attemptCount, string processName, string dbName, string colName, int chunkIndex, int currentBackoff)
         {
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.CopyProcess_ExceptionHandler: processName={processName}, collection={dbName}.{colName}, chunkIndex={chunkIndex}, attemptCount={attemptCount}");
             if (ex is OperationCanceledException)
             {
                 _log.WriteLine($"Document copy operation was paused for {dbName}.{colName}[{chunkIndex}]");
@@ -52,27 +58,10 @@ namespace OnlineMongoMigrationProcessor
         }
        
 
-        //private void checkCounts(IMongoCollection<BsonDocument> collection, MigrationChunk c, BsonDocument UserFilter)
-        //{
-        //    long docCount = 0;
-        //    foreach (var seg in c.Segments!)
-        //    {
-        //            // Generate query and get document count
-        //            var filter = MongoHelper.GenerateQueryFilter(seg.Gte, seg.Lt, c.DataType, UserFilter, false);
-
-        //            docCount += MongoHelper.GetDocumentCount(collection, filter, new BsonDocument());//filter already has user filter.
-        //    }
-
-        //    Console.WriteLine($"Sum of Count for segments {c.Id} is {docCount}");
-
-        //    var filter2 = MongoHelper.GenerateQueryFilter(c.Gte, c.Lt, c.DataType, UserFilter, false);
-
-        //    var docCount2 = MongoHelper.GetDocumentCount(collection, filter2, new BsonDocument());//filter already has user filter.
-
-        //    Console.WriteLine($"Count for chunk {c.Id} is {docCount2}");
-        //}
+        
         private async Task <TaskResult> ProcessChunkAsync(MigrationUnit mu, int chunkIndex, ProcessorContext ctx, double initialPercent, double contributionFactor)
         {
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.ProcessChunkAsync: mu={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={chunkIndex}");
             long docCount;
             FilterDefinition<BsonDocument> filter;
 
@@ -106,25 +95,22 @@ namespace OnlineMongoMigrationProcessor
                 ctx.DownloadCount = docCount;
             }
 
-
-            //checkCounts(ctx.Collection, mu.MigrationChunks[chunkIndex], MongoHelper.GetFilterDoc(mu.UserFilter));
-
-
-            if (_targetClient == null && !_job.IsSimulatedRun)
+            if (_targetClient == null && !MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 _targetClient = MongoClientFactory.Create(_log, ctx.TargetConnectionString);
 
             var documentCopier = new DocumentCopyWorker();
             documentCopier.Initialize(_log, _targetClient!, ctx.Collection, ctx.DatabaseName, ctx.CollectionName, _config.MongoCopyPageSize);
-            var result = await documentCopier.CopyDocumentsAsync(_jobList, mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, _job.IsSimulatedRun);
+            var result = await documentCopier.CopyDocumentsAsync(mu, chunkIndex, initialPercent, contributionFactor, docCount, filter, _cts.Token, MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun);
 
             if (result == TaskResult.Success)
             {
-                if (!_cts.Token.IsCancellationRequested)
+                if (!_cts.Token.IsCancellationRequested && mu.MigrationChunks[chunkIndex].Segments.All(seg => seg.IsProcessed == true))
                 {                        
                     mu.MigrationChunks[chunkIndex].IsDownloaded = true;
                     mu.MigrationChunks[chunkIndex].IsUploaded = true;
                 }
-                _jobList?.Save(); // Persist state
+
+                MigrationJobContext.SaveMigrationUnit(mu,false);
                 return TaskResult.Success;
             }
             else if(result == TaskResult.Canceled)
@@ -142,15 +128,21 @@ namespace OnlineMongoMigrationProcessor
 
 
 
-        public override async Task<TaskResult> StartProcessAsync(MigrationUnit mu, string sourceConnectionString, string targetConnectionString, string idField = "_id")
+        public override async Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString, string idField = "_id")
         {
-
+            MigrationJobContext.AddVerboseLog($"CopyProcessor.StartProcessAsync: migrationUnitId={migrationUnitId}");
+            var mu=MigrationJobContext.GetMigrationUnit(migrationUnitId);
+            mu.ParentJob= MigrationJobContext.CurrentlyActiveJob;
+            ProcessRunning = true;
             ProcessorContext ctx;
+
             ctx=SetProcessorContext(mu, sourceConnectionString, targetConnectionString);
 
-            //when resuming a job, we need to check if post-upload change stream processing is already in progress
-            if (CheckChangeStreamAlreadyProcessingAsync(ctx))
+            if(mu.DumpComplete && mu.RestoreComplete)
+            {
+                _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} already completed.", LogType.Debug);
                 return TaskResult.Success;
+            }
 
             // starting the  regular document copy process
             _log.WriteLine($"{ctx.DatabaseName}.{ctx.CollectionName} Document copy started");
@@ -160,7 +152,7 @@ namespace OnlineMongoMigrationProcessor
                 for (int i = 0; i < mu.MigrationChunks.Count; i++)
                 {
                     // Check for controlled pause before starting new chunk
-                    if (_controlledPauseRequested)
+                    if (MigrationJobContext.ControlledPauseRequested)
                     {
                         _log.WriteLine($"Controlled pause: Stopping before chunk {i}, {mu.MigrationChunks.Count - i} chunks not started");
                         break;
@@ -196,9 +188,9 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 // Check if controlled pause completed
-                if (_controlledPauseRequested && mu.DumpComplete)
+                if (MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log.WriteLine("Controlled pause completed for CopyProcessor");
+                    _log.WriteLine("Controlled pause detected - exiting without marking as complete",LogType.Debug);
                     StopProcessing();
                     return TaskResult.Success;
                 }
@@ -211,7 +203,7 @@ namespace OnlineMongoMigrationProcessor
                 long failed= mu.MigrationChunks.Sum(chunk => chunk.RestoredFailedDocCount);
                 // don't compare counts source vs target as some documents may have been deleted in source
                 //only  check for failed documents
-                if (failed == 0)
+                if (failed <= 0 && mu.MigrationChunks.All(chunk => chunk.IsDownloaded == true))
                 {
                     mu.BulkCopyEndedOn = DateTime.UtcNow;
 
@@ -220,17 +212,24 @@ namespace OnlineMongoMigrationProcessor
 
                     mu.RestorePercent = 100;
                     mu.RestoreComplete = true;
+
+                    // Start change stream processing for the completed migration unit
+                    AddCollectionToChangeStreamQueue(mu);
+
+                    MigrationJobContext.SaveMigrationUnit(mu,true);
+
+                    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
                 }
                 else
                 {
-                    _log.WriteLine($"Document copy operation for {{ctx.DatabaseName}}.{{ctx.CollectionName}}[{{i}}] failed because of count mismatch.\", LogType.Error");
+                    _log.WriteLine($"Document copy operation for {ctx.DatabaseName}.{ctx.CollectionName} failed because of count mismatch.", LogType.Error);
                     return TaskResult.Retry;
                 }
                              
   
             }
 
-            await PostCopyChangeStreamProcessor(ctx, mu);
+            StopOfflineOrInvokeChangeStreams();
 
             return TaskResult.Success;
         }

@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Mvc;
 using OnlineMongoMigrationProcessor;
+using OnlineMongoMigrationProcessor.Context;
 using SharpCompress.Common;
 using System.IO;
+using System.Text;
 
 [ApiController]
 [Route("api/[controller]")]
@@ -11,56 +13,97 @@ public class FileController : ControllerBase
 {
    
 
-    [HttpGet("download/log/{fileName}")]
-    public IActionResult DownloadFile(string fileName)
+    [HttpGet("download/log/{Id}")]
+    public IActionResult DownloadFile(string Id)
     {
         string fileSharePath = $"{Helper.GetWorkingFolder()}migrationlogs"; // UNC path to your file share
-        bool isBackup = false;
         string filePath;
-        if (fileName.EndsWith(".txt"))
+        
+        filePath = Path.Combine(fileSharePath, Id + ".bin");       
+
+        var fileBytes = new Log().DownloadLogsAsJsonBytes(Id, 0, 0);
+        var contentType = "application/octet-stream";
+        return File(fileBytes, contentType, $"{Id}.txt");
+
+    }
+
+    [HttpGet("download/migrationunit/{jobId}/{migrationUnitId}")]
+    public IActionResult DownloadMigrationUnit(string jobId, string migrationUnitId)
+    {
+        var filePath = $"migrationjobs\\{jobId}\\{migrationUnitId}.json";
+
+        // Use the persistence storage to read the document
+        if (MigrationJobContext.Store == null || !MigrationJobContext.Store.DocumentExists(filePath))
         {
-            filePath = Path.Combine(fileSharePath, fileName);
-            isBackup = true;
-        }
-        else
-        {
-            filePath = Path.Combine(fileSharePath, fileName + ".bin");
+            return NotFound("Migration unit file not found.");
         }
 
-        if (!System.IO.File.Exists(filePath))
+        var jsonContent = MigrationJobContext.Store.ReadDocument(filePath);
+        
+        if (string.IsNullOrEmpty(jsonContent))
         {
-          return NotFound("File not found.");      
+            return NotFound("Migration unit file is empty or could not be read.");
         }
 
-        if (isBackup)
-        {
-            var fileBytes = System.IO.File.ReadAllBytes(filePath);
-            var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, $"{fileName}.txt");
-        }
-        else
-        {
+        // Pretty print the JSON
+        var jsonObject = Newtonsoft.Json.JsonConvert.DeserializeObject(jsonContent);
+        var prettyJson = Newtonsoft.Json.JsonConvert.SerializeObject(jsonObject, Newtonsoft.Json.Formatting.Indented);
+        
+        var fileBytes = Encoding.UTF8.GetBytes(prettyJson);
+        var contentType = "application/json";
 
-            var fileBytes = new Log().DownloadLogsAsJsonBytes(filePath, 0, 0);
-            var contentType = "application/octet-stream";
-            return File(fileBytes, contentType, $"{fileName}.txt");
+        return File(fileBytes, contentType, $"{migrationUnitId}.json");
+    }
+
+    [HttpGet("download/job/{jobId}")]
+    public IActionResult DownloadJob(string jobId)
+    {
+        var job = MigrationJobContext.GetMigrationJob(jobId);
+        
+        if (job == null)
+        {
+            return NotFound("Job file not found.");
+        }
+
+        // Pretty print the JSON
+        var prettyJson = Newtonsoft.Json.JsonConvert.SerializeObject(job, Newtonsoft.Json.Formatting.Indented);
+        
+        var fileBytes = Encoding.UTF8.GetBytes(prettyJson);
+        var contentType = "application/json";
+
+        return File(fileBytes, contentType, $"{jobId}.json");
+    }
+
+    [HttpGet("download/log/{Id}/count")]
+    public IActionResult GetLogCount(string Id)
+    {
+        try
+        {
+            Log log = new Log();
+            int count = log.GetLogCount(Id);
+            return Ok(new { count = count });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
         }
     }
 
-    [HttpGet("download/Jobs")]
-    public IActionResult DownloadFile()
+    [HttpGet("download/log/{Id}/page/{pageNumber}/{pageSize}")]
+    public IActionResult DownloadLogPage(string Id, int pageNumber, int pageSize)
     {
-        string fileSharePath = $"{Helper.GetWorkingFolder()}migrationjobs"; // UNC path to your file share
-        var filePath = Path.Combine(fileSharePath, "list.json");
-
-        if (!System.IO.File.Exists(filePath))
+        try
         {
-            return NotFound("File not found.");
+            // Calculate skip/take for pagination
+            int skip = (pageNumber - 1) * pageSize;
+            
+            var fileBytes = new Log().DownloadLogsPaginated(Id, skip, pageSize);
+            var contentType = "application/octet-stream";
+            return File(fileBytes, contentType, $"{Id}_page_{pageNumber}.txt");
         }
-
-        var fileBytes = System.IO.File.ReadAllBytes(filePath);
-        var contentType = "application/octet-stream";
-
-        return File(fileBytes, contentType, "jobList.json");
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 }

@@ -2,6 +2,8 @@
 using MongoDB.Bson.IO;
 using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Partitioner;
 using System;
 using System.Collections;
@@ -13,12 +15,13 @@ using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
+using static MongoDB.Driver.WriteConcern;
 
 namespace OnlineMongoMigrationProcessor
 {
     public static class SamplePartitioner
     {
-        public static int MaxSegments = 20;
+        public static int MaxSegments = Environment.ProcessorCount * 5;
         public static int MaxSamples = 2000;
 
 
@@ -30,6 +33,8 @@ namespace OnlineMongoMigrationProcessor
         /// <returns>A list of partition boundaries.</returns>
         public static ChunkBoundaries? CreatePartitions(Log log, bool optimizeForMongoDump, IMongoCollection<BsonDocument> collection, int chunkCount, DataType dataType, long minDocsPerChunk, CancellationToken cts, MigrationUnit migrationUnit, bool optimizeForObjectId, MigrationSettings config, out long docCountByType)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.CreatePartitions: collection={collection.CollectionNamespace}, chunkCount={chunkCount}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}");
+
             int segmentCount = 1;
             int minDocsPerSegment = 10000;
             long docsInChunk = 0;
@@ -68,8 +73,9 @@ namespace OnlineMongoMigrationProcessor
                     else
                     {
                         docCountByType = GetDocumentCountByDataType(collection, dataType, false, userFilter, skipDataTypeFilter);
-                        log.WriteLine($"GetDocumentCountByDataType for {collection.CollectionNamespace} returned {docCountByType} with user filter {userFilter} skipDataTypeFilter was {skipDataTypeFilter}.");
+                        log.WriteLine($"{collection.CollectionNamespace} has {docCountByType} for {dataType} with user filter {userFilter}", LogType.Debug);
                     }
+                    MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType: collection={collection.CollectionNamespace}, docCountByType={docCountByType}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}, userFilter={userFilter}");
                 }
                 catch (Exception ex)
                 {
@@ -78,6 +84,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         log.WriteLine($"Using Estimated document count for {collection.CollectionNamespace} due to error in counting documents.");
                         docCountByType = GetDocumentCountByDataType(collection, dataType, true, userFilter, skipDataTypeFilter);
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType in Ex: collection={collection.CollectionNamespace}, docCountByType={docCountByType}, dataType={dataType}, optimizeForObjectId={optimizeForObjectId}, userFilter={userFilter}");
                     }
                     else
                         return null;
@@ -127,12 +134,20 @@ namespace OnlineMongoMigrationProcessor
                     while (newCount > adjustedMaxSamples)
                     {
                         count++;
-                        newCount = docCountByType / ((long)minDocsPerSegment * count);
+
+                        // Check for potential overflow before multiplication
+                        long multiplier = (long)minDocsPerSegment * count;
+                        if (multiplier <= 0 || multiplier > docCountByType)
+                        {                           
+                            break;
+                        }
+                        newCount = docCountByType / multiplier;
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating adjustedMaxSamples: collection={collection.CollectionNamespace}, newCount={newCount}, dataType={dataType}, docCountByType={docCountByType}, multiplier={multiplier}");
                     }
+                    
 
                     log.WriteLine($"Requested chunk count {chunkCount} exceeds maximum samples {adjustedMaxSamples} for {collection.CollectionNamespace}. Adjusting to {newCount}", LogType.Error);
                     chunkCount = (int)newCount;
-                    //throw new ArgumentException($"Chunk count too large for {collection.CollectionNamespace}. Retry with larger 'Chunk Size'.");
                 }
 
 
@@ -147,9 +162,11 @@ namespace OnlineMongoMigrationProcessor
                 );
 
 
-
                 // Calculate the total sample count
                 sampleCount = Math.Min(chunkCount * segmentCount, adjustedMaxSamples);
+
+
+                MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating sampleCount: collection={collection.CollectionNamespace}, dataType={dataType}, segmentCount={segmentCount}, sampleCount{sampleCount}");
 
                 // Adjust segments per chunk based on the new sample count
                 segmentCount = Math.Max(1, sampleCount / chunkCount);
@@ -157,7 +174,7 @@ namespace OnlineMongoMigrationProcessor
                 // Optimize for non-dump scenarios
                 if (!optimizeForMongoDump)
                 {
-                    while (chunkCount > segmentCount && segmentCount < 20)
+                    while (chunkCount > segmentCount && segmentCount < MaxSegments)
                     {
                         chunkCount--;
                         segmentCount++;
@@ -166,6 +183,7 @@ namespace OnlineMongoMigrationProcessor
                     chunkCount = sampleCount / segmentCount;
                 }
 
+                MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, chunkCount={chunkCount}");
 
                 if (chunkCount < 1)
                     throw new ArgumentException("Chunk count must be greater than 0.");
@@ -180,11 +198,13 @@ namespace OnlineMongoMigrationProcessor
                     catch (Exception ex)
                     {
                         log.WriteLine($"Falling back to general sampler for {collection.CollectionNamespace} as ObjectId sampler failed. Details:  {ex}", LogType.Warning);
+                        MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, userFilter={userFilter}, skipDataTypeFilter={skipDataTypeFilter}, sampleCount={sampleCount}, chunkCount={chunkCount}, segmentCount={segmentCount}");
                         return GetChunkBoundariesGeneral(log, collection, optimizeForMongoDump, dataType, userFilter, skipDataTypeFilter, sampleCount, chunkCount, segmentCount);
                     }
                 }
                 else
                 {
+                    MigrationJobContext.AddVerboseLog($"SamplePartitioner.Calculating chunkCount: collection={collection.CollectionNamespace}, dataType={dataType}, userFilter={userFilter}, skipDataTypeFilter={skipDataTypeFilter}, sampleCount={sampleCount}, chunkCount={chunkCount}, segmentCount={segmentCount}");
                     return GetChunkBoundariesGeneral(log, collection, optimizeForMongoDump, dataType, userFilter, skipDataTypeFilter, sampleCount, chunkCount, segmentCount);
                 }
 
@@ -211,10 +231,12 @@ namespace OnlineMongoMigrationProcessor
 
         }
 
-        private static ChunkBoundaries? GetChunkBoundariesGeneral(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, DataType dataType, BsonDocument? userFilter, bool skipDataTypeFilter, long sampleCount, long chunkCount, int segmentCount)
+        private static ChunkBoundaries? GetChunkBoundariesGeneral(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, DataType dataType, BsonDocument userFilter, bool skipDataTypeFilter, long sampleCount, long chunkCount, int segmentCount)
         {
             ChunkBoundaries chunkBoundaries = new ChunkBoundaries();
 
+
+            Boundary? segmentBoundary = null;
             Boundary? chunkBoundary = null;
 
             if (chunkCount == 1 || dataType == DataType.Other)
@@ -294,9 +316,10 @@ namespace OnlineMongoMigrationProcessor
                 }
             }
 
-
+            //long docCountByType;
             if (partitionValues == null || partitionValues.Count == 0)
             {
+                //docCountByType = 0;
                 if (skipDataTypeFilter)
                 {
                     log.WriteLine($"No data found (DataType filtering bypassed)");
@@ -323,7 +346,7 @@ namespace OnlineMongoMigrationProcessor
             return chunkBoundaries;
         }
 
-        private static ChunkBoundaries? GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount, int segmentCount, BsonDocument? userFilter, MigrationSettings config)
+        private static ChunkBoundaries? GetChunkBoundariesForObjectId(Log log, IMongoCollection<BsonDocument> collection, bool optimizeForMongoDump, int sampleCount, int segmentCount, BsonDocument userFilter, MigrationSettings config)
         {
 
             log.WriteLine($"Using objectId sampler {config.ObjectIdPartitioner} for sampling {collection.CollectionNamespace} with {sampleCount} samples, Segment Count: {segmentCount}");
@@ -336,6 +359,8 @@ namespace OnlineMongoMigrationProcessor
 
         private static ChunkBoundaries ConvertToBoundaries(List<BsonValue> ids, int segmentCount)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.ConvertToBoundaries: ids.Count={ids.Count}, segmentCount={segmentCount}");
+
             ChunkBoundaries chunkBoundaries = new ChunkBoundaries();
             Boundary? segmentBoundary = null;
             Boundary? chunkBoundary = null;
@@ -382,6 +407,8 @@ namespace OnlineMongoMigrationProcessor
 
         public static long GetDocumentCountByDataType(IMongoCollection<BsonDocument> collection, DataType dataType, bool useEstimate = false, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.GetDocumentCountByDataType: dataType={dataType}, useEstimate={useEstimate}, skipDataTypeFilter={skipDataTypeFilter}");
+
             var filterBuilder = Builders<BsonDocument>.Filter;
 
             BsonDocument matchCondition = BuildDataTypeCondition(dataType, userFilter, skipDataTypeFilter);
@@ -405,6 +432,8 @@ namespace OnlineMongoMigrationProcessor
 
         public static BsonDocument BuildDataTypeCondition(DataType dataType, BsonDocument? userFilter = null, bool skipDataTypeFilter = false)
         {
+            MigrationJobContext.AddVerboseLog($"SamplePartitioner.BuildDataTypeCondition: dataType={dataType}, skipDataTypeFilter={skipDataTypeFilter}");
+
             BsonDocument matchCondition;
 
             if (skipDataTypeFilter)

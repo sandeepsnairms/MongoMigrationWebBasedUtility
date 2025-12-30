@@ -9,76 +9,97 @@
                 <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
             </div>
             <div class="modal-body">
-                <div class="mb-3">
-                    <label for="mongo-url" class="form-label">Mongo tools download URL</label>
-                    <input type="text" id="mongo-url" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoToolsDownloadUrl" />
-                </div>
-                <div class="mb-3">
-                    <label for="has-uuid" class="form-label">
-                        <input type="checkbox" id="has-uuid" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ReadBinary" />
-                        Binary format utilized for the _id
-                    </label>
-                </div>
-                <div class="mb-3">
-                    <label for="chunk-size" class="form-label">Chunk size (in MB) for mongodump</label>
-                    <input type="number" id="chunk-size" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChunkSizeInMb" />
-                </div>
+                <!-- Tab Navigation -->
+                <ul class="nav nav-tabs mb-3">
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "OfflineDataMovement" ? "active" : "")" @onclick="SwitchToOfflineDataMovementTab">Offline</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "ChangeStream" ? "active" : "")" @onclick="SwitchToChangeStreamTab">Online</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "HashComparison" ? "active" : "")" @onclick="SwitchToHashComparisonTab">Other</button>
+                    </li>
+                </ul>
 
-                <div class="mb-3">
-                    <label for="mongo-copy-page-size" class="form-label">Mongo driver page size</label>
-                    <input type="number" id="mongo-copy-page-size" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoCopyPageSize" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="max-docs-per-batch" class="form-label">Max documents per change stream batch</label>
-                    <input type="number" id="max-docs-per-batch" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamMaxDocsInBatch" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="csbatchdurationmax" class="form-label">Max duration (in seconds) for change stream batch</label>
-                    <input type="number" id="csbatchdurationmax" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamBatchDuration" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="csbatchdurationmin" class="form-label">Min duration (in seconds) for change stream batch</label>
-                    <input type="number" id="csbatchdurationmin" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamBatchDurationMin" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="cs-colls-inbatch" class="form-label">Max collections per change stream batch</label>
-                    <input type="number" id="cs-colls-inbatch" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamMaxCollsInBatch" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="cs-compareSampleSize" class="form-label">Sample size for hash comparison</label>
-                    <input type="number" id="cs-compareSampleSize" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CompareSampleSize" />
-                </div>
-
-                <div class="mb-3">
-                    <label for="objectid-partitioner" class="form-label" title="Choose the method for partitioning ObjectId-based collections into chunks for parallel processing.">
-                        ObjectId Partitioner
-                    </label>
-                    <select id="objectid-partitioner" value="@SelectedObjectIdPartitioner" class="form-select" @onchange="OnObjectIdPartitionerChanged">                        
-                        <option value="UseSampleCommand" title="Use MongoDB's $sample command to generate chunk boundaries.">Use Sample Command</option>
-                        <option value="UseTimeBoundaries" title="Generate boundaries based on ObjectId timestamp distribution.">Use Time Boundaries</option>
-                        <option value="UseAdjustedTimeBoundaries" title="Generate time-based boundaries and adjust based on actual record counts.">Use Adjusted Time Boundaries</option>
-                        <option value="UsePagination" title="Use pagination to create chunks of same size.">Use Pagination</option>
-                    </select>
-                </div>
-
-
-                <div class="mb-3">
-                    <label for="pem-text" class="form-label">CA certificate file for source server (.pem)</label>
-                    <InputFile OnChange="OnPemFileUpload" />
-
-                    @if (!string.IsNullOrWhiteSpace(_configurationBackup.CACertContentsForSourceServer))
+                <!-- Offline Data Movement Tab Content -->
+                <div class="@(activeTab == "OfflineDataMovement" ? "" : "d-none")">
+                    @if (Helper.IsWindows())
                     {
-                        <button class="btn btn-outline-danger btn-sm mt-2" @onclick="ClearPem">
-                            Delete Saved Certificate
-                        </button>
+                        <div class="mb-3">
+                            <label for="mongo-url" class="form-label">Mongo tools download URL</label>
+                            <input type="text" id="mongo-url" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoToolsDownloadUrl" />
+                        </div>
                     }
+                    <div class="mb-3">
+                        <label for="has-uuid" class="form-label">
+                            <input type="checkbox" id="has-uuid" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ReadBinary" />
+                            Binary format utilized for the _id
+                        </label>
+                    </div>
+                    <div class="mb-3">
+                        <label for="chunk-size" class="form-label">Chunk size (in MB) for mongodump</label>
+                        <input type="number" id="chunk-size" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChunkSizeInMb" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="mongo-copy-page-size" class="form-label">Mongo driver page size</label>
+                        <input type="number" id="mongo-copy-page-size" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).MongoCopyPageSize" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="objectid-partitioner" class="form-label" title="Choose the method for partitioning ObjectId-based collections into chunks for parallel processing.">
+                            ObjectId Partitioner
+                        </label>
+                        <select id="objectid-partitioner" value="@SelectedObjectIdPartitioner" class="form-select" @onchange="OnObjectIdPartitionerChanged">                        
+                            <option value="UseSampleCommand" title="Use MongoDB's $sample command to generate chunk boundaries.">Use Sample Command</option>
+                            <option value="UseTimeBoundaries" title="Generate boundaries based on ObjectId timestamp distribution.">Use Time Boundaries</option>
+                            <option value="UseAdjustedTimeBoundaries" title="Generate time-based boundaries and adjust based on actual record counts.">Use Adjusted Time Boundaries</option>
+                            <option value="UsePagination" title="Use pagination to create chunks of same size.">Use Pagination</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="pem-text" class="form-label">CA certificate file for source server (.pem)</label>
+                        <InputFile OnChange="OnPemFileUpload" />
+
+                        @if (!string.IsNullOrWhiteSpace(_configurationBackup.CACertContentsForSourceServer))
+                        {
+                            <button class="btn btn-outline-danger btn-sm mt-2" @onclick="ClearPem">
+                                Delete Saved Certificate
+                            </button>
+                        }
+                    </div>
                 </div>
 
+                <!-- Change Stream Tab Content -->
+                <div class="@(activeTab == "ChangeStream" ? "" : "d-none")">
+                    <div class="mb-3">
+                        <label for="max-docs-per-batch" class="form-label">Max documents per change stream batch</label>
+                        <input type="number" id="max-docs-per-batch" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamMaxDocsInBatch" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="csbatchdurationmax" class="form-label">Max duration (in seconds) for change stream batch</label>
+                        <input type="number" id="csbatchdurationmax" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamBatchDuration" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="csbatchdurationmin" class="form-label">Min duration (in seconds) for change stream batch</label>
+                        <input type="number" id="csbatchdurationmin" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamBatchDurationMin" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="cs-colls-inbatch" class="form-label">Max collections per change stream batch</label>
+                        <input type="number" id="cs-colls-inbatch" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).ChangeStreamMaxCollsInBatch" />
+                    </div>
+                </div>
+
+                <!-- Hash Comparison Tab Content -->
+                <div class="@(activeTab == "HashComparison" ? "" : "d-none")">
+                    <div class="mb-3">
+                        <label for="cs-compareSampleSize" class="form-label">Sample size for hash comparison</label>
+                        <input type="number" id="cs-compareSampleSize" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).CompareSampleSize" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="log-page-size" class="form-label">Log page size</label>
+                        <input type="text" id="log-page-size" class="form-control" @bind="(_configurationBackup ??= new OnlineMongoMigrationProcessor.MigrationSettings()).LogPageSize" />
+                    </div>
+                </div>
 
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
@@ -105,8 +126,24 @@
     public EventCallback<OnlineMongoMigrationProcessor.MigrationSettings?> On_configurationSaved { get; set; }
 
     private string errorMessage = string.Empty;
+    private string activeTab = "OfflineDataMovement"; // Track active tab
 
     private string SelectedObjectIdPartitioner = "UseTimeBoundaries"; // Default partitioner
+
+    private void SwitchToOfflineDataMovementTab()
+    {
+        activeTab = "OfflineDataMovement";
+    }
+
+    private void SwitchToChangeStreamTab()
+    {
+        activeTab = "ChangeStream";
+    }
+
+    private void SwitchToHashComparisonTab()
+    {
+        activeTab = "HashComparison";
+    }
 
     private void OnObjectIdPartitionerChanged(ChangeEventArgs e)
     {
@@ -149,6 +186,12 @@
     if ((_configurationBackup?.CompareSampleSize ?? 0) < 5 || (_configurationBackup?.CompareSampleSize ?? 0) > 2000)
         {
             errorMessage = "Sample size for hash comparison should be between 5 and 2000.";
+            return;
+        }
+
+    if ((_configurationBackup?.LogPageSize ?? 0) < 1000 || (_configurationBackup?.LogPageSize ?? 0) > 100000)
+        {
+            errorMessage = "Log page size should be between 1000 and 100000.";
             return;
         }
 

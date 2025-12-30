@@ -1,10 +1,17 @@
-﻿using System;
+﻿using OnlineMongoMigrationProcessor.Context;
+using OnlineMongoMigrationProcessor.Helpers;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.IO;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Xml.Linq;
+using static System.Net.WebRequestMethods;
 
 #pragma warning disable CS8600
 namespace OnlineMongoMigrationProcessor.Workers
@@ -15,52 +22,47 @@ namespace OnlineMongoMigrationProcessor.Workers
         private Process? _process = null;
         private readonly object _processLock = new object();
         private CancellationToken _cancellationToken;
-        private static readonly Dictionary<string, System.Timers.Timer> _percentageTimers = new Dictionary<string, System.Timers.Timer>();
-        private static readonly object _timerLock = new object();
-        private const int PERCENTAGE_UPDATE_INTERVAL_MS = 5000; // 5 seconds
-
-		public ProcessExecutor(Log log)
+        
+        public ProcessExecutor(Log log)
         {
             _log = log;
 		}
-		
-		/// <summary>
-		/// Executes a process with the given executable path and arguments.
-		/// </summary>
-		/// <param name="jobList">The job list for saving state.</param>
-		/// <param name="mu">Migration unit.</param>
-		/// <param name="chunk">Migration chunk.</param>
-		/// <param name="chunkIndex">Index of the chunk.</param>
-		/// <param name="basePercent">Base percentage for progress calculation.</param>
-		/// <param name="contribFactor">Contribution factor for progress calculation.</param>
-		/// <param name="targetCount">Target document count.</param>
-		/// <param name="exePath">The full path to the executable file.</param>
-		/// <param name="arguments">The arguments to pass to the executable.</param>
-		/// <param name="cancellationToken">Cancellation token for graceful shutdown.</param>
-		/// <param name="onProcessStarted">Callback when process starts with PID.</param>
-		/// <param name="onProcessEnded">Callback when process ends with PID.</param>
-		/// <returns>True if the process completed successfully, otherwise false.</returns>
-		public bool Execute(
-			JobList jobList, 
-			MigrationUnit mu, 
-			MigrationChunk chunk, 
-			int chunkIndex, 
-			double basePercent, 
-			double contribFactor, 
-			long targetCount, 
-			string exePath, 
-			string arguments,
-			CancellationToken cancellationToken,
-			Action<int>? onProcessStarted = null,
-			Action<int>? onProcessEnded = null)
+
+        /// <summary>
+        /// Executes a process with the given executable path and arguments.
+        /// </summary>
+        /// <param name="jobList">The MigrationJobContext.MigrationJob list for saving state.</param>
+        /// <param name="mu">Migration mu.</param>
+        /// <param name="chunk">Migration chunk.</param>
+        /// <param name="chunkIndex">Index of the chunk.</param>
+        /// <param name="basePercent">Base percentage for progress calculation.</param>
+        /// <param name="contribFactor">Contribution factor for progress calculation.</param>
+        /// <param name="targetCount">Target document count.</param>
+        /// <param name="exePath">The full path to the executable file.</param>
+        /// <param name="arguments">The arguments to pass to the executable.</param>
+        /// <param name="cancellationToken">Cancellation token for graceful shutdown.</param>
+        /// <param name="onProcessStarted">Callback when process starts with PID.</param>
+        /// <param name="onProcessEnded">Callback when process ends with PID.</param>
+        /// <returns>True if the process completed successfully, otherwise false.</returns>
+        public bool Execute(
+            MigrationUnit mu,
+            MigrationChunk chunk,
+            int chunkIndex,
+            double basePercent,
+            double contribFactor,
+            long targetCount,
+            string exePath,
+            string arguments,
+            string outputFilePath,
+            CancellationToken cancellationToken,
+            Action<int>? onProcessStarted = null,
+            Action<int>? onProcessEnded = null)
         {
-			_cancellationToken = cancellationToken;
+            MigrationJobContext.AddVerboseLog($"ProcessExecutor.Execute: mu={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={chunkIndex}, exePath={exePath}");
+            _cancellationToken = cancellationToken;
             string processType = exePath.ToLower().Contains("restore") ? "MongoRestore" : "MongoDump";
-            
-            // Start timer immediately when process begins to ensure percentage updates
-            // even if console output takes time to arrive or for resumed jobs
-            EnsurePercentageTimerRunning(mu, jobList, processType);
-            
+
+
             try
             {
                 lock (_processLock)
@@ -73,6 +75,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                             Arguments = arguments,
                             RedirectStandardOutput = true,
                             RedirectStandardError = true,
+                            RedirectStandardInput = true,   // needed for restore streaming
                             UseShellExecute = false,
                             CreateNoWindow = true
                         }
@@ -87,7 +90,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (!string.IsNullOrEmpty(args.Data))
                     {
                         outputBuffer.AppendLine(args.Data);
-                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}");
+                        MigrationJobContext.AddVerboseLog($"{processType} Log: {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}] {Helper.RedactPii(args.Data)}");
                     }
                 };
 
@@ -95,21 +98,52 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     if (!string.IsNullOrEmpty(args.Data))
                     {
-                        _log.WriteLine($"{processType} Log: {Helper.RedactPii(args.Data)}", LogType.Debug);
                         errorBuffer.AppendLine(args.Data);
-                        ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount, jobList);
+                        ProcessConsoleOutput(args.Data, processType, mu, chunk, chunkIndex, basePercent, contribFactor, targetCount);
                     }
                 };
 
                 _process.Start();
-                _process.BeginOutputReadLine();
-                _process.BeginErrorReadLine();
-
                 int processId = _process.Id;
                 onProcessStarted?.Invoke(processId);
-                _log.WriteLine($"{processType} process started: PID {processId} for chunk {chunkIndex}");
+                _log.WriteLine($"{processType} process started: PID {processId} for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]", LogType.Debug);
 
-                // Wait for process to exit, checking cancellation periodically
+                if (processType == "MongoDump")
+                {
+                    // stdout is streamed to file → do NOT call BeginOutputReadLine
+                    _process.BeginErrorReadLine();   // we still need progress messages from stderr
+                }
+                else
+                {
+                    // restore → read console normally
+                    _process.BeginOutputReadLine();
+                    _process.BeginErrorReadLine();
+                }
+
+                // -------------------------
+                // Dump => write stdout -> file
+                // Restore => read file -> stdin
+                // -------------------------
+                if (processType == "MongoDump")
+                {
+                    using var fileStream = new FileStream(
+                        outputFilePath, FileMode.Create, FileAccess.Write, FileShare.None,
+                        bufferSize: 81920, useAsync: true);
+
+                    _process.StandardOutput.BaseStream.CopyToAsync(fileStream, cancellationToken).Wait(cancellationToken);
+                    fileStream.Flush();
+                }
+                else // MongoRestore
+                {
+                    using var fileStream = new FileStream(
+                        outputFilePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+                        bufferSize: 81920, useAsync: true);
+
+                    fileStream.CopyToAsync(_process.StandardInput.BaseStream, cancellationToken).Wait(cancellationToken);
+                    _process.StandardInput.Close(); // signal EOF to mongo restore
+                }
+
+                // cancellation-aware process wait
                 while (!_process.WaitForExit(1000))
                 {
                     if (_cancellationToken.IsCancellationRequested)
@@ -118,25 +152,29 @@ namespace OnlineMongoMigrationProcessor.Workers
                         {
                             _process.Kill(entireProcessTree: true);
                             _log.WriteLine($"{processType} process {processId} terminated due to cancellation.");
-                            onProcessEnded?.Invoke(processId);
-                            return false;
                         }
                         catch (Exception ex)
                         {
                             _log.WriteLine($"Error killing process {processId}: {Helper.RedactPii(ex.Message)}", LogType.Error);
                         }
+
+                        onProcessEnded?.Invoke(processId);
+                        return false;
                     }
                 }
 
                 onProcessEnded?.Invoke(processId);
-                
+
                 bool success = _process.ExitCode == 0;
                 if (!success)
-                {
                     _log.WriteLine($"{processType} process {processId} exited with code {_process.ExitCode}", LogType.Error);
-                }
-                
+
                 return success;
+            }
+            catch (Exception ex) when (ex.Message.Contains("canceled"))
+            {
+                _log.WriteLine($"{processType} process {_process.Id} canceled", LogType.Debug);
+                return false;
             }
             catch (Exception ex)
             {
@@ -145,253 +183,86 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
-        private void ProcessConsoleOutput(string data, string processType, MigrationUnit mu, MigrationChunk chunk,int chunkIndex, double basePercent, double contribFactor, long targetCount, JobList jobList)
+
+        private void ProcessConsoleOutput(string data, string processType, MigrationUnit mu, MigrationChunk chunk,int chunkIndex, double basePercent, double contribFactor, long targetCount)
         {
-            string percentValue = ExtractPercentage(data);
-            string docsProcessed = ExtractDocCount(data);
 
-            double percent = 0;
-            int count;
-
-            if (!string.IsNullOrEmpty(percentValue))
-                double.TryParse(percentValue, out percent);
-
-            if (!string.IsNullOrEmpty(docsProcessed) && int.TryParse(docsProcessed, out count) && count > 0)
+            if (processType == "MongoDump")
             {
-                percent = Math.Round((double)count / targetCount * 100, 3);
-                
-                // Update chunk counts so timer can calculate overall progress
-                if (processType == "MongoRestore")
+                string percentValue = ExtractPercentage(data);
+                string docsProcessed = ExtractDocCount(data);
+
+
+                double percent = 0;
+                int count=0;
+
+                if (!string.IsNullOrEmpty(percentValue))
+                    double.TryParse(percentValue, out percent);
+
+                if (!string.IsNullOrEmpty(docsProcessed) && int.TryParse(docsProcessed, out count) && count > 0)
                 {
-                    chunk.RestoredSuccessDocCount = count;
-                }
-                else
-                {
+                    percent = Math.Min(100, Math.Round((double)count / targetCount * 100, 3));
                     chunk.DumpResultDocCount = count;
+                    MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Dumped Documents Count: {count}");
                 }
-            }
-            else if (percent > 0 && targetCount > 0)
-            {
-                // When only percentage is reported (no doc count), calculate the doc count
-                // This happens with mongorestore which often reports percentage but not document count
-                long calculatedCount = (long)(percent / 100.0 * targetCount);
-                
-                if (processType == "MongoRestore")
+                else if (percent > 0 && targetCount > 0 && count == 0)
                 {
-                    chunk.RestoredSuccessDocCount = calculatedCount;
-                }
-                else
-                {
+                    long calculatedCount = (long)(percent / 100.0 * targetCount);
                     chunk.DumpResultDocCount = calculatedCount;
-                }
-            }
-            //mongorestore doesn't report on doc count sometimes. hence we need to calculate  based on targetCount percent
-            if (percent == 100 & processType == "MongoRestore")
-            {
-                chunk.RestoredSuccessDocCount = targetCount - (chunk.RestoredFailedDocCount + chunk.SkippedAsDuplicateCount);
-                jobList.Save();
-            }
+                    MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] Calculated Dumped Documents Count: {calculatedCount}");
+                }              
 
-            if (percent > 0 && targetCount>0)
-            {
-                _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {percent}%");
-                
-                // Immediately calculate and update percentage from all chunks
-                if (processType == "MongoRestore")
+                if (percent > 0 && targetCount > 0)
                 {
-                    mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
-                    if (mu.RestorePercent >= 99.99)
-                        mu.RestoreComplete = true;
-                }
-                else
-                {
-                    mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false);
+                    _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {percent}%");
+                                        
+                    mu.DumpPercent = PercentageUpdater.CalculateOverallPercentFromAllChunks(mu, isRestore: false, log: _log);
                     if (mu.DumpPercent >= 99.99)
+                    {
                         mu.DumpComplete = true;
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                    }                
                 }
-                jobList.Save();
-                
-                // Ensure timer is running for this migration unit to handle percentage updates
-                EnsurePercentageTimerRunning(mu, jobList, processType);
             }
             else
             {
-                if (processType == "MongoRestore")
-                {
-                    var (restoredCount, failedCount, restorePercent) = ExtractRestoreCounts(data);
-                    if (restoredCount > 0 || failedCount > 0)
-                    {
-                        chunk.RestoredSuccessDocCount = restoredCount;
-                        chunk.RestoredFailedDocCount = failedCount;
-                    }
-                    if (restoredCount == 0 && failedCount == 0 && restorePercent ==100)
-                    {
-                        chunk.IsUploaded = true;
-                    }
+                //sample string
+                //2025 - 12 - 16T13: 15:00.445 + 0530    48046 document(s) restored successfully. 2 document(s) failed to restore.
 
-                }
-                if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
+                var (restoredCount, failedCount, restorePercent) = ExtractRestoreCounts(data);
+                if (restoredCount > 0 || failedCount > 0)
                 {
-                    _log.WriteLine($"{processType} Response: {Helper.RedactPii(data)}");
+                    chunk.RestoredSuccessDocCount = restoredCount;
+                    chunk.RestoredFailedDocCount = failedCount;
+                }
+                if (restoredCount == 0 && failedCount == 0 && restorePercent == 100)
+                {
+                    chunk.IsUploaded = true;
+                }               
+
+
+                // Check if this is a restore progress line with byte size (e.g., "sampledb.MultiIdMixed30gb 1.22GB")
+                bool isRestoreProgressWithBytes = processType == "MongoRestore" &&
+                                Regex.IsMatch(data, @"[\d.]+\s*(GB|MB|TB|KB)\s*$", RegexOptions.IgnoreCase);
+
+                if (isRestoreProgressWithBytes)
+                {
+                    _log.ShowInMonitor($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : {data}");
+                }
+                else
+                {
+                    if (!data.Contains("continuing through error: Duplicate key violation on the requested collection"))
+                    {
+                        MigrationJobContext.AddVerboseLog($"{processType} Response for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}]: {Helper.RedactPii(data)}");
+                    }
+                    else
+                    {
+                        MigrationJobContext.AddVerboseLog($"{processType} for {mu.DatabaseName}.{mu.CollectionName} Chunk[{chunkIndex}] : Duplicate key violation encountered, skipping duplicate documents.: {Helper.RedactPii(data)}");
+                    }
                 }
             }
         }
 
-        /// <summary>
-        /// Calculates overall percent from all chunks by checking their current state.
-        /// Used by timer to recalculate overall progress for dump or restore operations.
-        /// </summary>
-        private static double CalculateOverallPercentFromAllChunks(MigrationUnit mu, bool isRestore)
-        {
-            double totalPercent = 0;
-            long totalDocs = Helper.GetMigrationUnitDocCount(mu);
-            
-            if (totalDocs == 0) return 0;
-            
-            for (int i = 0; i < mu.MigrationChunks.Count; i++)
-            {
-                var c = mu.MigrationChunks[i];
-                
-                if (c.DumpQueryDocCount == 0)
-                {
-                    continue;
-                }
-                
-                double chunkContrib = (double)c.DumpQueryDocCount / totalDocs;
-                
-                if (isRestore)
-                {
-                    if (c.IsUploaded == true)
-                    {
-                        // Completed chunk: 100%
-                        totalPercent += 100 * chunkContrib;
-                    }
-                    else if (c.RestoredSuccessDocCount > 0)
-                    {
-                        // In-progress chunk: calculate from restored count
-                        double chunkPercent = Math.Min(100, (double)c.RestoredSuccessDocCount / c.DumpQueryDocCount * 100);
-                        totalPercent += chunkPercent * chunkContrib;
-                    }
-                    // else: not started, contributes 0%
-                }
-                else // Dump
-                {
-                    if (c.IsDownloaded == true)
-                    {
-                        // Completed chunk: 100%
-                        totalPercent += 100 * chunkContrib;
-                    }
-                    else if (c.DumpResultDocCount > 0)
-                    {
-                        // In-progress chunk: calculate from dumped count
-                        double chunkPercent = Math.Min(100, (double)c.DumpResultDocCount / c.DumpQueryDocCount * 100);
-                        totalPercent += chunkPercent * chunkContrib;
-                    }
-                    // else: not started, contributes 0%
-                }
-            }
-            
-            return Math.Min(100, totalPercent);
-        }
-
-        /// <summary>
-        /// Ensures a timer is running for the given migration unit to periodically recalculate percentages.
-        /// Timer runs every 5 seconds and stops when all chunks are complete.
-        /// </summary>
-        private static void EnsurePercentageTimerRunning(MigrationUnit mu, JobList jobList, string processType)
-        {
-            string key = $"{mu.DatabaseName}.{mu.CollectionName}.{processType}";
-            
-            lock (_timerLock)
-            {
-                // Check if timer already exists and is enabled
-                if (_percentageTimers.ContainsKey(key) && _percentageTimers[key].Enabled)
-                {
-                    return; // Timer already running
-                }
-                
-                // Create new timer
-                var timer = new System.Timers.Timer(PERCENTAGE_UPDATE_INTERVAL_MS);
-                timer.AutoReset = true;
-                timer.Elapsed += (sender, e) =>
-                {
-                    try
-                    {
-                        bool hasActiveChunks = false;
-                        
-                        if (processType == "MongoRestore")
-                        {
-                            // Check if there are any active or pending restore chunks
-                            // Active: RestoredSuccessDocCount > 0 and not uploaded
-                            // Pending: IsDownloaded (dump complete) but not IsUploaded (restore not complete)
-                            foreach (var chunk in mu.MigrationChunks)
-                            {
-                                if (chunk.IsUploaded != true && (chunk.RestoredSuccessDocCount > 0 || chunk.IsDownloaded == true))
-                                {
-                                    hasActiveChunks = true;
-                                    break;
-                                }
-                            }
-                            
-                            if (hasActiveChunks)
-                            {
-                                // Recalculate overall restore percent from all chunks
-                                double previousPercent = mu.RestorePercent;
-                                mu.RestorePercent = CalculateOverallPercentFromAllChunks(mu, isRestore: true);
-                                if (mu.RestorePercent >= 99.99)
-                                    mu.RestoreComplete = true;
-                                jobList.Save();
-                            }
-                        }
-                        else // MongoDump
-                        {
-                            // Check if there are any active or pending dump chunks
-                            // Active: DumpResultDocCount > 0 and not downloaded
-                            // Pending: DumpQueryDocCount > 0 (chunk initialized) but not IsDownloaded
-                            foreach (var chunk in mu.MigrationChunks)
-                            {
-                                if (chunk.IsDownloaded != true && chunk.DumpQueryDocCount > 0)
-                                {
-                                    hasActiveChunks = true;
-                                    break;
-                                }
-                            }
-                            
-                            if (hasActiveChunks)
-                            {
-                                // Recalculate overall dump percent from all chunks
-                                double previousPercent = mu.DumpPercent;
-                                mu.DumpPercent = CalculateOverallPercentFromAllChunks(mu, isRestore: false);
-                                if (mu.DumpPercent >= 99.99)
-                                    mu.DumpComplete = true;
-                                jobList.Save();
-                            }
-                        }
-                        
-                        // Stop timer if no active chunks
-                        if (!hasActiveChunks)
-                        {
-                            lock (_timerLock)
-                            {
-                                if (_percentageTimers.ContainsKey(key))
-                                {
-                                    _percentageTimers[key].Stop();
-                                    _percentageTimers[key].Dispose();
-                                    _percentageTimers.Remove(key);
-                                }
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore errors in timer callback
-                    }
-                };
-                
-                _percentageTimers[key] = timer;
-                timer.Start();
-            }
-        }
 
         private string ExtractPercentage(string input)
         {
@@ -419,25 +290,42 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         }
 
+
         public (int RestoredCount, int FailedCount, double percentage) ExtractRestoreCounts(string input)
         {
-            // Regular expressions to capture the counts
+            // Old formats
             var restoredMatch = Regex.Match(input, @"(\d+)\s+document\(s\)\s+restored\s+successfully");
             var failedMatch = Regex.Match(input, @"(\d+)\s+document\(s\)\s+failed\s+to\s+restore");
 
-            // Extract counts with default value of 0 if no match
+            // Extract counts with default value of 0
             int restoredCount = restoredMatch.Success ? int.Parse(restoredMatch.Groups[1].Value) : 0;
             int failedCount = failedMatch.Success ? int.Parse(failedMatch.Groups[1].Value) : 0;
 
-            double percentage=0;
-            if (restoredCount==0 && failedCount==0)
+            // 🔁 Fallback to NEW format only if old format gave nothing
+            if (restoredCount == 0 && failedCount == 0)
+            {
+                var newFormatMatch = Regex.Match(
+                    input,
+                    @"\((\d+)\s+documents,\s+(\d+)\s+failures\)"
+                );
+
+                if (newFormatMatch.Success)
+                {
+                    restoredCount = int.Parse(newFormatMatch.Groups[1].Value);
+                    failedCount = int.Parse(newFormatMatch.Groups[2].Value);
+                }
+            }
+
+            double percentage = 0;
+
+            // Keep your existing percentage logic
+            if (restoredCount == 0 && failedCount == 0)
             {
                 var match = Regex.Match(input, @"\(([\d.]+)%\)");
 
                 if (match.Success)
                 {
                     percentage = double.Parse(match.Groups[1].Value);
-                    //Console.WriteLine($"Percentage: {percentage}%");
                 }
             }
 
@@ -463,29 +351,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             return 0;
         }
 
-        /// <summary>
-        /// Terminates the currently running process, if any.
-        /// Note: This method is deprecated. Use CancellationToken instead.
-        /// </summary>
-        [Obsolete("Use CancellationToken for graceful cancellation")]
-        public void Terminate()
-        {
-            lock (_processLock)
-            {
-                if (_process != null && !_process.HasExited)
-                {
-                    try
-                    {
-                        _process.Kill(entireProcessTree: true);
-                        _log.WriteLine("Process terminated via Terminate() method");
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.WriteLine($"Error terminating process: {Helper.RedactPii(ex.Message)}", LogType.Error);
-                    }
-                }
-            }
-        }
+        
     }
 }
 

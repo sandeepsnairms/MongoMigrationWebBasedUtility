@@ -5,6 +5,7 @@ using OnlineMongoMigrationProcessor;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Models;
 using Xunit;
+using OnlineMongoMigrationProcessor.Helpers.JobManagement;
 
 namespace OnlineMongoMigrationProcessor.Tests
 {

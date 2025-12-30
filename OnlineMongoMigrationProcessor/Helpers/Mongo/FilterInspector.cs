@@ -1,7 +1,7 @@
 ﻿using MongoDB.Bson;
 using System;
 using System.Text.Json.Nodes;
-namespace OnlineMongoMigrationProcessor
+namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
     public static class FilterInspector
     {

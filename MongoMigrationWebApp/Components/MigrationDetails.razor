@@ -2,9 +2,11 @@
 @inject IConfiguration Configuration
 @inject IJSRuntime JSRuntime
 
-@using OnlineMongoMigrationProcessor
-@using OnlineMongoMigrationProcessor.Models
 @using Microsoft.JSInterop
+@using OnlineMongoMigrationProcessor
+@using OnlineMongoMigrationProcessor.Context
+@using OnlineMongoMigrationProcessor.Helpers
+@using OnlineMongoMigrationProcessor.Models
 
 <div class="modal fade show d-block bg-dark bg-opacity-75" id="myModal" aria-modal="true" role="dialog">
     <div class="modal-dialog bg-dark">
@@ -14,141 +16,181 @@
            <button type="button" class="btn-close" aria-label="Close" @onclick="@Cancel"></button>
  </div>
        <div class="modal-body">
-                <div class="mb-3">
-                    <label for="name" class="form-label">Name</label>
-                    <input type="text" id="name" class="form-control" disabled="@(!NewMode)" @bind="name" />
-                </div>
-                @if (NewMode)
-                {
+                <!-- Tab Navigation -->
+                <ul class="nav nav-tabs mb-3">
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "Basic" ? "active" : "")" @onclick="SwitchToBasicTab">Basic</button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link @(activeTab == "Advanced" ? "active" : "")" @onclick="SwitchToAdvancedTab">Advanced</button>
+                    </li>
+                </ul>
+
+                <!-- Basic Tab Content -->
+                <div class="@(activeTab == "Basic" ? "" : "d-none")">
+                    <!-- Basic Tab Fields -->
                     <div class="mb-3">
-                        <label for="mongo-options" class="form-label">Migration Tool</label>
-                        <select id="mongo-options" class="form-select" @onchange="OnSelectionChanged">
-                            @if (AllowMongoDump)
+                        <label for="name" class="form-label">Name</label>
+                        <input type="text" id="name" class="form-control" disabled="@(!NewMode)" @bind="name" />
+                    </div>
+                    @if (NewMode)
+                    {
+                        <div class="mb-3">
+                            <label for="mongo-options" class="form-label">Migration Tool</label>
+                            <select id="mongo-options" class="form-select" @onchange="OnSelectionChanged">
+                                @if (AllowMongoDump)
+                                {
+                                    <option value="MongoDump and MongoRestore">MongoDump and MongoRestore</option>
+                                }
+                                <option value="MongoDB Driver">MongoDB Driver</option>
+                                <option value="MongoDB Driver (Cosmos DB RU read optimized)">MongoDB Driver (Cosmos DB RU read optimized)</option>
+                            </select>
+                        </div>
+                    }                
+                    <div class="mb-3 checkbox-container">
+                        <div class="checkbox-group">
+                            <label title="Keep the target collection and append new data without deleting existing records.">
+                                <input type="checkbox" id="appendMode" disabled="@(!NewMode)" @bind="appendMode" />
+                                Append Data
+                            </label>
+                        </div>
+                        <div class="checkbox-group">                    
+                            <label title="Skip copying indexes from the source; only data will be migrated.">
+                                <input type="checkbox" id="copyIndex" disabled="@(!NewMode || appendMode || jobType==JobType.RUOptimizedCopy)" @bind="skipIndexes" />
+                                Skip Indexes
+                            </label>
+                        </div>
+                    </div>
+                   
+                    <div class="mb-3">
+                        <label for="sourceConnectionString" class="form-label">Source Connection String</label>
+                        <input type="password" id="sourceConnectionString" placeholder="@(NewMode ? "" : "For " + sourceEndpoint)" class="form-control" @bind="sourceConnectionString" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="targetConnectionString" class="form-label">Target Connection String</label>
+                        <input type="password" id="targetConnectionString" placeholder="@(NewMode ? "For [account name].mongocluster.cosmos.azure.com" : "For " + targetEndpoint)" class="form-control" @bind="targetConnectionString" />
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="nameSpaces" class="form-label">Collections To Migrate</label>
+                        <textarea id="nameSpaces" disabled="@(!NewMode || isFileUploaded)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme. Max 1000 characters, use 'Upload File' for larger text." class="form-control" @bind="namespaces" @oninput="OnTextAreaInput"></textarea>
+                        @if (NewMode)
+                        {
+                            <div class="mt-2">
+                                <label for="fileUpload" class="btn btn-sm btn-outline-secondary" style="cursor: pointer;">
+                                    <i class="bi bi-upload"></i> Upload File
+                                </label>
+                                <InputFile id="fileUpload" OnChange="HandleFileUpload" class="d-none" disabled="@isTextAreaUsed" accept=".txt,.json" />
+                                @if (isFileUploaded)
+                                {
+                                    <span class="ms-2 text-success">
+                                        <i class="bi bi-check-circle"></i> @uploadedFileName
+                                    </span>
+                                    <button type="button" class="btn btn-sm btn-link text-danger" @onclick="ClearFileUpload">
+                                        <i class="bi bi-x-circle"></i> Clear
+                                    </button>
+                                }
+                            </div>
+                            @if (isTextAreaUsed && !isFileUploaded)
                             {
-                                <option value="MongoDump and MongoRestore">MongoDump and MongoRestore</option>
+                                <small class="text-muted">File upload is disabled when text is entered manually.</small>
                             }
-                            <option value="MongoDB Driver">MongoDB Driver</option>
-                            <option value="MongoDB Driver (Cosmos DB RU read optimized)">MongoDB Driver (Cosmos DB RU read optimized)</option>
+                            else if (isFileUploaded)
+                            {
+                                <small class="text-muted">Text area is disabled when a file is uploaded.</small>
+                            }
+                        }
+                    </div>
+                    <div class="mb-3 checkbox-container">
+                        <div class="checkbox-group">
+                            <label title="Check this if all collections in your migration use MongoDB ObjectId for the _id field. This optimizes partitioning and improves migration performance.">
+                                <input type="checkbox" id="allCollectionsUseObjectId" disabled="@(!NewMode || jobType == JobType.RUOptimizedCopy)" @bind="allCollectionsUseObjectId" />
+                                All collections use ObjectId for the _id field
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
+                            Migration Mode
+                        </label>                
+                        <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
+                            <option value="Offline">Offline</option>
+                            <option value="Online">Online</option>
+                            <!--<option value="SyncOnly">Sync Only</option>-->
                         </select>
                     </div>
-                }                
-                <div class="mb-3 checkbox-container">
-                    <div class="checkbox-group">
-                        <label title="Keep the target collection and append new data without deleting existing records.">
-                            <input type="checkbox" id="appendMode" disabled="@(!NewMode)" @bind="appendMode" />
-                            Append Mode
-                        </label>
-                    </div>
-                    <div class="checkbox-group">                    
-                        <label title="Skip copying indexes from the source; only data will be migrated.">
-                            <input type="checkbox" id="copyIndex" disabled="@(!NewMode || appendMode || jobType==JobType.RUOptimizedCopy)" @bind="skipIndexes" />
-                            Skip Indexes
-                        </label>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
-                        Migration Mode
-                    </label>                
-                    <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode)">
-                        <option value="Offline">Offline</option>
-                        <option value="Online">Online</option>
-                        <!--<option value="SyncOnly">Sync Only</option>-->
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="change-stream-scope" class="form-label" title="Specify the scope of change stream monitoring during online migration.">
-                        Change Stream Scope
-                    </label>                
-                    <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
-                        <option value="Collection" title="Monitor changes at the collection level. Use when collect count is less than 200">Collection</option>
-                        <option value="Server" title="Monitor changes at the server level across all databases. Recommended when migration hundreds of collections.">Server</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
-                        Change Stream Mode
-                    </label>                
-                    <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
-                        <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
-                        <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
-                        <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
-                    </select>
-                </div>
-                
-               
-                <div class="mb-3">
-                    <label for="sourceConnectionString" class="form-label">Source Connection String</label>
-                    <input type="password" id="sourceConnectionString" placeholder="@(NewMode ? "" : "For " + sourceEndpoint)" class="form-control" @bind="sourceConnectionString" />
                 </div>
 
-                <div class="mb-3">
-                    <label for="targetConnectionString" class="form-label">Target Connection String</label>
-                    <input type="password" id="targetConnectionString" placeholder="@(NewMode ? "For [account name].mongocluster.cosmos.azure.com" : "For " + targetEndpoint)" class="form-control" @bind="targetConnectionString" />
-                </div>
-
-                <div class="mb-3">
-                 <label for="nameSpaces" class="form-label">Collections To Migrate</label>
-                    <textarea id="nameSpaces" disabled="@(!NewMode || isFileUploaded)" rows="4" placeholder="e.g. db1.col1,db1.col2,db2.col1,db2.col5 or CollectionInfo JSON format as described in readme. Max 1000 characters, use 'Upload File' for larger text." class="form-control" @bind="namespaces" @oninput="OnTextAreaInput"></textarea>                  @if (NewMode)
-                    {
-                        <div class="mt-2">
-                            <label for="fileUpload" class="btn btn-sm btn-outline-secondary" style="cursor: pointer;">
-                                <i class="bi bi-upload"></i> Upload File
+                <!-- Advanced Tab Content -->
+                <div class="@(activeTab == "Advanced" ? "" : "d-none")">
+                    <!-- Advanced Tab Fields -->
+                    <div class="mb-3">
+                        <label for="logLevel" class="form-label" title="Set the minimum log level for this migration job. Lower levels include more detailed logging.">Log Level</label>
+                        <select id="LogLevel" class="form-select" @bind="logLevel">
+                            <option value="@LogType.Error">Error</option>
+                            <option value="@LogType.Warning">Warning</option>
+                            <option value="@LogType.Info">Info</option>
+                            <option value="@LogType.Verbose">Debug</option>
+                            <option value="@LogType.Verbose">Verbose</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="change-stream-scope" class="form-label" title="Specify the scope of change stream monitoring during online migration.">
+                            Change Stream Scope
+                        </label>                
+                        <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
+                            <option value="Collection" title="Monitor changes at the collection level. Use when collect count is less than 200">Collection</option>
+                            <option value="Server" title="Monitor changes at the server level across all databases. Recommended when migration hundreds of collections.">Server</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
+                            Change Stream Mode
+                        </label>                
+                        <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
+                            <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
+                            <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
+                            <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
+                        </select>
+                    </div>
+                    <div class="mb-3 checkbox-container">
+                        <div class="checkbox-group">
+                            <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
+                                <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline || isSimulatedRun)" @bind="enableSyncBack" />
+                                Post Migration Sync Back
                             </label>
-                            <InputFile id="fileUpload" OnChange="HandleFileUpload" class="d-none" disabled="@isTextAreaUsed" accept=".txt,.json" />
-                            @if (isFileUploaded)
-                            {
-                                <span class="ms-2 text-success">
-                                    <i class="bi bi-check-circle"></i> @uploadedFileName
-                                    </span>
-                                <button type="button" class="btn btn-sm btn-link text-danger" @onclick="ClearFileUpload">
-                                    <i class="bi bi-x-circle"></i> Clear
-                                </button>
-                            }
                         </div>
-                        @if (isTextAreaUsed && !isFileUploaded)
-                        {
-                            <small class="text-muted">File upload is disabled when text is entered manually.</small>
-                        }
-                        else if (isFileUploaded)
-                        {
-                            <small class="text-muted">Text area is disabled when a file is uploaded.</small>
-                        }
+                    </div>
+                    <div class="mb-3">
+                        <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
+                            <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" @bind:after="OnSimulationModeChanged" />
+                            Simulation Mode (No Writes to Target)
+                        </label>
+                    </div>
+                    <div class="mb-3">
+                        <label for="enableParallelProcessing" class="form-label" title="Enable parallel processing for dump and restore operations to improve migration performance. Only applicable for MongoDump and MongoRestore migration tool.">
+                            <input type="checkbox" id="enableParallelProcessing" disabled="@(!NewMode || jobType != JobType.DumpAndRestore)" @bind="enableParallelProcessing" @bind:after="OnEnableParallelProcessingChanged" />
+                            Enable Parallel Processing
+                        </label>
+                    </div>
+                    @if (enableParallelProcessing && jobType == JobType.DumpAndRestore)
+                    {
+                        <div class="row mb-3">
+                            <div class="col-md-4">
+                                <label for="maxDumpWorkers" class="form-label" title="Number of parallel mongodump processes. Leave empty for auto-calculation.">Dump Workers</label>
+                                <input type="number" id="maxDumpWorkers" class="form-control" @bind="maxDumpWorkers" min="1" max="16" placeholder="@($"Auto ({defaultDumpWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                            <div class="col-md-4">
+                                <label for="maxRestoreWorkers" class="form-label" title="Number of parallel mongorestore processes. Leave empty for auto-calculation.">Restore Workers</label>
+                                <input type="number" id="maxRestoreWorkers" class="form-control" @bind="maxRestoreWorkers" min="1" max="16" placeholder="@($"Auto ({defaultRestoreWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                            <div class="col-md-4">
+                                <label for="maxInsertionWorkers" class="form-label" title="Number of insertion threads per mongorestore process. Leave empty for auto-calculation.">Insertion Workers</label>
+                                <input type="number" id="maxInsertionWorkers" class="form-control" @bind="maxInsertionWorkers" min="1" max="16" placeholder="@($"Auto ({defaultInsertionWorkers})")" disabled="@(!NewMode)" />
+                            </div>
+                        </div>
                     }
-                </div>
-                <div class="mb-3 checkbox-container">
-                    <div class="checkbox-group">
-                        <label title="Check this if all collections in your migration use MongoDB ObjectId for the _id field. This optimizes partitioning and improves migration performance.">
-                            <input type="checkbox" id="allCollectionsUseObjectId" disabled="@(!NewMode)" @bind="allCollectionsUseObjectId" />
-                            All collections use ObjectId for the _id field
-                        </label>
-                    </div>
-                </div>
-                <div class="mb-3 checkbox-container">
-                    <div class="checkbox-group">
-                        <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
-                            <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline)" @bind="enableSyncBack" />
-                            Post Migration Sync Back
-                        </label>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
-                        <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" />
-                        Simulation Mode (No Writes to Target)
-                    </label>
-                </div>
-                <div class="mb-3">
-                    <label for="minimumLogLevel" class="form-label" title="Set the minimum log level to control the verbosity of logs. Lower levels include more detailed information.">
-                        Minimum Log Level
-                    </label>
-                    <select id="minimumLogLevel" class="form-select" @bind="selectedLogLevel">
-                        <option value="@LogType.Error">Error Only</option>
-                        <option value="@LogType.Warning">Warning + Error</option>
-                        <option value="@LogType.Info">Info + Warning + Error</option>
-                        <option value="@LogType.Debug">Debug + Info + Warning + Error</option>
-                        <option value="@LogType.Verbose">All (Verbose)</option>
-                    </select>
                 </div>
 
                 @if(ShowWarning())
@@ -158,10 +200,15 @@
                         <input type="checkbox" id="overwrite" @bind="overwrite" />
                             I agree to overwrite the target collections. This will remove all existing data in the target collections before migration begins.
                         </label>
-                        Choose the <b>Append Mode</b> option if you want to keep existing data without overwriting it.
+                        Choose the <b>Append Data</b> option if you want to keep existing data without overwriting it.
                     </div>
                 }
-
+                @if (NewMode && appendMode)
+                {
+                    <div class="alert alert-info mt-2 mb-3">
+                        In Append Data, when both the source and target collections contain documents with identical _id values, the de-duplication and conflict checks can significantly impact migration performance. Duplicate records will be skipped — they will not be updated.
+                    </div>
+                }
                 @if (!string.IsNullOrEmpty(errorMessage))
                 {
                     <div class="alert alert-danger mt-2">
@@ -190,22 +237,29 @@
     public MigrationJob? Job { get; set; }
 
     [Parameter]
-    public EventCallback<MigrationJob> OnSubmit { get; set; }
+    public Func<MigrationJob, string, string, Task<bool>>? OnSubmit { get; set; }
 
     [Parameter]
     public Func<string, Task<bool>>? CheckNameExists { get; set; }
 
+    private string activeTab = "Basic"; // Track active tab
     private string errorMessage = string.Empty;
     private JobType jobType = JobType.MongoDriver; // Use JobType enum instead of boolean
     private string selectedOption = "MongoDB Driver"; // Default dropdown value
     private bool isSimulatedRun = false; // Variable to track the dummy run option
-    private bool startCSAfterUploads = true; // Start change streams after all uploads are done
-    private bool aggressiveCS = false; // if the migration is online, aggressive change stream can be enabled
+    private ChangeStreamMode changeStreamMode = ChangeStreamMode.Delayed; // Change stream processing mode
     private bool enableSyncBack = false;// if the migration is online, reverse sync can be enabled
     private bool allCollectionsUseObjectId = false; // if all collections use ObjectId for the _id field
     private bool skipIndexes = false;// create indexes on Target
     private bool appendMode = true;// if the target collection exists, it will be deleted
-    private LogType selectedLogLevel = LogType.Info; // Default log level
+    private bool enableParallelProcessing = true; // Enable parallel processing for dump and restore operations
+    private int? maxDumpWorkers = null; // Max parallel dump processes
+    private int? maxRestoreWorkers = null; // Max parallel restore processes
+    private int? maxInsertionWorkers = null; // Max insertion workers per collection
+    private int defaultDumpWorkers = 1; // Default calculated dump workers
+    private int defaultRestoreWorkers = 1; // Default calculated restore workers
+    private int defaultInsertionWorkers = 1; // Default calculated insertion workers
+    private LogType logLevel = LogType.Info; // Minimum log level
     private string namespaces = string.Empty;   // Comma-separated list of namespaces to migrate
     private string name = string.Empty; // Name of the migration job
     private string sourceEndpoint = string.Empty;   // Source endpoint extracted from the connection string
@@ -219,50 +273,94 @@
     private string targetConnectionString { get; set; } = string.Empty;
     private bool AllowMongoDump => Configuration.GetValue<bool>("AllowMongoDump");
     private bool overwrite = false; // Flag to indicate if the target collections should be overwritten
-    
+
     // File upload state
     private bool isFileUploaded = false;
     private bool isTextAreaUsed = false;
     private string uploadedFileName = string.Empty;
 
     private void OnTextAreaInput(ChangeEventArgs e)
-{
+    {
         var value = e?.Value?.ToString() ?? string.Empty;
         isTextAreaUsed = !string.IsNullOrWhiteSpace(value);
     }
 
+    private void SwitchToBasicTab()
+    {
+        activeTab = "Basic";
+    }
+
+    private void SwitchToAdvancedTab()
+    {
+        activeTab = "Advanced";
+    }
+
+    private void OnEnableParallelProcessingChanged()
+    {
+        if (enableParallelProcessing)
+        {
+            // Calculate default values when enabled
+            CalculateDefaultWorkerCounts();
+        }
+    }
+
+    private void OnSimulationModeChanged()
+    {
+        // When simulation mode is turned on, disable sync back
+        if (isSimulatedRun)
+        {
+            enableSyncBack = false;
+        }
+    }
+
+    private void CalculateDefaultWorkerCounts()
+    {
+        // Calculate optimal defaults based on CPU cores
+        int processorCount = Environment.ProcessorCount;
+        
+        // Base calculation: 1 worker per 2.5 cores, minimum 1, maximum 16
+        int baseConcurrency = Math.Max(1, (int)(processorCount / 2.5));
+        baseConcurrency = Math.Min(baseConcurrency, 16);
+        
+        defaultDumpWorkers = baseConcurrency;
+        defaultRestoreWorkers = baseConcurrency;
+        
+        // Insertion workers: half of processor count, capped at 8
+        defaultInsertionWorkers = Math.Max(1, Math.Min(processorCount / 2, 8));
+    }
+
     private async Task HandleFileUpload(InputFileChangeEventArgs e)
     {
-     try
+        try
         {
-   var file = e.File;
-    
-          if (file == null)
- {
-           return;
-     }
+            var file = e.File;
+
+            if (file == null)
+            {
+                return;
+            }
 
             // Limit file size to 10MB
             const long maxFileSize = 10 * 1024 * 1024;
             if (file.Size > maxFileSize)
-          {
-              errorMessage = "File size exceeds 10MB limit.";
+            {
+                errorMessage = "File size exceeds 10MB limit.";
                 return;
-     }
+            }
 
             using var stream = file.OpenReadStream(maxFileSize);
-using var reader = new StreamReader(stream);
+            using var reader = new StreamReader(stream);
             namespaces = await reader.ReadToEndAsync();
 
             isFileUploaded = true;
- uploadedFileName = file.Name;
-      isTextAreaUsed = false; // Reset text area flag when file is uploaded
-          errorMessage = string.Empty;
-          StateHasChanged();
+            uploadedFileName = file.Name;
+            isTextAreaUsed = false; // Reset text area flag when file is uploaded
+            errorMessage = string.Empty;
+            StateHasChanged();
         }
-catch (Exception ex)
+        catch (Exception ex)
         {
-  errorMessage = $"Error reading file: {ex.Message}";
+            errorMessage = $"Error reading file: {ex.Message}";
         }
     }
 
@@ -270,8 +368,8 @@ catch (Exception ex)
     {
         isFileUploaded = false;
         uploadedFileName = string.Empty;
-    namespaces = string.Empty;
-    StateHasChanged();
+        namespaces = string.Empty;
+        StateHasChanged();
     }
 
     private void OnModeSelectionChanged(ChangeEventArgs e)
@@ -297,23 +395,15 @@ catch (Exception ex)
     {
         var val = e?.Value?.ToString() ?? "Delayed";
         SelectedChangeStreamMode = val;
-        
-        // Map dropdown selection to boolean flags
-        switch (val)
+
+        // Map dropdown selection to ChangeStreamMode enum
+        changeStreamMode = val switch
         {
-            case "Delayed":
-                startCSAfterUploads = true;
-                aggressiveCS = false;
-                break;
-            case "Immediate":
-                startCSAfterUploads = false;
-                aggressiveCS = false;
-                break;
-            case "Aggressive":
-                startCSAfterUploads = false;
-                aggressiveCS = true;
-                break;
-        }
+            "Delayed" => ChangeStreamMode.Delayed,
+            "Immediate" => ChangeStreamMode.Immediate,
+            "Aggressive" => ChangeStreamMode.Aggressive,
+            _ => ChangeStreamMode.Delayed
+        };
     }
 
     private bool ShowWarning()
@@ -337,8 +427,7 @@ catch (Exception ex)
             skipIndexes = true; // Skip indexes for RU optimized copy
             SelectedChangeStreamMode = "Immediate"; // Set to Immediate for RU optimized copy
             SelectedChangeStreamScope = "Collection"; // Set to Collection for RU optimized copy
-            startCSAfterUploads = false;
-            aggressiveCS = false;
+            changeStreamMode = ChangeStreamMode.Immediate; // Force to Immediate
             changeStreamLevel = ChangeStreamLevel.Collection; // Force to Collection level
         }       
     }
@@ -358,9 +447,13 @@ catch (Exception ex)
             isSimulatedRun = false;
             skipIndexes = false;
             appendMode = true;
-            aggressiveCS = false;
-            startCSAfterUploads = true;
-            selectedLogLevel = LogType.Info; // Default to Info
+            enableParallelProcessing = true; // Default to enabled
+            maxDumpWorkers = null;
+            maxRestoreWorkers = null;
+            maxInsertionWorkers = null;
+            CalculateDefaultWorkerCounts(); // Calculate defaults on initialization
+            logLevel = LogType.Info; // Default to Info
+            changeStreamMode = ChangeStreamMode.Delayed;
             SelectedChangeStreamMode = "Delayed"; // Default to Delayed
             SelectedChangeStreamScope = "Collection"; // Default to Collection
             changeStreamLevel = ChangeStreamLevel.Collection; // Default to Collection
@@ -369,16 +462,15 @@ catch (Exception ex)
             uploadedFileName = string.Empty;
         }
         else
-     {
-       name = Job?.Name ?? string.Empty;
-            sourceConnectionString = Job?.SourceConnectionString ?? string.Empty;
-            targetConnectionString = Job?.TargetConnectionString ?? string.Empty;
+        {
+            name = Job?.Name ?? string.Empty;
+            sourceConnectionString = MigrationJobContext.SourceConnectionString[Job?.Id] ?? string.Empty;
+            targetConnectionString = MigrationJobContext.TargetConnectionString[Job?.Id] ?? string.Empty;
             namespaces = Job?.NameSpaces ?? string.Empty;
             sourceEndpoint = Job?.SourceEndpoint ?? string.Empty;
             targetEndpoint = Job?.TargetEndpoint ?? string.Empty;
             cdcMode = Job?.CDCMode ?? CDCMode.Offline;
-            startCSAfterUploads = Job?.CSStartsAfterAllUploads ?? true;
-            aggressiveCS = Job?.AggresiveChangeStream ?? false; 
+            changeStreamMode = Job?.ChangeStreamMode ?? ChangeStreamMode.Delayed;
             enableSyncBack = (Job?.SyncBackEnabled ?? false) && (cdcMode != CDCMode.Offline) && !(Job?.IsSimulatedRun ?? false); // Reverse sync only if online and not a simulated run
             jobType = Job?.JobType ?? JobType.MongoDriver;
             selectedOption = jobType switch
@@ -390,22 +482,22 @@ catch (Exception ex)
             isSimulatedRun = Job?.IsSimulatedRun ?? false;
             skipIndexes = Job?.SkipIndexes ?? false;
             appendMode = Job?.AppendMode ?? false;
-            selectedLogLevel = Job?.MinimumLogLevel ?? LogType.Info; // Load from job or default to Info
+            enableParallelProcessing = Job?.EnableParallelProcessing ?? true;
+            maxDumpWorkers = Job?.MaxParallelDumpProcesses;
+            maxRestoreWorkers = Job?.MaxParallelRestoreProcesses;
+            maxInsertionWorkers = Job?.MaxInsertionWorkersPerCollection;
+            CalculateDefaultWorkerCounts(); // Calculate defaults for display
+            logLevel = Job?.LogLevel ?? LogType.Info;
             changeStreamLevel = Job?.ChangeStreamLevel ?? ChangeStreamLevel.Collection;
 
-            // Set dropdown value based on existing boolean flags
-            if (aggressiveCS)
+            // Set dropdown value based on ChangeStreamMode enum
+            SelectedChangeStreamMode = changeStreamMode switch
             {
-                SelectedChangeStreamMode = "Aggressive";
-            }
-            else if (startCSAfterUploads)
-            {
-                SelectedChangeStreamMode = "Delayed";
-            }
-            else
-            {
-                SelectedChangeStreamMode = "Immediate";
-            }
+                ChangeStreamMode.Aggressive => "Aggressive",
+                ChangeStreamMode.Delayed => "Delayed",
+                ChangeStreamMode.Immediate => "Immediate",
+                _ => "Delayed"
+            };
 
             if(changeStreamLevel == ChangeStreamLevel.Collection)
             {
@@ -513,13 +605,12 @@ catch (Exception ex)
             }
         }
 
+
         var job = new MigrationJob
         {
             Name = name,
-            Id = Guid.NewGuid().ToString(),
+            Id = NewMode ? Guid.NewGuid().ToString() : (Job?.Id ?? Guid.NewGuid().ToString()),
             CDCMode = cdcMode,
-            SourceConnectionString = sourceConnectionString,
-            TargetConnectionString = targetConnectionString,
             SourceEndpoint = tmpSrcEndpoint,
             TargetEndpoint = tmpTgtEndpoint,
             NameSpaces = namespaces,
@@ -527,18 +618,31 @@ catch (Exception ex)
             IsSimulatedRun = isSimulatedRun,
             SkipIndexes = skipIndexes,
             AppendMode = appendMode,
+            EnableParallelProcessing = enableParallelProcessing,
+            MaxParallelDumpProcesses = maxDumpWorkers,
+            MaxParallelRestoreProcesses = maxRestoreWorkers,
+            MaxInsertionWorkersPerCollection = maxInsertionWorkers,
+            CurrentDumpWorkers = maxDumpWorkers ?? defaultDumpWorkers,
+            CurrentRestoreWorkers = maxRestoreWorkers ?? defaultRestoreWorkers,
+            CurrentInsertionWorkers = maxInsertionWorkers ?? defaultInsertionWorkers,
             SyncBackEnabled = (enableSyncBack && cdcMode != CDCMode.Offline && !isSimulatedRun) ? true : false,
-            CSStartsAfterAllUploads = startCSAfterUploads,
-            AggresiveChangeStream = aggressiveCS,
+            ChangeStreamMode = changeStreamMode,
             ChangeStreamLevel = changeStreamLevel,
-            AllCollectionsUseObjectId = allCollectionsUseObjectId,  // Transient flag, not persisted
-            MinimumLogLevel = selectedLogLevel
+            AllCollectionsUseObjectId = allCollectionsUseObjectId,
+            LogLevel = logLevel,
+            MigrationUnitBasics = new List<MigrationUnitBasic>()
         };
-        await OnSubmit.InvokeAsync(job);
+        if (OnSubmit != null)
+        {
+            await OnSubmit(job, sourceConnectionString, targetConnectionString);
+        }
     }
 
-    private Task Cancel()
+    private async Task Cancel()
     {
-        return OnSubmit.InvokeAsync(null);
+        if (OnSubmit != null)
+        {
+            await OnSubmit(null, string.Empty, string.Empty);
+        }
     }
 }

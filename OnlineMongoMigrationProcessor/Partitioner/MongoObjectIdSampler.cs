@@ -1,5 +1,6 @@
 ﻿using MongoDB.Bson;
 using MongoDB.Driver;
+using OnlineMongoMigrationProcessor.Context;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -24,6 +25,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
 
         public MongoObjectIdSampler(IMongoCollection<BsonDocument> collection, int timeoutSeconds = 60000)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler: Constructor called, timeoutSeconds={timeoutSeconds}");
             _collection = collection ?? throw new ArgumentNullException(nameof(collection));
             _timeoutSeconds = timeoutSeconds;
         }
@@ -33,6 +35,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// </summary>
         private async Task<ObjectIdRange> GetObjectIdRangeAsync(BsonDocument? filter)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.GetObjectIdRangeAsync");
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
 
             // Smallest ObjectId
@@ -64,8 +67,9 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// Generates time-based equidistant ObjectIds, then validates and adjusts ranges to ensure 
         /// each range has 1K-1M records. Returns empty list if total records < 1K.
         /// </summary>
-        public async Task<List<BsonValue>> GenerateEquidistantObjectIdsAsync(int count, BsonDocument? filter, MigrationSettings settings)
+        public async Task<List<BsonValue>> GenerateEquidistantObjectIdsAsync(int count, BsonDocument filter, MigrationSettings settings)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.GenerateEquidistantObjectIdsAsync: count={count}, ObjectIdPartitioner={settings.ObjectIdPartitioner}");
             const int MIN_RECORDS_PER_RANGE = 1000;
             const int MAX_RECORDS_PER_RANGE = 1000000;
             
@@ -73,9 +77,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(_timeoutSeconds));
 
             // Get total count first
-#pragma warning disable CS0618 // Type or member is obsolete
             var totalCount = await _collection.CountAsync(filter, cancellationToken: cts.Token);
-#pragma warning restore CS0618 // Type or member is obsolete
 
             // Return empty list if total records < 1K
             if (totalCount < MIN_RECORDS_PER_RANGE)
@@ -87,7 +89,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             if (settings.ObjectIdPartitioner == PartitionerType.UsePagination)
             {
                 long pageSize = totalCount / count;
-                return await GeneratePaginationBasedBoundaries(filter ?? new BsonDocument(), totalCount, pageSize, cts.Token);
+                return await GeneratePaginationBasedBoundaries(filter, totalCount, pageSize, cts.Token);
             }
 
             // Generate initial time-based equidistant boundaries
@@ -113,8 +115,9 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// <summary>
         /// Generates time-based equidistant ObjectIds (original algorithm).
         /// </summary>
-        private async Task<List<BsonValue>> GenerateTimeBasedBoundaries(int count, BsonDocument? filter, CancellationToken cancellationToken)
+        private async Task<List<BsonValue>> GenerateTimeBasedBoundaries(int count, BsonDocument filter, CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.GenerateTimeBasedBoundaries: count={count}");
             var result = new List<BsonValue>();
             if (count < 2)
             {
@@ -164,6 +167,7 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             long recordsPerRange,
             CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.GeneratePaginationBasedBoundaries: totalCount={totalCount}, recordsPerRange={recordsPerRange}");
             var result = new List<BsonValue>();
             
             // Calculate number of ranges needed
@@ -223,12 +227,13 @@ namespace OnlineMongoMigrationProcessor.Partitioner
         /// </summary>
         private async Task<List<BsonValue>> ValidateAndAdjustRanges(
             List<BsonValue> boundaries,
-            BsonDocument? filter,
+            BsonDocument filter,
             long totalCount,
             int minRecords,
             int maxRecords,
             CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.ValidateAndAdjustRanges: boundaries.Count={boundaries.Count}, totalCount={totalCount}, minRecords={minRecords}, maxRecords={maxRecords}");
             if (boundaries.Count < 2)
                 return boundaries;
 
@@ -246,10 +251,8 @@ namespace OnlineMongoMigrationProcessor.Partitioner
                     Builders<BsonDocument>.Filter.Gte("_id", startId),
                     Builders<BsonDocument>.Filter.Lt("_id", endId)
                 );
-
-#pragma warning disable CS0618 // Type or member is obsolete
+                
                 var count = await _collection.CountAsync(rangeFilter, cancellationToken: cancellationToken);
-#pragma warning restore CS0618 // Type or member is obsolete
                 rangeStats.Add((startId, endId, count));
             }
 
@@ -316,10 +319,11 @@ namespace OnlineMongoMigrationProcessor.Partitioner
             BsonValue startId,
             BsonValue endId,
             long recordCount,
-            BsonDocument? filter,
+            BsonDocument filter,
             int maxRecords,
             CancellationToken cancellationToken)
         {
+            MigrationJobContext.AddVerboseLog($"MongoObjectIdSampler.SplitLargeRange: recordCount={recordCount}, maxRecords={maxRecords}");
             var result = new List<BsonValue> { startId };
             
             // Calculate how many splits we need
