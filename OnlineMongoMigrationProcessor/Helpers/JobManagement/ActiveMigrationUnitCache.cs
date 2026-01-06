@@ -17,17 +17,21 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
         }
 
 
-        public MigrationUnit GetMigrationUnit(string migrationUnitId)
+        public MigrationUnit GetMigrationUnit(string migrationUnitId, string JobId=null)
         {
             MigrationJobContext.AddVerboseLog($"ActiveMigrationUnitsCache.GetMigrationUnit: migrationUnitId={migrationUnitId}, cacheCount={_migrationUnits.Count}");
             MigrationUnit? mu = null;
 
+
+            if(string.IsNullOrEmpty(JobId))
+                JobId= MigrationJobContext.CurrentlyActiveJob.Id;
+
             if (_migrationUnits.Count > 0)
-                mu = _migrationUnits.Find(x => x.Id == migrationUnitId);
+                mu = _migrationUnits.Find(x => x.Id == migrationUnitId && x.JobId== JobId);
 
             if (mu == null)
             {
-                mu = MigrationJobContext.GetMigrationUnitFromStorage(MigrationJobContext.CurrentlyActiveJob.Id, migrationUnitId);
+                mu = MigrationJobContext.GetMigrationUnitFromStorage(JobId, migrationUnitId);
 
                 if (mu != null)
                     _migrationUnits.Add(mu);
