@@ -31,7 +31,7 @@ namespace OnlineMongoMigrationProcessor.Processors
     {
 
         // RU-specific configuration
-        private static int MaxConcurrentPartitions => Environment.ProcessorCount * 5;
+        private static int MaxConcurrentPartitions => Math.Max(20,Environment.ProcessorCount * 5);
         private static readonly TimeSpan BatchDuration = TimeSpan.FromSeconds(60);
         private static readonly object _processingLock = new object();
         private readonly ParallelWriteHelper _parallelWriteHelper;

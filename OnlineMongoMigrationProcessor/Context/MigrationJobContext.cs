@@ -426,7 +426,7 @@ namespace OnlineMongoMigrationProcessor.Context
             if (MigrationJobContext.MigrationUnitsCache == null)
                 return MigrationJobContext.GetMigrationUnitFromStorage(jobId, key);
             else
-                return MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(key);
+                return MigrationJobContext.MigrationUnitsCache.GetMigrationUnit(key, jobId);
         }
 
         public static MigrationUnit GetMigrationUnitFromStorage(string jobId, string unitId)

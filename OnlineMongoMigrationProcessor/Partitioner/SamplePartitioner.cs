@@ -21,7 +21,7 @@ namespace OnlineMongoMigrationProcessor
 {
     public static class SamplePartitioner
     {
-        public static int MaxSegments = Environment.ProcessorCount * 5;
+        public static int MaxSegments = Math.Max(20,Environment.ProcessorCount * 5);
         public static int MaxSamples = 2000;
 
 
