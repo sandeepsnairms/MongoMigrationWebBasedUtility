@@ -126,7 +126,7 @@ namespace OnlineMongoMigrationProcessor
 
 
             // Perform initial setup required by MigrationProcessor
-            MigrationJobContext.ControlledPauseRequested = false;
+            MigrationJobContext.ResetControlledPause();
             ProcessRunning = true;
 
 
@@ -155,12 +155,7 @@ namespace OnlineMongoMigrationProcessor
             return TaskResult.Success;
         }     
 
-        public override void InitiateControlledPause()
-        {
-            base.InitiateControlledPause();
-            // Coordinator pause will be handled via MigrationJobContext.ControlledPauseRequested
-            _log.WriteLine("DumpRestoreProcessor: Controlled pause initiated");
-        }
+        
 
         public new void StopProcessing(bool updateStatus = true)
         {

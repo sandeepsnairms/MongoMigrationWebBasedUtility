@@ -1301,7 +1301,6 @@ namespace OnlineMongoMigrationProcessor
                 mu.DumpComplete = false;
 
                 MigrationJobContext.SaveMigrationUnit(mu, true);
-                //MigrationJobContext.ControlledPauseRequested = true;
 
                 HandleRestoreFailure(context, TaskResult.Canceled);
                 return false;
@@ -1570,15 +1569,15 @@ namespace OnlineMongoMigrationProcessor
                     var mu = MigrationJobContext.GetMigrationUnit(context.MigrationUnitId);
                     if (mu != null)
                     {
-                        _log.WriteLine($"Max retries for download complete : {mu.DatabaseName}.{mu.CollectionName}[{context.ChunkIndex}]", LogType.Error);
+                        _log.WriteLine($"Max retries for download : {mu.DatabaseName}.{mu.CollectionName}[{context.ChunkIndex}]", LogType.Error);
                     }
                     else
                     {
-                        _log.WriteLine($"Max retries for download complete : MU:{context.MigrationUnitId}[{context.ChunkIndex}]", LogType.Error);
+                        _log.WriteLine($"Max retries for download : MU:{context.MigrationUnitId}[{context.ChunkIndex}]", LogType.Error);
                     }
 
                     // Trigger controlled pause for manual intervention
-                    MigrationJobContext.ControlledPauseRequested = true;
+                    MigrationJobContext.RequestControlledPause("Max retries for download");
                 }
                 else
                 {
@@ -1628,7 +1627,7 @@ namespace OnlineMongoMigrationProcessor
                     }
 
                     // Trigger controlled pause
-                    MigrationJobContext.ControlledPauseRequested = true;
+                    MigrationJobContext.RequestControlledPause("Max retries for restore");
                 }
                 else
                 {
@@ -1729,7 +1728,7 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private bool IsAllWorkComplete()
         {
-            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.IsAllWorkComplete");
+            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.IsAllWorkComplete called");
             try
             {
                 return _activeMigrationUnits.IsEmpty &&

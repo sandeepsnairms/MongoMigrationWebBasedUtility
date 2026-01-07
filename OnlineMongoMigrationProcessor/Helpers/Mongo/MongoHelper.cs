@@ -927,6 +927,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
         public static async Task<bool> CheckCollectionExistsAsync(MongoClient client, string databaseName, string collectionName)
         {               
+            MigrationJobContext.AddVerboseLog($"Checking if collection exists: {databaseName}.{collectionName}");
 
             var db = client.GetDatabase(databaseName);
             var coll = db.GetCollection<RawBsonDocument>(collectionName);
@@ -986,6 +987,8 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
         public static async Task<(long CollectionSizeBytes, long DocumentCount)> GetCollectionStatsAsync(MongoClient client, string databaseName, string collectionName)
         {
+            MigrationJobContext.AddVerboseLog($"Getting collection stats for {databaseName}.{collectionName}");
+
             var database = client.GetDatabase(databaseName);
             var collection = database.GetCollection<BsonDocument>(collectionName);
 

@@ -15,7 +15,6 @@ param(
     [string]$StateStoreAppID = "",
     
     [Parameter(Mandatory=$true)]
-    [ValidateSet('eastus','eastus2','westus2','westus','centralus','northcentralus','southcentralus','westcentralus','northeurope','westeurope','francecentral','germanywestcentral','uksouth','ukwest','switzerlandnorth','norwayeast','eastasia','southeastasia','japaneast','japanwest','koreacentral','australiaeast','australiasoutheast','centralindia','southindia','brazilsouth','canadacentral','canadaeast','uaenorth','southafricanorth','swedencentral')]
     [string]$Location,
     
     [Parameter(Mandatory=$false)]
@@ -68,22 +67,10 @@ if ([string]::IsNullOrEmpty($StorageAccountName)) {
     Write-Host "Using generated storage account name: $StorageAccountName" -ForegroundColor Cyan
 }
 
-$supportedRegions = @(
-    'eastus','eastus2','westus2','westus','centralus','northcentralus','southcentralus','westcentralus',
-    'northeurope','westeurope','francecentral','germanywestcentral','uksouth','ukwest',
-    'switzerlandnorth','norwayeast','eastasia','southeastasia','japaneast','japanwest','koreacentral',
-    'australiaeast','australiasoutheast','centralindia','southindia','brazilsouth','canadacentral',
-    'canadaeast','uaenorth','southafricanorth','swedencentral'
-)
-
-if ($supportedRegions -contains $Location) {
-    Write-Host "Location '$Location' supports Azure Container Apps" -ForegroundColor Green
-} else {
-    Write-Host "Location '$Location' may not support Azure Container Apps" -ForegroundColor Red
-    Write-Host "Recommended regions include eastus, westus2, northeurope, eastasia" -ForegroundColor Yellow
-}
+Write-Host "Using location: $Location" -ForegroundColor Cyan
 
 Write-Host "`nStep 1: Deploying infrastructure (ACR, Storage Account, Managed Identity, Container Apps Environment)..." -ForegroundColor Yellow
+Write-Host "Note: This may take 3-5 minutes..." -ForegroundColor Gray
 
 $bicepParams = @(
     "deployment", "group", "create",
@@ -99,17 +86,38 @@ $bicepParams = @(
         "memoryGB=$MemoryGB"
 )
 
+Write-Host "Running: az deployment group create..." -ForegroundColor Gray
 az @bicepParams
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nError: Infrastructure deployment failed" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Infrastructure deployment completed successfully" -ForegroundColor Green
 
 Write-Host "`nStep 2: Checking if Docker image exists in ACR..." -ForegroundColor Yellow
 
 # Check if the image exists in ACR
 $ErrorActionPreference = 'Continue'
-$imageExists = az acr repository show-tags `
-    --name $AcrName `
-    --repository $AcrRepository `
-    --query "contains(@, '$ImageTag')" `
-    --output tsv 2>$null
+$imageExists = 'false'
+try {
+    $tags = az acr repository show-tags `
+        --name $AcrName `
+        --repository $AcrRepository `
+        --output json `
+        2>&1 | Where-Object { $_ -notmatch 'WARNING' -and $_ -notmatch 'not found' }
+    
+    if ($LASTEXITCODE -eq 0 -and $tags) {
+        $tagsList = $tags | ConvertFrom-Json
+        if ($tagsList -contains $ImageTag) {
+            $imageExists = 'true'
+        }
+    }
+}
+catch {
+    Write-Host "Repository not found or error checking tags. Will build image." -ForegroundColor Gray
+}
 $ErrorActionPreference = 'Stop'
 
 if ($imageExists -eq 'true') {
@@ -161,6 +169,47 @@ az @finalBicepParams
 Remove-Variable connString, secureConnString -ErrorAction Ignore
 
 Write-Host "`n=== Deployment Complete ===" -ForegroundColor Cyan
+
+# Deactivate old revisions to free up resources
+Write-Host "`nCleaning up old revisions..." -ForegroundColor Yellow
+$ErrorActionPreference = 'Continue'
+
+$latestRevision = az containerapp show `
+    --name $ContainerAppName `
+    --resource-group $ResourceGroupName `
+    --query "properties.latestRevisionName" `
+    --output tsv `
+    2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
+
+if ($latestRevision) {
+    Write-Host "Latest revision: $latestRevision" -ForegroundColor Cyan
+    
+    # Get all active revisions
+    $allRevisions = az containerapp revision list `
+        --name $ContainerAppName `
+        --resource-group $ResourceGroupName `
+        --query "[?properties.active==``true``].name" `
+        --output tsv `
+        2>&1 | Where-Object { $_ -notmatch 'cryptography' -and $_ -notmatch 'UserWarning' -and $_ -notmatch 'WARNING:' }
+    
+    if ($allRevisions) {
+        $revisionList = $allRevisions -split "`n" | Where-Object { $_ -and $_ -ne $latestRevision }
+        
+        foreach ($oldRevision in $revisionList) {
+            if ($oldRevision.Trim()) {
+                Write-Host "  Deactivating old revision: $oldRevision" -ForegroundColor Gray
+                az containerapp revision deactivate `
+                    --name $ContainerAppName `
+                    --resource-group $ResourceGroupName `
+                    --revision $oldRevision `
+                    2>&1 | Out-Null
+            }
+        }
+        Write-Host "Old revisions deactivated successfully" -ForegroundColor Green
+    }
+}
+
+$ErrorActionPreference = 'Stop'
 
 # Step 5: Verify the new image becomes active
 Write-Host "`nStep 5: Verifying new image deployment..." -ForegroundColor Yellow
@@ -228,7 +277,7 @@ while ($attemptCount -lt $maxAttempts -and -not $isReady) {
                 
                 # Verify all conditions are met
                 $imageMatches = $currentImage -eq $imageName
-                $statesOk = ($runningState -eq "Running") -and ($provisioningState -eq "Provisioned") -and ($healthState -eq "Healthy")
+                $statesOk = ($runningState -eq "RunningAtMaxScale" -or $runningState -eq "Running") -and ($provisioningState -eq "Provisioned") -and ($healthState -eq "Healthy")
                 $correctReplicaCount = $activeReplicaCount -eq $expectedReplicaCount
                 
                 if ($imageMatches -and $statesOk -and $correctReplicaCount) {
@@ -239,6 +288,7 @@ while ($attemptCount -lt $maxAttempts -and -not $isReady) {
                     Write-Host "  Health state: $healthState" -ForegroundColor Green
                     Write-Host "  Active replicas: $activeReplicaCount (expected: $expectedReplicaCount)" -ForegroundColor Green
                     Write-Host "  Image verified: $currentImage" -ForegroundColor Green
+                    break
                 } else {
                     if (-not $imageMatches) {
                         Write-Host "  Waiting for image to be deployed..." -ForegroundColor Yellow

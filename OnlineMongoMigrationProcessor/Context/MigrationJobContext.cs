@@ -26,15 +26,44 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static string ActiveMigrationJobId { get; set; }
 
-        public static bool ControlledPauseRequested { get; set; } = false;
+        public static bool ControlledPauseRequested { get; private set; } = false;
 
+        public static void ResetControlledPause()
+        {
+            AddVerboseLog($"Resetting controlled pause request.");
+            ControlledPauseRequested = false;
+        }
+
+        public static void RequestControlledPause(string location)
+        {
+            if (_log == null)
+                throw new Exception("Log not initialized.");
+
+            _log.WriteLine($"{location} caused controlled pause - processing will stop after at logical point.", LogType.Warning);
+
+            ControlledPauseRequested = true;
+        }
+
+        public static void UpdateLogLevel(LogType level, MigrationJob job)
+        {
+            if (CurrentlyActiveJob == null || CurrentlyActiveJob.IsCancelled || CurrentlyActiveJob.IsCompleted)
+            {
+                job.LogLevel = level;
+                SaveMigrationJob(job);
+            }
+            else
+            {
+                CurrentlyActiveJob.LogLevel = level;
+                SaveMigrationJob(CurrentlyActiveJob);
+            }
+        }
 
         public static void AddVerboseLog(string message) 
         {
-            if (Log == null || CurrentlyActiveJob==null || CurrentlyActiveJob.IsCancelled || CurrentlyActiveJob.IsCompleted)
+            if (_log == null || CurrentlyActiveJob==null || CurrentlyActiveJob.IsCancelled || CurrentlyActiveJob.IsCompleted)
                 return;
 
-             Log?.WriteLine(message, LogType.Verbose);
+             _log?.WriteLine(message, LogType.Verbose);
         }
 
         /// <summary>
@@ -42,21 +71,23 @@ namespace OnlineMongoMigrationProcessor.Context
         /// to prevent state from previous jobs from interfering.
         /// Kills any leftover mongodump/mongorestore processes from previous jobs.
         /// </summary>
-        public static void ResetJobState(Log log = null)
+        public static void ResetJobState()
         {
             // Kill any leftover processes from previous job
-            KillTrackedProcesses(log);
+            KillTrackedProcesses();
             
             // Clear the lists
             ActiveDumpProcessIds.Clear();
             ActiveRestoreProcessIds.Clear();
             ControlledPauseRequested = false;
+
+            _log = null;
         }
         
         /// <summary>
         /// Kills all tracked mongodump and mongorestore processes.
         /// </summary>
-        private static void KillTrackedProcesses(Log log = null)
+        private static void KillTrackedProcesses()
         {
             int killedCount = 0;
             
@@ -69,7 +100,6 @@ namespace OnlineMongoMigrationProcessor.Context
                     {
                         process.Kill(entireProcessTree: true);
                         killedCount++;
-                        MigrationJobContext.AddVerboseLog($"Killed leftover process PID {pid}");
                     }
                 }
                 catch (ArgumentException)
@@ -78,13 +108,7 @@ namespace OnlineMongoMigrationProcessor.Context
                 }
                 catch (Exception ex)
                 {
-                    MigrationJobContext.AddVerboseLog($"Error killing process {pid}: {ex.Message}");
                 }
-            }
-            
-            if (killedCount > 0)
-            {
-                MigrationJobContext.AddVerboseLog($"Killed {killedCount} leftover mongodump/mongorestore processes");
             }
         }
 
@@ -101,19 +125,18 @@ namespace OnlineMongoMigrationProcessor.Context
         // Cached instance of the currently active migration job for consistency across the application
         private static MigrationJob? _cachedCurrentlyActiveJob = null;
 
-        private static Log _log;
-        public static Log? Log
+        private static Log _log;       
+        
+        public static void InitializeLog(Log log)
         {
-            get => _log;
-            set
+            if (_log == null)
             {
-                if (_log == null && value != null)
-                {
-                    _log = value;
-                }
+                _log = log;
             }
+            AddVerboseLog("Initialized MigrationJobContext log.");
         }
-  
+
+
         /// <summary>
         /// Gets the currently active migration job with intelligent caching
         /// </summary>
