@@ -18,6 +18,17 @@ namespace OnlineMongoMigrationProcessor.Context
         private static readonly object _writeJobLock = new object();
         private static readonly object _writeJobListLock = new object();
 
+        private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
+        private static readonly Dictionary<string, string> _targetConnectionStrings = new();
+
+        // In-memory cache of migration jobs to ensure consistency
+        private static Dictionary<string, MigrationJob> MigrationJobs { get; set; } = new Dictionary<string, MigrationJob>();
+
+        // Cached instance of the currently active migration job for consistency across the application
+        private static MigrationJob? _cachedCurrentlyActiveJob = null;
+
+        private static Log _log;
+
         public static ActiveMigrationUnitsCache MigrationUnitsCache { get; set; }
 
         // Track OS process IDs for mongodump and mongorestore to enable cleanup
@@ -27,6 +38,11 @@ namespace OnlineMongoMigrationProcessor.Context
         public static string ActiveMigrationJobId { get; set; }
 
         public static bool ControlledPauseRequested { get; private set; } = false;
+
+        public static ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
+        public static ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
+
+        public static JobList JobList { get; private set; }
 
         public static void ResetControlledPause()
         {
@@ -74,23 +90,25 @@ namespace OnlineMongoMigrationProcessor.Context
         public static void ResetJobState()
         {
             // Kill any leftover processes from previous job
-            KillTrackedProcesses();
+            KillAllMigrationProcesses();
             
             // Clear the lists
             ActiveDumpProcessIds.Clear();
             ActiveRestoreProcessIds.Clear();
             ControlledPauseRequested = false;
-
+            MigrationUnitsCache = new ActiveMigrationUnitsCache();
             _log = null;
         }
         
         /// <summary>
-        /// Kills all tracked mongodump and mongorestore processes.
+        /// Kills all tracked mongodump and mongorestore processes, plus any orphaned processes by name.
         /// </summary>
-        private static void KillTrackedProcesses()
+        public static void KillAllMigrationProcesses()
         {
-            int killedCount = 0;
+            int killedTracked = 0;
+            int killedOrphaned = 0;
             
+            // First, kill tracked processes by PID
             foreach (int pid in ActiveDumpProcessIds.Concat(ActiveRestoreProcessIds))
             {
                 try
@@ -99,7 +117,7 @@ namespace OnlineMongoMigrationProcessor.Context
                     if (!process.HasExited)
                     {
                         process.Kill(entireProcessTree: true);
-                        killedCount++;
+                        killedTracked++;
                     }
                 }
                 catch (ArgumentException)
@@ -108,24 +126,41 @@ namespace OnlineMongoMigrationProcessor.Context
                 }
                 catch (Exception ex)
                 {
+                    // Log error but continue
                 }
             }
+            
+            // Second, kill any orphaned mongodump/mongorestore processes by name
+            try
+            {
+                string[] processNames = { "mongodump", "mongorestore" };
+                foreach (string processName in processNames)
+                {
+                    var processes = System.Diagnostics.Process.GetProcessesByName(processName);
+                    foreach (var process in processes)
+                    {
+                        try
+                        {
+                            if (!process.HasExited)
+                            {
+                                process.Kill(entireProcessTree: true);
+                                killedOrphaned++;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Continue killing other processes even if one fails
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log error but don't throw - this is cleanup code
+            }            
+            
         }
 
-        private static readonly Dictionary<string, string> _sourceConnectionStrings = new();
-        private static readonly Dictionary<string, string> _targetConnectionStrings = new();
-
-        public static ConnectionAccessor SourceConnectionString => new(_sourceConnectionStrings);
-        public static ConnectionAccessor TargetConnectionString => new(_targetConnectionStrings);
-
-        public static JobList JobList {  get; private set; }
-        // In-memory cache of migration jobs to ensure consistency
-        private static Dictionary<string, MigrationJob> MigrationJobs { get; set; } = new Dictionary<string, MigrationJob>();
-        
-        // Cached instance of the currently active migration job for consistency across the application
-        private static MigrationJob? _cachedCurrentlyActiveJob = null;
-
-        private static Log _log;       
         
         public static void InitializeLog(Log log)
         {

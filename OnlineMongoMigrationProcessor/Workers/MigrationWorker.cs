@@ -128,6 +128,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _log.WriteLine("StopMigration called - cancelling all tokens and stopping processor", LogType.Debug);
                 _cts?.Cancel();
                 _compare_cts?.Cancel();
+                
+                // Kill all active mongodump and mongorestore processes
+                MigrationJobContext.KillAllMigrationProcesses();
+                
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 _migrationCancelled = true;
                 _migrationProcessor?.StopProcessing();
@@ -1268,11 +1272,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             if (MigrationJobContext.ControlledPauseRequested)
             {
-                _log.WriteLine("Controlled pause requested - stopping migration processor", LogType.Info);
-                _migrationProcessor?.StopProcessing(true);
-                ProcessRunning = false;
-                JobStarting = false;
-                StopMigration();
+                _log.WriteLine("Controlled pause detected, skipping processing..", LogType.Warning);
+                //_migrationProcessor?.StopProcessing(true);
+                //ProcessRunning = false;
+                //JobStarting = false;
+                //StopMigration();
                 return true;
             }
             return false;
@@ -1282,6 +1286,8 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             try
             {
+                
+
                 if (!InitializeJob())
                     return;
 
@@ -1369,6 +1375,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics = new List<MigrationUnitBasic>();
             }
+
+            // Kill all active mongodump and mongorestore processes
+            MigrationJobContext.KillAllMigrationProcesses();
 
             MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
             return true;

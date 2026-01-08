@@ -53,6 +53,7 @@ namespace OnlineMongoMigrationProcessor
         /// Delegate for notifying when a migration unit completes dump/restore processing
         /// </summary>
         public delegate void MigrationUnitCompletedHandler(MigrationUnit mu);
+        public delegate void PendingTasksCompletedHandler();
 
         private readonly object _initLock = new object();
         private string? _jobId;
@@ -80,6 +81,9 @@ namespace OnlineMongoMigrationProcessor
         private bool _timerStarted = false;
         private CancellationTokenSource? _processCts;
         private MigrationUnitCompletedHandler? _onMigrationUnitCompleted;
+        private PendingTasksCompletedHandler? _onPendingTasksCompleted;
+
+        private bool _processNewTasks = true;
 
         // Work item class for chunk processing
         private class ChunkWorkItem : IComparable<ChunkWorkItem>
@@ -118,11 +122,13 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="log">Logger instance</param>
         /// <param name="mongoToolsFolder">Optional path to mongo tools folder</param>
         /// <param name="onMigrationUnitCompleted">Optional callback invoked when a migration unit completes</param>
-        public void Initialize(string jobId, Log log, string? mongoToolsFolder = null, MigrationUnitCompletedHandler? onMigrationUnitCompleted = null)
+        public void Initialize(string jobId, Log log, string? mongoToolsFolder = null, MigrationUnitCompletedHandler? onMigrationUnitCompleted = null, PendingTasksCompletedHandler? onPendingTasksCompleted=null)
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.Initialize: jobId={jobId}, mongoToolsFolder={mongoToolsFolder}");
             try
             {
+                Reset();
+
                 lock (_initLock)
                 {
                     if (_coordinatorInitialized)
@@ -132,6 +138,8 @@ namespace OnlineMongoMigrationProcessor
                     _log = log;
                     _mongoToolsFolder = mongoToolsFolder;
                     _onMigrationUnitCompleted = onMigrationUnitCompleted;
+                    _onPendingTasksCompleted = onPendingTasksCompleted;
+                    _processNewTasks = true;
 
                     // Calculate optimal concurrency
                     int maxDumpWorkers, maxRestoreWorkers;
@@ -368,6 +376,7 @@ namespace OnlineMongoMigrationProcessor
 
                     // Clear callbacks
                     _onMigrationUnitCompleted = null;
+                    _onPendingTasksCompleted = null;
 
                     // Reset state flags
                     _coordinatorInitialized = false;
@@ -405,28 +414,28 @@ namespace OnlineMongoMigrationProcessor
                 // Check for cancellation or pause
                 if (_processCts?.Token.IsCancellationRequested == true || MigrationJobContext.ControlledPauseRequested)
                 {
-                    if (_processTimer != null && _timerStarted)
+                    if (_processTimer != null && _timerStarted && _processNewTasks)
                     {
-                        _processTimer.Stop();
-                        _timerStarted = false;
-                        _log?.WriteLine("Controlled pause or cancellation detected - stopped coordination timer", LogType.Info);
+                        _processNewTasks = false;
+
+                        _log?.WriteLine("Controlled pause detected - stopped processing new tasks.", LogType.Warning);
                     }
-                    return;
+                    //return;
                 }
 
-                ProcessPendingDumps();
-                ProcessPendingRestores();
+                if (_processNewTasks)
+                { 
+                    ProcessPendingDumps();
+                    ProcessPendingRestores();
+                }
+
                 CheckForCompletedMigrationUnits();
 
                 // Stop timer if all work is done
                 if (IsAllWorkComplete())
                 {
-                    if (_processTimer != null && _timerStarted)
-                    {
-                        _processTimer.Stop();
-                        _timerStarted = false;
-                        _log?.WriteLine("Offline complete - stopped coordination timer", LogType.Debug);
-                    }
+                    _onPendingTasksCompleted?.Invoke();
+                    StopCoordinatedProcessing();                   
                 }
             }
             catch (Exception ex)
@@ -456,6 +465,19 @@ namespace OnlineMongoMigrationProcessor
 
 
                 var mu= MigrationJobContext.GetMigrationUnit(ctx.MigrationUnitId);
+                
+                // Validate migration unit and chunks exist
+                if (mu == null)
+                {
+                    throw new InvalidOperationException($"MigrationUnit {ctx.MigrationUnitId} not found in context");
+                }
+                
+                if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
+                {
+                    _log?.WriteLine($"Cannot start coordinated process for {mu.DatabaseName}.{mu.CollectionName} - no chunks available (may have failed during partitioning)", LogType.Warning);
+                    return;
+                }
+                
                 // Add to active migration units
                 var tracker = new MigrationUnitTracker
                 {
@@ -830,7 +852,7 @@ namespace OnlineMongoMigrationProcessor
             if (mu == null)
             {
                 _log?.WriteLine($"Coordinator: MigrationUnit not found in cache for context {context.MigrationUnitId}[{context.ChunkIndex}]", LogType.Warning);
-                HandleDownloadFailure(context, TaskResult.Retry);
+                HandleDumpFailure(context, TaskResult.Retry);
                 _dumpPool?.Release();
                 return;
             }
@@ -846,7 +868,7 @@ namespace OnlineMongoMigrationProcessor
                 // Check cancellation
                 if (_processCts?.Token.IsCancellationRequested == true)
                 {
-                    HandleDownloadFailure(context, TaskResult.Canceled);
+                    HandleDumpFailure(context, TaskResult.Canceled);
                     return;
                 }
 
@@ -879,7 +901,7 @@ namespace OnlineMongoMigrationProcessor
                 }
                 else
                 {
-                    HandleDownloadFailure(context, TaskResult.Retry);
+                    HandleDumpFailure(context, TaskResult.Retry);
                 }
             }
             catch (OperationCanceledException)
@@ -888,7 +910,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _log?.WriteLine($"Coordinator: Dump cancelled for {dbName}.{colName}[{chunkIndex}]", LogType.Debug);
                 }
-                HandleDownloadFailure(context, TaskResult.Canceled);
+                HandleDumpFailure(context, TaskResult.Canceled);
             }
             catch (Exception ex)
             {
@@ -896,7 +918,7 @@ namespace OnlineMongoMigrationProcessor
                 {
                     _log?.WriteLine($"Coordinator: Error dumping {dbName}.{colName}[{chunkIndex}]: {Helper.RedactPii(ex.Message)}", LogType.Error);
                 }
-                HandleDownloadFailure(context, TaskResult.Retry, ex);
+                HandleDumpFailure(context, TaskResult.Retry, ex);
             }
             finally
             {
@@ -985,7 +1007,7 @@ namespace OnlineMongoMigrationProcessor
                 if (!MigrationJobContext.ControlledPauseRequested)
                 {
                     _log?.WriteLine($"Dump file not found after dump for {mu.DatabaseName}.{mu.CollectionName}[{context.ChunkIndex}]", LogType.Warning);
-                    HandleDownloadFailure(context, TaskResult.Retry);
+                    HandleDumpFailure(context, TaskResult.Retry);
                 }
                 return;
             }
@@ -1006,6 +1028,10 @@ namespace OnlineMongoMigrationProcessor
             // Remove from download manifest
             _downloadManifest.TryRemove(context.Id, out _);
 
+            if(MigrationJobContext.ControlledPauseRequested)
+            {
+                return; // Skip preparing restore list during controlled pause
+            }
             // Prepare restore list after successful dump
             PrepareRestoreList(mu, context.SourceConnectionString, context.TargetConnectionString);
         }
@@ -1143,7 +1169,7 @@ namespace OnlineMongoMigrationProcessor
 
             if (mu == null)
             {
-                _log?.WriteLine($"Coordinator: MigrationUnit not found in cache for context {context.MigrationUnitId}[{context.ChunkIndex}]", LogType.Warning);
+                // MigrationUnit not yet registered - reset to Pending and let it retry naturally
                 HandleRestoreFailure(context, TaskResult.Retry);
                 _restorePool?.Release();
                 return;
@@ -1217,7 +1243,7 @@ namespace OnlineMongoMigrationProcessor
                         if (mu.MigrationChunks[chunkIndex].IsUploaded == true)
                         {
                             MigrationJobContext.SaveMigrationUnit(mu, true);
-                            HandleRestoreSuccess(context);
+                            ProcessRestoreSuccess(context);
                         }
                         else
                         {
@@ -1279,7 +1305,7 @@ namespace OnlineMongoMigrationProcessor
             // Small delay to simulate processing time
             try { Task.Delay(50, _processCts?.Token ?? CancellationToken.None).Wait(); } catch { }
 
-            HandleRestoreSuccess(context);
+            ProcessRestoreSuccess(context);
         }
 
         /// <summary>
@@ -1439,7 +1465,7 @@ namespace OnlineMongoMigrationProcessor
             // Finalize restore chunk
             FinalizeRestoreChunk(mu, chunkIndex, dumpFilePath);
 
-            HandleRestoreSuccess(context);
+            ProcessRestoreSuccess(context);
         }
 
         /// <summary>
@@ -1525,9 +1551,9 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Handles successful restore completion
         /// </summary>
-        private void HandleRestoreSuccess(DumpRestoreProcessContext context)
+        private void ProcessRestoreSuccess(DumpRestoreProcessContext context)
         {
-            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.HandleRestoreSuccess: muId={context.MigrationUnitId}, chunkIndex={context.ChunkIndex}");
+            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.ProcessRestoreSuccess: muId={context.MigrationUnitId}, chunkIndex={context.ChunkIndex}");
             var mu = MigrationJobContext.GetMigrationUnit(context.MigrationUnitId);
             int chunkIndex = context.ChunkIndex;
 
@@ -1549,12 +1575,15 @@ namespace OnlineMongoMigrationProcessor
         /// <summary>
         /// Handles download failure with retry logic
         /// </summary>
-        private void HandleDownloadFailure(DumpRestoreProcessContext context, TaskResult result, Exception? ex = null)
+        private void HandleDumpFailure(DumpRestoreProcessContext context, TaskResult result, Exception? ex = null)
         {
-            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.HandleDownloadFailure: muId={context.MigrationUnitId}, chunkIndex={context.ChunkIndex}, result={result}");
+            MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.HandleDumpFailure: muId={context.MigrationUnitId}, chunkIndex={context.ChunkIndex}, result={result}");
 
             if (MigrationJobContext.ControlledPauseRequested)
+            {
+                _downloadManifest.TryRemove(context.Id, out _);
                 return;
+            }
 
             try
             {
@@ -1606,6 +1635,13 @@ namespace OnlineMongoMigrationProcessor
         private void HandleRestoreFailure(DumpRestoreProcessContext context, TaskResult result, Exception? ex = null)
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.HandleRestoreFailure: muId={context.MigrationUnitId}, chunkIndex={context.ChunkIndex}, result={result}");
+
+            if (MigrationJobContext.ControlledPauseRequested)
+            {
+                _uploadManifest.TryRemove(context.Id, out _);
+                return;
+            }
+
             try
             {
                 context.LastError = ex;
@@ -1731,9 +1767,22 @@ namespace OnlineMongoMigrationProcessor
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.IsAllWorkComplete called");
             try
             {
-                return _activeMigrationUnits.IsEmpty &&
-                       _downloadManifest.IsEmpty &&
-                       _uploadManifest.IsEmpty;
+                if (!_processNewTasks)
+                {
+                    int totalDumpProcessing = _downloadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
+                    int totalRestoreProcessing = _uploadManifest.Count(kvp => kvp.Value.State == ProcessState.Processing);
+
+                    if(totalDumpProcessing +totalRestoreProcessing > 0)
+                        return false;
+                    else
+                        return true;
+                }
+                else
+                {
+                    return _activeMigrationUnits.IsEmpty &&
+                           _downloadManifest.IsEmpty &&
+                           _uploadManifest.IsEmpty;
+                }
             }
             catch (Exception ex)
             {
@@ -1756,7 +1805,7 @@ namespace OnlineMongoMigrationProcessor
                     {
                         _processTimer.Stop();
                         _timerStarted = false;
-                        _log?.WriteLine("Stopped coordination timer", LogType.Info);
+                        _log?.WriteLine("Offline processing terminated.", LogType.Info);
                     }
 
                     // Clear manifests

@@ -29,6 +29,16 @@ namespace OnlineMongoMigrationProcessor
             
         }
 
+        private void OnPendingTasksCompleted()
+        {
+            MigrationJobContext.AddVerboseLog("DumpRestoreProcessor.OnPendingTasksCompleted: all pending tasks completed");
+
+            if (MigrationJobContext.ControlledPauseRequested)
+            {
+                StopProcessing();
+            }
+        }
+
         /// <summary>
         /// Callback invoked by coordinator when a migration unit completes dump/restore.
         /// Handles post-processing like change stream setup.
@@ -105,7 +115,8 @@ namespace OnlineMongoMigrationProcessor
                     _jobId,
                     _log,
                     MongoToolsFolder,
-                    onMigrationUnitCompleted: OnMigrationUnitCompleted
+                    onMigrationUnitCompleted: OnMigrationUnitCompleted,
+                    onPendingTasksCompleted: OnPendingTasksCompleted
                 );
             }
 
