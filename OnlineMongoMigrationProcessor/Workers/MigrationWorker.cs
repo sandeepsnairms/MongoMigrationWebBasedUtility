@@ -1,5 +1,6 @@
 using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Configuration;
 using Newtonsoft.Json;
 using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
@@ -307,6 +308,14 @@ namespace OnlineMongoMigrationProcessor.Workers
                     return TaskResult.Abort;
                 }
 
+            }
+            else
+            {
+                //// Connect to the MongoDB server
+                var client = MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], true, _config.CACertContentsForSourceServer ?? string.Empty);
+                var version = MongoHelper.GetServerVersion(client);
+                MigrationJobContext.CurrentlyActiveJob.SourceServerVersion = version;
+                MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
             }
 
             // Ensure complete cleanup of old processor before creating new one

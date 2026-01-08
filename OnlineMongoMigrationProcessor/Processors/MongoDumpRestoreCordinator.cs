@@ -1,4 +1,5 @@
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Serializers;
 using MongoDB.Driver;
 using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
@@ -872,9 +873,9 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-                // Prepare dump environment
-                //string folder = PrepareDumpFolder(dbName, colName);
+                // Prepare dump environment                
                 string dumpFilePath = GetDumpFilePath(dbName, colName, chunkIndex, true);
+                MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator GetDumpFilePath={dumpFilePath}");
 
                 // Build dump arguments with query
                 var dumpArgs = await BuildDumpArgumentsAsync(
@@ -884,6 +885,8 @@ namespace OnlineMongoMigrationProcessor
                     dbName,
                     colName
                 );
+                MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator DumpArgs={Helper.RedactPii(dumpArgs.args)} Count={dumpArgs.docCount}");
+
 
                 // Execute dump
                 bool success = await ExecuteDumpProcessAsync(
@@ -951,7 +954,19 @@ namespace OnlineMongoMigrationProcessor
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.BuildDumpArgumentsAsync: collection={dbName}.{colName}, chunkIndex={chunkIndex}");
             // Build base dump arguments
-            string args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";
+            string args;
+
+            //3.6 doesn't like --db when filter is also there
+            if (MigrationJobContext.CurrentlyActiveJob.SourceServerVersion.StartsWith("3"))
+            {
+                var embeddedConnStr = Helper.EmbedDatabaseNameInConnectionString(sourceConnectionString, dbName);
+                args = $" --uri=\"{embeddedConnStr}\" --gzip --collection=\"{colName}\" --archive";
+            }
+            else
+            {
+                args = $" --uri=\"{sourceConnectionString}\" --gzip --db={dbName} --collection=\"{colName}\" --archive";
+            }
+
 
             // Build query and get doc count
             var queryResult = await BuildDumpQueryAsync(mu, chunkIndex, args, sourceConnectionString);

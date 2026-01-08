@@ -114,6 +114,27 @@ namespace OnlineMongoMigrationProcessor
               
         }
 
+        public static string EmbedDatabaseNameInConnectionString(string connectionString, string database)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                throw new ArgumentException("Connection string cannot be null or empty.", nameof(connectionString));
+
+            if (string.IsNullOrWhiteSpace(database))
+                throw new ArgumentException("Database name cannot be null or empty.", nameof(database));
+
+            // Pattern:
+            // Capture everything up to host[:port]
+            // Optional existing database
+            // Optional query string
+            var pattern = @"^(mongodb(?:\+srv)?://[^/]+)(?:/[^?]*)?(.*)$";
+
+            return Regex.Replace(
+                connectionString,
+                pattern,
+                $"$1/{database}$2",
+                RegexOptions.IgnoreCase
+            );
+        }
 
         public static string EncodeMongoPasswordInConnectionString(string connectionString)
         {
@@ -283,9 +304,9 @@ namespace OnlineMongoMigrationProcessor
             }
 
 
-            if (! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home//")))
+            if (! string.IsNullOrEmpty(homePath) && System.IO.Directory.Exists(Path.Combine(homePath, "home\\")))
             {
-                _workingFolder = Path.Combine(homePath, "home//");
+                _workingFolder = Path.Combine(homePath, "home\\");
             }
             return _workingFolder;
         }
