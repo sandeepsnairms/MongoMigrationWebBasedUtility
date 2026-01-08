@@ -209,7 +209,7 @@ Remove-Variable connString, secureConnString
 ### Required Parameters
 
 | Parameter | Description | Example |
-|-----------|-------------|---------|------
+|-----------|-------------|---------|
 | `ResourceGroupName` | Name of the Azure resource group | `MongoMigrationRG` |
 | `ContainerAppName` | Name of the Container App | `mongomigration` |
 | `Location` | Azure region (must support Container Apps) | `eastus` |
