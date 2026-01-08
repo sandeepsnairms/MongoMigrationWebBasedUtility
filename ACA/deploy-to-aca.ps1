@@ -32,7 +32,13 @@ param(
     
     [Parameter(Mandatory=$false)]
     [ValidateRange(2, 64)]
-    [int]$MemoryGB = 32
+    [int]$MemoryGB = 32,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$InfrastructureSubnetResourceId = "",
+    
+    [Parameter(Mandatory=$true)]
+    [string]$OwnerTag
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,8 +89,15 @@ $bicepParams = @(
         "location=$Location",
         "storageAccountName=$StorageAccountName",
         "vCores=$VCores",
-        "memoryGB=$MemoryGB"
+        "memoryGB=$MemoryGB",
+        "ownerTag=$OwnerTag"
 )
+
+# Add VNet configuration if provided
+if (-not [string]::IsNullOrEmpty($InfrastructureSubnetResourceId)) {
+    Write-Host "VNet integration enabled with subnet: $InfrastructureSubnetResourceId" -ForegroundColor Cyan
+    $bicepParams += "infrastructureSubnetResourceId=$InfrastructureSubnetResourceId"
+}
 
 Write-Host "Running: az deployment group create..." -ForegroundColor Gray
 az @bicepParams
@@ -161,10 +174,22 @@ $finalBicepParams = @(
         "stateStoreAppID=$StateStoreAppID",
         "stateStoreConnectionString=`"$connString`"",
         "aspNetCoreEnvironment=Development",
-        "imageTag=$ImageTag"
+        "imageTag=$ImageTag",
+        "ownerTag=$OwnerTag"
 )
 
+# Add VNet configuration if provided
+if (-not [string]::IsNullOrEmpty($InfrastructureSubnetResourceId)) {
+    $finalBicepParams += "infrastructureSubnetResourceId=$InfrastructureSubnetResourceId"
+}
+
 az @finalBicepParams
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nError: Container App deployment failed" -ForegroundColor Red
+    Remove-Variable connString, secureConnString -ErrorAction Ignore
+    exit 1
+}
 
 Remove-Variable connString, secureConnString -ErrorAction Ignore
 
