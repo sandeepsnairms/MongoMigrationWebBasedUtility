@@ -270,13 +270,7 @@ namespace MongoMigrationWebApp.Service
             MigrationWorker?.StopMigration();
         }
 
-        /// <summary>
-        /// Initiates controlled pause - stops accepting new chunks but allows current chunks to complete
-        /// </summary>
-        public void ControlledPauseMigration()
-        {
-            MigrationWorker?.ControlledPauseMigration();
-        }
+
 
         /// <summary>
         /// Checks if controlled pause is applicable for the given job type and current job state
