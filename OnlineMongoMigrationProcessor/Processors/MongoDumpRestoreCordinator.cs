@@ -1801,11 +1801,20 @@ namespace OnlineMongoMigrationProcessor
             {
                 lock (_timerLock)
                 {
-                    if (_processTimer != null && _timerStarted)
+                    if (_processTimer != null)
                     {
-                        _processTimer.Stop();
-                        _timerStarted = false;
-                        _log?.WriteLine("Offline processing terminated.", LogType.Info);
+                        if (_timerStarted)
+                        {
+                            _processTimer.Stop();
+                            _timerStarted = false;
+                        }
+                        
+                        // Properly dispose of the timer to stop all callbacks
+                        _processTimer.Elapsed -= OnTimerTick;
+                        _processTimer.Dispose();
+                        _processTimer = null;
+                        
+                        _log?.WriteLine("Offline processing terminated and timer disposed.", LogType.Info);
                     }
 
                     // Clear manifests

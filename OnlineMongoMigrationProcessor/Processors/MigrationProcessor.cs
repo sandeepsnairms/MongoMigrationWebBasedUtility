@@ -52,7 +52,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             _migrationWorker = migrationWorker;
         }
 
-        public void StopProcessing(bool updateStatus = true)
+        public virtual void StopProcessing(bool updateStatus = true)
         {
             MigrationJobContext.AddVerboseLog($"MigrationProcessor.StopProcessing: updateStatus={updateStatus}");
 

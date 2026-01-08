@@ -134,9 +134,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                 
                 MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
                 _migrationCancelled = true;
-                _migrationProcessor?.StopProcessing();
+                
+                // Force complete cleanup of processor
+                if (_migrationProcessor != null)
+                {
+                    _migrationProcessor.StopProcessing(true);
+                    _migrationProcessor = null;
+                }
+                
                 ProcessRunning = false;
-                _migrationProcessor = null;
                 MigrationJobContext.ResetControlledPause(); // Reset controlled pause flag
                 MigrationJobContext.MigrationUnitsCache = null;
                 
@@ -206,6 +212,39 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
         }
 
+        /// <summary>
+        /// Ensures complete cleanup of the existing migration processor before creating a new one.
+        /// Cancels all active operations, stops the processor, and reinitializes cancellation tokens.
+        /// </summary>
+        private async Task CleanupExistingProcessorAsync()
+        {
+            if (_migrationProcessor != null)
+            {
+                _log.WriteLine("Stopping existing processor before creating new one", LogType.Debug);
+                try
+                {
+                    // Cancel any active operations
+                    _cts?.Cancel();
+                    _compare_cts?.Cancel();
+                    
+                    // Stop the processor with full cleanup
+                    _migrationProcessor.StopProcessing(true);
+                    _migrationProcessor = null;
+                    
+                    // Give time for cleanup to complete
+                    await Task.Delay(1000);
+                    
+                    // Create new cancellation tokens for the new job
+                    _cts = new CancellationTokenSource();
+                    _compare_cts = new CancellationTokenSource();
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"Error during processor cleanup: {ex.Message}", LogType.Warning);
+                }
+            }
+        }
+
         private async Task<TaskResult> PrepareForMigration()
         {
             _log.WriteLine("PrepareForMigration started", LogType.Debug);
@@ -270,9 +309,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             }
 
-        _migrationProcessor?.StopProcessing(false);
+            // Ensure complete cleanup of old processor before creating new one
+            await CleanupExistingProcessorAsync();
 
-        _migrationProcessor = null;
             _log.WriteLine($"Creating migration processor for JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}", LogType.Debug);
             switch (MigrationJobContext.CurrentlyActiveJob.JobType)
             {
