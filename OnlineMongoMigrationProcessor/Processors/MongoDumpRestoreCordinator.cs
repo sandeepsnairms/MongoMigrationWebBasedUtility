@@ -198,7 +198,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                log?.WriteLine($"Error initializing MongoDumpRestoreCordinator: {Helper.RedactPii(ex.Message)}\n{ex.StackTrace}", LogType.Error);
+                log?.WriteLine($"Error initializing MongoDumpRestoreCordinator: {ex}", LogType.Error);
                 throw;
             }
         }
@@ -227,7 +227,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error adjusting dump workers: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error adjusting dump workers: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -255,7 +255,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error adjusting restore workers: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error adjusting restore workers: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -271,7 +271,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error adjusting insertion workers: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error adjusting insertion workers: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -293,7 +293,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error getting coordinator stats: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error getting coordinator stats: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 return (0, 0, 0);
             }
         }
@@ -312,7 +312,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error checking job completion: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error checking job completion: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 return false;
             }
         }
@@ -332,7 +332,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error checking migration unit completion: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error checking migration unit completion: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 return false;
             }
         }
@@ -393,7 +393,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error resetting MongoDumpRestoreCordinator: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error resetting MongoDumpRestoreCordinator: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -441,7 +441,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error in timer tick: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log.WriteLine($"Error in timer tick: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
             finally
             {
@@ -513,7 +513,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error starting coordinated process: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error starting coordinated process: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 throw;
             }
         }
@@ -567,7 +567,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error preparing download list for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error preparing download list for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -665,7 +665,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error preparing restore list for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error preparing restore list for {mu.DatabaseName}.{mu.CollectionName}: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -752,7 +752,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error processing pending dumps: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error processing pending dumps: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -838,7 +838,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error processing pending restores: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error processing pending restores: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -919,7 +919,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (!MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log?.WriteLine($"Coordinator: Error dumping {dbName}.{colName}[{chunkIndex}]: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                    _log?.WriteLine($"Coordinator: Error dumping {dbName}.{colName}[{chunkIndex}]: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 }
                 HandleDumpFailure(context, TaskResult.Retry, ex);
             }
@@ -1074,7 +1074,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error building dump query: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error building dump query: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 throw;
             }
         }
@@ -1279,7 +1279,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 if (!MigrationJobContext.ControlledPauseRequested)
                 {
-                    _log?.WriteLine($"Coordinator: Error restoring {dbName}.{colName}[{chunkIndex}]: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                    _log?.WriteLine($"Coordinator: Error restoring {dbName}.{colName}[{chunkIndex}]: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 }
                 HandleRestoreFailure(context, TaskResult.Retry, ex);
             }
@@ -1559,7 +1559,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Failed to delete dump file {dumpFilePath}: {Helper.RedactPii(ex.Message)}", LogType.Debug);
+                _log?.WriteLine($"Failed to delete dump file {dumpFilePath}: {Helper.RedactPii(ex.ToString())}", LogType.Debug);
             }
         }
 
@@ -1638,9 +1638,9 @@ namespace OnlineMongoMigrationProcessor
                     }
                 }
             }
-            catch (Exception handlerEx)
+            catch (Exception e)
             {
-                _log?.WriteLine($"Error handling download failure: {Helper.RedactPii(handlerEx.Message)}", LogType.Error);
+                _log?.WriteLine($"Error handling download failure: {Helper.RedactPii(e.ToString())}", LogType.Error);
             }
         }
 
@@ -1697,7 +1697,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception handlerEx)
             {
-                _log?.WriteLine($"Error handling restore failure: {Helper.RedactPii(handlerEx.Message)}", LogType.Error);
+                _log?.WriteLine($"Error handling restore failure: {Helper.RedactPii(handlerEx.ToString())}", LogType.Error);
             }
         }
 
@@ -1720,7 +1720,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error updating migration unit tracker: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error updating migration unit tracker: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -1770,7 +1770,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error checking for completed migration units: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error checking for completed migration units: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
@@ -1801,7 +1801,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error checking if offline is complete: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error checking if offline is complete: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 return false;
             }
         }
@@ -1840,7 +1840,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error stopping coordinated processing: {Helper.RedactPii(ex.Message)}", LogType.Error);
+                _log?.WriteLine($"Error stopping coordinated processing: {Helper.RedactPii(ex.ToString())}", LogType.Error);
             }
         }
 
