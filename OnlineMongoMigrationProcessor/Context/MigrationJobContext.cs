@@ -405,7 +405,7 @@ namespace OnlineMongoMigrationProcessor.Context
                     }
                     catch (JsonException ex)
                     {
-                        errorMessage = $"Error deserializing Job List: {ex.Message}";
+                        errorMessage = $"Error deserializing Job List. Details: {ex}";
                     }
                     finally
                     {

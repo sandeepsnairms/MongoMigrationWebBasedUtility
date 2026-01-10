@@ -142,7 +142,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch(Exception ex) 
             {
-                Console.WriteLine($"[CRITICAL] Log write failed: {message} | Error: {ex.Message}");
+                Console.WriteLine($"[CRITICAL] Log write failed: {message} | Error: {ex}");
             }
         }
         public void Dispose()

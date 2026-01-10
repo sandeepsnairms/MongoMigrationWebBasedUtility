@@ -208,7 +208,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"Resume token setup task failed for {collectionKey}: {ex.Message}", LogType.Error);
+                    _log.WriteLine($"Resume token setup task failed for {collectionKey}. Details: {ex}", LogType.Error);
                 }
             }
         }
@@ -241,7 +241,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"Error during processor cleanup: {ex.Message}", LogType.Warning);
+                    _log.WriteLine($"Error during processor cleanup. Details: {ex}", LogType.Warning);
                 }
             }
         }
@@ -284,6 +284,17 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                 }
             }
+
+            try
+            {
+                string version = MongoHelper.GetServerVersion(_sourceClient);
+            }
+            catch
+            {
+                _log.WriteLine("Failed to connect to source server. Please verify the connection string and network connectivity.", LogType.Error);
+                return TaskResult.Retry;
+            }
+
 
 
             if (Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
@@ -450,8 +461,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"EXCEPTION in CreatePartitionsAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
-                _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                _log.WriteLine($"Error in CreatePartitionsAsync for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
                 throw;
             }
         }
@@ -500,7 +510,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     catch (Exception ex)
                     {
-                        _log.WriteLine($"Error in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
+                        _log.WriteLine($"Error in SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
                     }
                 });
                     
@@ -511,7 +521,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Error creating async task for SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
+                _log.WriteLine($"Error creating async task for SetChangeStreamResumeTokenAsync for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
             }
             
            
@@ -547,8 +557,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"ERROR: Exception in GetMigrationUnitsToMigrate: {ex.Message}", LogType.Error);
-                _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                _log.WriteLine($"Error in GetMigrationUnitsToMigrate. Details: {ex}", LogType.Error);
                 throw;
             }
 
@@ -601,8 +610,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"Error processing migration unit {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
-                    _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                    _log.WriteLine($"Error processing migration unit {mu.DatabaseName}.{mu.CollectionName}. Details:{ex}", LogType.Error);
                     throw;
                 }
             }
@@ -734,7 +742,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"Error checking if {mu.DatabaseName}.{mu.CollectionName} is a collection, assuming it is: {ex.Message}", LogType.Warning);
+                    _log.WriteLine($"Error checking if {mu.DatabaseName}.{mu.CollectionName} is a collection. Details: {ex}", LogType.Warning);
                     isCollection = true;
                 }
 
@@ -750,8 +758,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             catch (Exception ex)
             {
-                _log.WriteLine($"Exception during collection validation for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Error);
-                _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                _log.WriteLine($"Error during collection validation for {mu.DatabaseName}.{mu.CollectionName}.Details: {ex}", LogType.Error);
                 throw;
             }
         }
@@ -1219,7 +1226,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     }
                     catch (Exception ex)
                     {
-                        _log.WriteLine($"Keep-alive call failed: {ex.Message}", LogType.Debug);
+                        _log.WriteLine($"Keep-alive call failed. Details: {ex}", LogType.Debug);
                     }
                 }
 
@@ -1764,8 +1771,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             catch (Exception ex)
             {
 
-                _log.WriteLine($"Error chunking collection {databaseName}.{collectionName}: {ex.Message}", LogType.Error);
-                _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                _log.WriteLine($"Error chunking collection {databaseName}.{collectionName}. Details: {ex}", LogType.Error);
                 return (new List<MigrationChunk>(), false);
             }
         }
@@ -1880,8 +1886,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
                 catch (Exception ex)
                 {
-                    _log.WriteLine($"ERROR processing data type {dataType} for {databaseName}.{collectionName}: {ex.Message}", LogType.Error);
-                    _log.WriteLine($"Stack trace: {ex.StackTrace}", LogType.Error);
+                    _log.WriteLine($"Error processing data type {dataType} for {databaseName}.{collectionName}. Details: {ex}", LogType.Error);
                     throw;
                 }
             }

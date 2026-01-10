@@ -137,7 +137,7 @@ namespace MongoMigrationWebApp.Service
             }
             catch (Exception ex)
             {
-                Helper.LogToFile($"Error updating WebAppBaseUrl from browser: {ex.Message}");
+                Helper.LogToFile($"Error updating WebAppBaseUrl from browser. Details: {ex}");
             }
         }
 

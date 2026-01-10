@@ -181,7 +181,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                log.WriteLine($"MongoDB tools not available: {ex.Message}", LogType.Error);
+                log.WriteLine($"MongoDB tools not available: {ex.ToString()}", LogType.Error);
                 return false;
             }
         }
@@ -792,7 +792,7 @@ namespace OnlineMongoMigrationProcessor
                 catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
                 {
                     attempt++;
-                    //Log($"{ex.GetType().Name} attempt {attempt}/{maxRetries} for {filePath}: {ex.Message}");
+
 
                     if (attempt >= maxRetries)
                     {
