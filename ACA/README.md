@@ -679,6 +679,29 @@ The update script will:
 - ✅ Intelligent image reuse - skips rebuild if image already exists
 - ✅ Simpler command with fewer parameters required
 
+### Updating Secrets (Connection Strings)
+
+If you need to update the StateStore connection string after initial deployment:
+
+Update via Azure Portal
+
+1. Navigate to your Container App in the Azure Portal
+2. Under **Settings**, click **Secrets**
+3. Find and edit the secret (e.g., `statestore-connection`)
+4. Paste your new MongoDB connection string
+5. Click **Save**
+6. Run the update script to restart the app with new secrets:
+
+
+Restart the app to pick up new secrets
+
+```
+.\update-aca-app.ps1 `
+  -ResourceGroupName "<resource-group-name>" `
+  -ContainerAppName "<container-app-name>" `
+  -AcrName "<acr-name>"
+```
+
 ### Update with Full Redeployment
 
 Deploy updated configuration with all parameters (use this when you need to change environment variables or infrastructure):
