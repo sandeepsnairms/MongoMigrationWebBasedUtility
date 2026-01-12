@@ -180,19 +180,18 @@ python main.py --config-file <config.json> --source-uri <source_connection_strin
 
 ### Add a New Job
 
-1. Go to the home page: `https://<WebAppName>.azurewebsites.net` and click **New Job**.  
+1. Go to the home page. Click **New Job**.  
 2. In the **New Job Details** pop-up, enter all required information.  
 3. Refer to [Collections input formats](#collections-input-formats) to learn multiple ways to input collection list for migration. If necessary, use the [list collection steps](#get-list-of-collections) to create a comma-separated list of collection names.  
 4. Choose the migration tool: either **Mongo Dump/Restore** or **Mongo Driver**.  
 5. Select the desired [migration mode](#migration-modes).
-1. Select **Post Migration Sync Back** to enable syncing back to the source after migration, this helps reduce risk by allowing a rollback to the original server if needed.
 1. Select **Append Mode** to preserve existing collection(s) on the target without deleting them.  
 1. Select **Skip Indexes** to prevent the tool from copying indexes from the source.
 1. Once all fields are filled, select **OK**.  
 1. The job will automatically start if no other jobs are running.  
 
 
-**Note:** For the Mongo Dump/Restore option, the Web App will download the mongo-tools from the URL specified in the Web App settings. Ensure that the Web App has access to this URL. If the Web App does not have internet access, you can download the mongo-tools zip file to your development machine, then copy it to the wwwroot folder inside the published folder before compressing it. Afterward, update the URL in the Web App settings to point to the Web App’s URL (e.g., https://<WebAppName>.azurewebsites.net/<zipfilename.zip>).
+**Note for Azure Web App deployments:** For the Mongo Dump/Restore option, the Web App will download the mongo-tools from the URL specified in the Web App settings. Ensure that the Web App has access to this URL. If the Web App does not have internet access, you can download the mongo-tools zip file to your development machine, then copy it to the wwwroot folder inside the published folder before compressing it. Afterward, update the URL in the Web App settings to point to the Web App's URL (e.g., https://<WebAppName>.azurewebsites.net/<zipfilename.zip>). This note does not apply to Azure Container Apps (ACA) deployments, where mongo-tools are pre-installed in the container image.
 
 
 ### Migration modes
@@ -319,6 +318,7 @@ This is different from "Time Since Last Change" which shows when the last actual
 
 
 ### Update Web App Settings
+
 These settings are persisted per app instance and affect all jobs:
 
 - Mongo tools download URL
@@ -345,6 +345,7 @@ These settings are persisted per app instance and affect all jobs:
 
 - Sample size for hash comparison
     - Range: 5–2000. Used by the “Run Hash Check” feature to spot-check document parity.
+
 - ObjectId Partitioner
     - Choose the partitioning method for ObjectId-based collections:
       - **Use Sample Command**: Uses MongoDB's $sample command (best for small collections)
@@ -447,7 +448,7 @@ The migration tool offers two pause mechanisms with different behaviors:
 **Behavior**:
 - Cancellation token is immediately triggered
 - All active workers check the cancellation token and exit as soon as possible
-- Currently executing `mongodump`/`mongorestore` processes are **killed immediately**
+- Currently executing processes are **killed immediately**
 - In-progress chunks may be left incomplete
 - Job state is saved with partial progress
 
@@ -459,7 +460,7 @@ The migration tool offers two pause mechanisms with different behaviors:
 
 **Resume Behavior**:
 - Job resumes from the last saved state
-- Incomplete chunks are retried from the beginning
+- Incomplete chunks are retried from the beginning (Note: Processing incomplete chunks is time-consuming as duplicate records prevent batch transactions and make the process extremely slow)
 - Change streams resume from last saved token
 
 #### Controlled Pause (Graceful Stop)
@@ -469,19 +470,11 @@ The migration tool offers two pause mechanisms with different behaviors:
 **Behavior**:
 - Sets `_controlledPauseRequested` flag to true
 - Active workers **complete their current chunks** before exiting
-- No new chunks are dequeued from the work queue
-- `mongodump`/`mongorestore` processes finish naturally
+- No new tasks are queued
+- Existing processes finish naturally
 - All progress is saved cleanly
 - When dump completes during controlled pause, **restore does NOT auto-start**
 
-**Log Messages**:
-```
-DumpRestoreProcessor: Controlled pause - no new chunks will be queued
-Dump worker 1: Controlled pause active - exiting
-Dump worker 2: Controlled pause active - exiting
-All dump chunks completed during controlled pause
-{dbName}.{colName} dump complete, but controlled pause active - restore will not start automatically
-```
 
 **When to Use**:
 - Planned maintenance window approaching
@@ -508,21 +501,6 @@ All dump chunks completed during controlled pause
 | **Resume Efficiency** | Some chunks retry | Maximum efficiency |
 | **Use Case** | Emergency | Planned pause |
 
-#### Best Practices
-
-**For Controlled Pause**:
-1. Allow 1-2 minutes for workers to complete current chunks
-2. Monitor logs to confirm all workers have exited cleanly
-3. Verify job status shows "Paused" before closing browser
-
-**For Immediate Pause**:
-1. Use when time is critical
-2. Expect some chunks to be reprocessed on resume
-3. Check for any killed process remnants if issues persist
-
-**Note**: Both pause types respect the job lifecycle. On resume, the job continues from its saved state. For online migrations, change streams automatically resume from the last saved token.
-
----
 
 ### Multiple Partitioners for ObjectId and Benefits of Selecting DataType for _id
 
