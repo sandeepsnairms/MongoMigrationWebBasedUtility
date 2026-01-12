@@ -791,8 +791,6 @@ Notes:
 ]
 ```
 
-
-
 ## RU-optimized copy (Cosmos DB source)
 
 - Reduce RU consumption when reading from Cosmos DB for MongoDB (RU) by using change-feed-like incremental reads and partition batching. This method skips index creation during the copy; use the schema migration script at https://aka.ms/mongoruschemamigrationscript to create the indexes on the target collections. It focuses on efficient incremental ingestion. Collection filters are not supported.
@@ -804,10 +802,6 @@ Notes:
 - Consider deploying behind VNet integration and/or Private Endpoint (see earlier sections) to restrict access.
 - **Entra ID Authentication (Optional)**: You can configure Entra ID-based authentication for your Azure Web App to ensure only valid users can access the migration tool. This adds an additional layer of security by requiring users to authenticate with their organizational credentials. For configuration details, see [Azure App Service Authentication](https://learn.microsoft.com/en-us/azure/static-web-apps/authentication-authorization).
 
-## Logs, backup, and recovery
-
-- Logs: Each job writes under `migrationlogs`. From Job Viewer you can download the current log or a backup if corruption is detected.
-- Job state: Persisted under `migrationjobs\list.json` with rotating backups every few minutes. Use the “Recover Jobs” button on Home to restore from the best available backup snapshot. This stops any running jobs and replaces the in-memory list with the recovered state.
 
 ## Performance tips
 
@@ -818,6 +812,6 @@ Notes:
 
 ## Troubleshooting
 
-- “Unable to load job details” on Home: Use “Recover Jobs” to restore the latest healthy snapshot.
 - Change stream lag not decreasing: Confirm the job is running, source writes exist, and consider increasing plan size or reducing concurrent collections.
 - RU-optimized copy stalls: Validate source is Cosmos DB Mongo vCore, ensure no partition split warnings, and verify target write capacity.
+- **ACA deployment - App not loading**: If the application is not loading in Azure Container Apps deployment, open the browser console using F12 (Developer Tools). If you see an error stating "statestore connection is invalid", update the connection string following the steps provided in the [ACA README](ACA/README.md).
