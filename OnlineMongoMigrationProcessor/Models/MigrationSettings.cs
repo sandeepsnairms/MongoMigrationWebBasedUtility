@@ -51,7 +51,7 @@ namespace OnlineMongoMigrationProcessor
 					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
 					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 120 : loadedObject.ChangeStreamBatchDuration;
                     ChangeStreamBatchDurationMin = loadedObject.ChangeStreamBatchDurationMin == 0 ? 30 : loadedObject.ChangeStreamBatchDurationMin;
-                    ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 15 : loadedObject.ChangeStreamMaxCollsInBatch;
+                    ChangeStreamMaxCollsInBatch = loadedObject.ChangeStreamMaxCollsInBatch == 0 ? 5 : loadedObject.ChangeStreamMaxCollsInBatch;
                     MongoCopyPageSize = loadedObject.MongoCopyPageSize;
                     CompareSampleSize = loadedObject.CompareSampleSize == 0 ? 50 : loadedObject.CompareSampleSize;
                     LogPageSize = loadedObject.LogPageSize == 0 ? 5000 : loadedObject.LogPageSize;
@@ -73,7 +73,7 @@ namespace OnlineMongoMigrationProcessor
             {
                 ReadBinary = false;
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
-                ChunkSizeInMb = 5120;
+                ChunkSizeInMb = 512;
 				MongoCopyPageSize = 500;
 				ChangeStreamMaxDocsInBatch = 10000;
                 ChangeStreamBatchDuration = 120;

@@ -1111,7 +1111,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
 
 
-                foreach (MigrationUnit mub in units)
+                foreach (var mub in units)
                 {
                     var mu= MigrationJobContext.GetMigrationUnit(mub.Id);
 
