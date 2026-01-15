@@ -93,18 +93,15 @@ namespace OnlineMongoMigrationProcessor
 
             DriveInfo drive = new DriveInfo(Path.GetPathRoot(directoryPath));
             double freeSpaceInMb = drive.AvailableFreeSpace / (1024.0 * 1024);
-
-            // Check if the total disk available is less than 5 GB
+            MigrationJobContext.AddVerboseLog($"CanProceedWithDownloads returned false: directoryPath={directoryPath}, spaceRequiredInMb={spaceRequiredInMb}, freeSpaceInMb={freeSpaceInMb}");
+            freeSpaceGB = Math.Round(freeSpaceInMb / 1024, 2);
+            // Check if the total disk available is less than spaceRequiredInMb
             if (freeSpaceInMb < spaceRequiredInMb)
             {
                 // Get disk space info
-
-
                 DirectoryInfo dirInfo = Directory.GetParent(directoryPath)?.Parent.Parent;
-
-                folderSizeInGB = Math.Round(GetFolderSizeInGB(dirInfo.FullName), 2);
-                freeSpaceGB = Math.Round(freeSpaceInMb /1024, 2);
-                MigrationJobContext.AddVerboseLog($"CanProceedWithDownloads returned false: directoryPath={directoryPath}, spaceRequiredInMb={spaceRequiredInMb}");
+                folderSizeInGB = Math.Round(GetFolderSizeInGB(dirInfo.FullName), 2);               
+                
                 return false;
             }
             else
