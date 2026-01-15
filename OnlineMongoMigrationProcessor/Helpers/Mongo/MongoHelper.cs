@@ -356,10 +356,19 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
         public static long GetDocumentCount(IMongoCollection<BsonDocument> collection, BsonValue? gte, BsonValue? lte, DataType dataType, BsonDocument userFilterDoc, bool skipDataTypeFilter = false)
         {
-            FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType,userFilterDoc, skipDataTypeFilter);
-                        
-            // Execute the query and return the count with 10 minute timeout
-            return collection.CountDocuments(filter, new CountOptions { MaxTime = TimeSpan.FromMinutes(10) });           
+            MigrationJobContext.AddVerboseLog($"Processing GetDocumentCount for {collection.CollectionNamespace}  with gte={gte.ToJson()}, lte={gte.ToJson()}, datatype={dataType},userFilterDoc={userFilterDoc.ToJson()} ");
+            try
+            {
+                FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType, userFilterDoc, skipDataTypeFilter);
+
+                // Execute the query and return the count with 10 minute timeout
+                return collection.CountDocuments(filter, new CountOptions { MaxTime = TimeSpan.FromMinutes(10) });
+            }
+            catch(Exception ex)
+            {
+                MigrationJobContext.AddVerboseLog($"Exception in GetDocumentCount. Details:{ex}");
+                throw(ex);
+            }
         }
 
         public static long GetDocumentCount(

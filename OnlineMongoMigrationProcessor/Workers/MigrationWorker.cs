@@ -170,6 +170,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 dumpRestoreProcessor.AdjustDumpWorkers(newCount);
             }
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -182,6 +183,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 dumpRestoreProcessor.AdjustRestoreWorkers(newCount);
             }
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         /// <summary>
@@ -194,6 +196,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 dumpRestoreProcessor.AdjustInsertionWorkers(newCount);
             }
+            MigrationJobContext.SaveMigrationJob(MigrationJobContext.CurrentlyActiveJob);
         }
 
         public async Task WaitForResumeTokenTask(string collectionKey)

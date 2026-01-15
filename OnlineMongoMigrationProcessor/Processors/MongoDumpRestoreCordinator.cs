@@ -225,6 +225,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Update current value in context for UI monitoring
                 MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = validatedCount;
+                MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses = validatedCount;
 
                 _log?.WriteLine($"Dump workers adjusted to {validatedCount}");
             }
@@ -253,6 +254,7 @@ namespace OnlineMongoMigrationProcessor
 
                 // Update current value in context for UI monitoring
                 MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = validatedCount;
+                MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses = validatedCount;
 
                 _log?.WriteLine($"Restore workers adjusted to {validatedCount}");
             }
