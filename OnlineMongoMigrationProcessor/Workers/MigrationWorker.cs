@@ -20,6 +20,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using ZstdSharp.Unsafe;
 
 
 namespace OnlineMongoMigrationProcessor.Workers
@@ -506,7 +507,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         }
 
-                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts);                            
+                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts,false);                            
                     }
                     catch (Exception ex)
                     {
@@ -818,7 +819,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 _ = Task.Run(async () =>
                 {
-                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, syncBack, _cts);
+                    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, 30, syncBack, _cts,false);
                 });
 
                 context.ServerLevelResumeTokenSet = true;
