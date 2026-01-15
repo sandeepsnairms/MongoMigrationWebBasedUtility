@@ -1034,6 +1034,41 @@ az storage file list `
   --output table
 ```
 
+### Increase Disk Space
+
+If the application reports **"Disk space is running low"** error, you can increase the Azure File Share size:
+
+```powershell
+# Check current quota/size
+az storage share show `
+  --account-name <storageAccountName> `
+  --name migration-data `
+  --query "properties.quota" `
+  --output tsv
+
+# Increase the quota (size in GB)
+# For example, increase to 200GB:
+az storage share update `
+  --account-name <storageAccountName> `
+  --name migration-data `
+  --quota 200
+
+# Verify the new size
+az storage share show `
+  --account-name <storageAccountName> `
+  --name migration-data `
+  --query "properties.quota" `
+  --output tsv
+```
+
+**Notes**:
+- The default deployment creates a 100GB Azure File Share
+- You can increase up to 100TB (102,400 GB) for standard storage accounts
+- **The change takes effect immediately** - No Container App restart or revision update required
+- The mounted volume automatically reflects the new capacity
+- Pricing is based on provisioned size, not used space - see [Azure Files Pricing](https://azure.microsoft.com/pricing/details/storage/files/)
+- Monitor disk usage through the application's monitoring interface to plan capacity increases
+
 ## Cost Optimization Tips
 
 1. **Right-size resources** - Start with smaller vCores/memory configurations and increase only if needed
