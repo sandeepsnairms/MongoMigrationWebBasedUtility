@@ -1450,7 +1450,7 @@ namespace OnlineMongoMigrationProcessor
             );
 
             // Handle timeout by splitting chunk if needed
-            if (!countSuccess || docCount > 25000000)
+            if (!countSuccess || docCount > 25000000 || chunkIndex=0)
             {
                 var result = HandleCountTimeoutWithChunkSplit(mu, chunkIndex, sourceCollection, userFilterDoc, sourceConnectionString, targetConnectionString,!countSuccess);
                 docCount = result.docCount;
