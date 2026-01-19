@@ -64,6 +64,11 @@ namespace OnlineMongoMigrationProcessor.Persistence
                     if (!collectionNames.Contains(LOG_Collection))
                     {
                         _database.CreateCollectionAsync(LOG_Collection).GetAwaiter().GetResult();
+                        
+                        // Create ascending index on JobId for logfiles collection
+                        var indexKeysDefinition = Builders<BsonDocument>.IndexKeys.Ascending("JobId");
+                        var indexModel = new CreateIndexModel<BsonDocument>(indexKeysDefinition);
+                        _logCollection.Indexes.CreateOne(indexModel);
                     }
 
                     _appId = appId;
