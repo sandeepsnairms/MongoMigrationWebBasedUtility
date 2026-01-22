@@ -2,6 +2,8 @@
 
 This guide explains how to deploy the MongoDB Migration Web-Based Utility to Azure Container Apps using the `aca_main.bicep` template. ACA provides enterprise-grade dedicated compute resources and persistent storage for high-performance migrations.
 
+![ACA Architecture](ACA_architecture.png)
+
 ## Deployment Scripts Overview
 
 Two PowerShell scripts are provided for different deployment scenarios:
