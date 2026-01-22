@@ -1464,7 +1464,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
 
             targetConnectionString = Helper.UpdateAppName(targetConnectionString, 
-                $"MSFTMongoWebMigration{Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob)}-" + MigrationJobContext.CurrentlyActiveJob.Id);
+                $"MSFTMongoWebMigration-{Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob)}-" + MigrationJobContext.CurrentlyActiveJob.Id);
+
+            // Store the modified connection strings back to MigrationJobContext so they're used throughout the migration
+            MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id] = sourceConnectionString;
+            MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id] = targetConnectionString;
 
             return (sourceConnectionString, targetConnectionString);
         }

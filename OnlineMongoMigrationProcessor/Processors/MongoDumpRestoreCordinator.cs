@@ -1586,6 +1586,9 @@ namespace OnlineMongoMigrationProcessor
                         colName
                     );
 
+                    // Warm up connection to target collection with async findOne
+                    _ = WarmUpTargetConnectionAsync(context.TargetConnectionString, dbName, colName);
+
                     // Execute restore
                     bool success = await ExecuteRestoreProcessAsync(
                         mu,
@@ -1754,6 +1757,28 @@ namespace OnlineMongoMigrationProcessor
                 MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection,
                 MigrationJobContext.CurrentlyActiveJob.CurrentInsertionWorkers
             );
+        }
+
+        /// <summary>
+        /// Warms up connection to the target collection by performing an async findOne operation.
+        /// This runs in the background and does not block the restore operation.
+        /// </summary>
+        private async Task WarmUpTargetConnectionAsync(string targetConnectionString, string dbName, string colName)
+        {
+            try
+            {
+                var targetClient = MongoClientFactory.Create(_log, targetConnectionString);
+                var targetDb = targetClient.GetDatabase(dbName);
+                var targetCollection = targetDb.GetCollection<BsonDocument>(colName);
+                
+                // Perform a findOne to warm up the connection
+                await targetCollection.Find(new BsonDocument()).Limit(1).FirstOrDefaultAsync();
+            }
+            catch (Exception ex)
+            {
+                // Log but don't fail - this is just a warm-up operation
+                _log?.WriteLine($"WarmUp findOne for {dbName}.{colName} failed: {Helper.RedactPii(ex.Message)}", LogType.Debug);
+            }
         }
 
         /// <summary>
