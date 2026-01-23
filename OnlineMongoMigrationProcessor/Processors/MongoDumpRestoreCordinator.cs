@@ -648,10 +648,7 @@ namespace OnlineMongoMigrationProcessor
             if (overwrite)
             {
                 //Ensure previous dump file(if any) is removed before fresh dump
-                if (File.Exists(dumpFilePath))
-                {
-                    try { File.Delete(dumpFilePath); } catch { }
-                }
+                try { StorageStreamFactory.DeleteIfExists(dumpFilePath); } catch { }
             }
 
             return dumpFilePath;
@@ -661,7 +658,7 @@ namespace OnlineMongoMigrationProcessor
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.CheckDumpDownloaded: collection={mu.DatabaseName}.{mu.CollectionName}, chunkIndex={chunkIndex}");
             string dumpFilePath = GetDumpFilePath(mu, chunkIndex);
-            return File.Exists(dumpFilePath);
+            return StorageStreamFactory.Exists(dumpFilePath);
         }
 
         /// <summary>
@@ -833,6 +830,11 @@ namespace OnlineMongoMigrationProcessor
 
         private bool HasSufficientDiskSpace()
         {
+            // When using Azure Blob Storage with Entra ID, skip disk space check
+            // as blob storage has virtually unlimited capacity
+            if (StorageStreamFactory.UseBlobStorage)
+                return true;
+
             lock (_diskSpaceCheckLock)
             {
                 //check if current time is less than paused till
@@ -1046,7 +1048,7 @@ namespace OnlineMongoMigrationProcessor
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.PrepareDumpFolder: database={dbName}, collection={colName}");
             string folder = Path.Combine(_mongoDumpOutputFolder, _jobId ?? "", Helper.SafeFileName($"{dbName}.{colName}"));
-            Directory.CreateDirectory(folder);
+            StorageStreamFactory.EnsureDirectoryExists(folder);
             return folder;
         }
 
@@ -1683,7 +1685,7 @@ namespace OnlineMongoMigrationProcessor
             var mu = MigrationJobContext.GetMigrationUnit(context.MigrationUnitId);
 
             var dumpFilePath = GetDumpFilePath(mu, context.ChunkIndex);
-            if (!File.Exists(dumpFilePath))
+            if (!StorageStreamFactory.Exists(dumpFilePath))
             {
                 int chunkIndex = context.ChunkIndex;
 
@@ -1923,10 +1925,7 @@ namespace OnlineMongoMigrationProcessor
             // Delete dump file
             try
             {
-                if (File.Exists(dumpFilePath))
-                {
-                    File.Delete(dumpFilePath);
-                }
+                StorageStreamFactory.DeleteIfExists(dumpFilePath);
             }
             catch (Exception ex)
             {
