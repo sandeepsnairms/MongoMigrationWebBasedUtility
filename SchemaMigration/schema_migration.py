@@ -270,6 +270,16 @@ class SchemaMigration:
                     })
                     continue
                 
+                # ── Rule: Compound wildcard indexes not supported ──
+                if self._is_compound_wildcard_index(index_keys):
+                    self._print_warning(f"---- [SKIPPED] Index '{index_name}': Compound wildcard indexes are not supported")
+                    self.structural_incompatibilities.append({
+                        'collection': collection_ns,
+                        'index_name': index_name,
+                        'reason': 'Compound indexes mixing wildcard ($**) with other fields are not supported.'
+                    })
+                    continue
+                
                 # ── Rule: Multiple hashed fields in compound not supported (#43) ──
                 hashed_field_count = sum(1 for _, direction in index_keys if direction == 'hashed')
                 if hashed_field_count > 1:
@@ -280,9 +290,6 @@ class SchemaMigration:
                         'reason': f'A maximum of one hashed field is allowed per index but found {hashed_field_count}.'
                     })
                     continue
-                
-                # Transform hashed indexes to regular composite indexes
-                index_keys, was_hashed = self._transform_hashed_index(index_keys, index_name)
                 
                 # ── Rule: Cannot mix sparse and partialFilterExpression (#35) ──
                 if 'sparse' in index_options and 'partialFilterExpression' in index_options:
@@ -304,11 +311,6 @@ class SchemaMigration:
                 # Transform partialFilterExpression if present
                 if 'partialFilterExpression' in index_options:
                     self._print_verbose(f"  Processing partialFilterExpression for index: {index_name}")
-                    
-                    # Rule: Transform implicit $and (multi-field conditions) to explicit $and (#31)
-                    index_options['partialFilterExpression'] = self._normalize_partial_filter_to_top_level_and(
-                        index_options['partialFilterExpression'], index_name
-                    )
                     
                     transformed, is_compatible, issues = self._transform_partial_filter_expression(
                         index_options['partialFilterExpression'],
@@ -346,45 +348,6 @@ class SchemaMigration:
         self._report_structural_incompatibilities()
         
         self._print_verbose(f"Migration completed for all {len(collection_configs)} collection(s)")
-
-    def _transform_hashed_index(
-            self,
-            index_keys: List[Tuple[str, Any]],
-            index_name: str) -> Tuple[List[Tuple[str, Any]], bool]:
-        """
-        Transform hashed indexes to regular composite indexes.
-        
-        DocumentDB does not support hashed indexes, so indexes like 
-        { "partition": "hashed", "_id": "hashed" } are converted to regular 
-        ascending indexes (e.g., { "partition": 1, "_id": 1 }).
-        
-        :param index_keys: The original index keys as a list of tuples
-        :param index_name: The index name for reporting
-        :return: Tuple of (transformed_keys, was_transformed)
-        """
-        transformed_keys = []
-        was_hashed = False
-        hashed_fields = []
-        
-        for field, direction in index_keys:
-            if direction == 'hashed':
-                # Convert hashed to ascending (1)
-                transformed_keys.append((field, 1))
-                was_hashed = True
-                hashed_fields.append(field)
-            else:
-                transformed_keys.append((field, direction))
-        
-        if was_hashed:
-            original_keys_str = ', '.join([f"'{f}': 'hashed'" for f, d in index_keys if d == 'hashed'])
-            new_keys_str = ', '.join([f"'{f}': 1" for f in hashed_fields])
-            self._print_warning(f"---- [MODIFIED] Index '{index_name}': Converted hashed index to regular composite index")
-            self._print_warning(f"         Hashed fields converted: {{{original_keys_str}}} -> {{{new_keys_str}}}")
-            self._print_verbose(f"  Transformed hashed index '{index_name}' to regular composite index")
-            self._print_verbose(f"    Original keys: {index_keys}")
-            self._print_verbose(f"    Transformed keys: {transformed_keys}")
-        
-        return transformed_keys, was_hashed
 
     def _transform_partial_filter_expression(
             self,
@@ -639,71 +602,22 @@ class SchemaMigration:
         
         return has_geo and has_regular
 
-    def _normalize_partial_filter_to_top_level_and(
-            self,
-            partial_filter: Dict[str, Any],
-            index_name: str) -> Dict[str, Any]:
+    def _is_compound_wildcard_index(self, index_keys: List[Tuple[str, Any]]) -> bool:
         """
-        Normalize a partialFilterExpression that has multiple top-level field conditions
-        with operators into an explicit top-level $and.
+        Check if an index is a compound index that mixes a wildcard ($**) key
+        with other regular fields.
         
-        DocumentDB only supports $and at the top level of partialFilterExpression.
-        When multiple fields each have operator conditions (e.g.,
-        { "score": { "$gte": 50, "$lte": 100 }, "isVerified": true }),
-        this must be restructured as:
-        { "$and": [ { "score": { "$gte": 50 } }, { "score": { "$lte": 100 } }, { "isVerified": true } ] }
+        Compound wildcard indexes like { "$**": 1, "status": 1 } are
+        not supported on DocumentDB/Cosmos DB.
         
-        :param partial_filter: The original partialFilterExpression
-        :param index_name: The index name for reporting
-        :return: The normalized partialFilterExpression
+        :param index_keys: The index keys as a list of tuples
+        :return: True if the index is a compound wildcard index
         """
-        # Count how many top-level fields have operator conditions (dict with $ keys)
-        field_entries = []
-        needs_normalization = False
+        if len(index_keys) <= 1:
+            return False
         
-        for field, condition in partial_filter.items():
-            # Skip logical operators — they're handled separately
-            if field.startswith('$'):
-                field_entries.append((field, condition))
-                continue
-            
-            if isinstance(condition, dict):
-                operator_keys = [k for k in condition.keys() if k.startswith('$')]
-                if len(operator_keys) > 1:
-                    # Multiple operators on the same field — split each into its own clause
-                    needs_normalization = True
-                    for op in operator_keys:
-                        field_entries.append((field, {op: condition[op]}))
-                else:
-                    field_entries.append((field, condition))
-            else:
-                field_entries.append((field, condition))
-        
-        # Check if there are multiple top-level field conditions (not just logical operators)
-        non_logical_fields = [(f, c) for f, c in field_entries if not f.startswith('$')]
-        logical_fields = [(f, c) for f, c in field_entries if f.startswith('$')]
-        
-        if needs_normalization or (len(non_logical_fields) > 1 and any(
-                isinstance(c, dict) and any(k.startswith('$') for k in c.keys())
-                for _, c in non_logical_fields
-        )):
-            # Restructure as explicit $and
-            and_clauses = [{f: c} for f, c in field_entries if not f.startswith('$')]
-            self._print_warning(f"---- [MODIFIED] Index '{index_name}': Restructured multi-field partialFilterExpression to explicit $and")
-            self._print_verbose(f"  Normalized partialFilterExpression from implicit multi-field to explicit $and")
-            result = {'$and': and_clauses}
-            # Preserve any existing logical operators
-            for f, c in logical_fields:
-                result[f] = c
-            return result
-        
-        # If we split operators on a single field, rebuild with split operators under $and
-        if needs_normalization:
-            and_clauses = [{f: c} for f, c in field_entries]
-            self._print_warning(f"---- [MODIFIED] Index '{index_name}': Split multi-operator field condition to explicit $and")
-            return {'$and': and_clauses}
-        
-        return partial_filter
+        has_wildcard = any(field == '$**' or field.endswith('.$**') for field, _ in index_keys)
+        return has_wildcard
 
     def _get_shard_key(self, source_db: Database, collection_config: CollectionConfig):
         """
