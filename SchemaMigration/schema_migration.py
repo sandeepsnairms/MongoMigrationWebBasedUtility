@@ -21,6 +21,22 @@ class SchemaMigration:
     # Supported operators in partialFilterExpression for DocumentDB
     SUPPORTED_PARTIAL_FILTER_OPERATORS = {'$eq', '$gt', '$gte', '$lt', '$lte', '$type', '$exists'}
 
+    # Operators explicitly unsupported in partialFilterExpression (field-level)
+    UNSUPPORTED_PARTIAL_FILTER_FIELD_OPERATORS = {
+        '$ne', '$nin', '$in', '$all', '$elemMatch', '$size', '$regex', '$not',
+        '$mod', '$text', '$where', '$geoWithin', '$geoIntersects', '$near', '$nearSphere'
+    }
+
+    # Supported logical operators in partialFilterExpression
+    SUPPORTED_PARTIAL_FILTER_LOGICAL_OPERATORS = {'$and'}
+    UNSUPPORTED_PARTIAL_FILTER_LOGICAL_OPERATORS = {'$or', '$nor'}
+
+    # Index options that are not supported on the destination (DocumentDB / Cosmos DB)
+    UNSUPPORTED_INDEX_OPTIONS = {'collation', 'hidden'}
+
+    # Index option combinations that conflict
+    CONFLICTING_INDEX_OPTION_PAIRS = [('sparse', 'partialFilterExpression')]
+
     def __init__(self, verbose: bool = False):
         """
         Initialize the SchemaMigration class.
@@ -29,6 +45,8 @@ class SchemaMigration:
         """
         self.verbose = verbose
         self.incompatible_indexes = []  # Track indexes with unsupported partialFilterExpression
+        self.skipped_index_options = []  # Track indexes with unsupported options (collation, hidden, etc.)
+        self.structural_incompatibilities = []  # Track structural issues (text dup, 2dsphere compound, etc.)
 
     def _print_verbose(self, message: str) -> None:
         """Print a message if verbose mode is enabled."""
@@ -109,6 +127,8 @@ class SchemaMigration:
         
         self._print_verbose(f"Starting migration for {len(collection_configs)} collection(s)")
         self.incompatible_indexes = []  # Reset incompatible indexes list for each migration run
+        self.skipped_index_options = []  # Reset skipped options list for each migration run
+        self.structural_incompatibilities = []  # Reset structural incompatibilities
         
         for collection_index, collection_config in enumerate(collection_configs):
             db_name = collection_config.db_name
@@ -204,18 +224,95 @@ class SchemaMigration:
 
             print("-- Migrating indexes for collection")
             self._print_verbose(f"Creating {len(index_list)} index(es) on destination")
+            created_index_names = set()  # Track created index names to detect conflicts
+            has_text_index = False  # Only one text index allowed per collection
             for index_keys, index_options in index_list:
                 index_name = index_options.get('name', 'unnamed')
+                collection_ns = f"{db_name}.{collection_name}"
+                
+                # ── Rule: Filter out unsupported index options (collation, hidden, etc.) ──
+                skip_index = False
+                for unsupported_opt in self.UNSUPPORTED_INDEX_OPTIONS:
+                    if unsupported_opt in index_options:
+                        self._print_warning(f"---- [SKIPPED] Index '{index_name}': '{unsupported_opt}' option is not supported on destination")
+                        self._print_verbose(f"  Removing unsupported option '{unsupported_opt}' from index '{index_name}'")
+                        self.skipped_index_options.append({
+                            'collection': collection_ns,
+                            'index_name': index_name,
+                            'option': unsupported_opt,
+                            'value': index_options[unsupported_opt]
+                        })
+                        skip_index = True
+                if skip_index:
+                    continue
+                
+                # ── Rule: Only one text index allowed per collection (#1, #2, #42) ──
+                is_text_index = any(direction == 'text' for _, direction in index_keys)
+                if is_text_index:
+                    if has_text_index:
+                        self._print_warning(f"---- [SKIPPED] Index '{index_name}': Only one text index is allowed per collection")
+                        self.structural_incompatibilities.append({
+                            'collection': collection_ns,
+                            'index_name': index_name,
+                            'reason': 'Only one text index is allowed per collection. A text index already exists.'
+                        })
+                        continue
+                    has_text_index = True
+                
+                # ── Rule: Compound 2dsphere indexes not supported (#3) ──
+                is_2dsphere_compound = self._is_compound_geospatial_index(index_keys)
+                if is_2dsphere_compound:
+                    self._print_warning(f"---- [SKIPPED] Index '{index_name}': Compound 2dsphere indexes with regular fields are not supported")
+                    self.structural_incompatibilities.append({
+                        'collection': collection_ns,
+                        'index_name': index_name,
+                        'reason': 'Compound indexes mixing 2dsphere with regular fields are not supported.'
+                    })
+                    continue
+                
+                # ── Rule: Multiple hashed fields in compound not supported (#43) ──
+                hashed_field_count = sum(1 for _, direction in index_keys if direction == 'hashed')
+                if hashed_field_count > 1:
+                    self._print_warning(f"---- [SKIPPED] Index '{index_name}': Multiple hashed fields in a single index are not supported")
+                    self.structural_incompatibilities.append({
+                        'collection': collection_ns,
+                        'index_name': index_name,
+                        'reason': f'A maximum of one hashed field is allowed per index but found {hashed_field_count}.'
+                    })
+                    continue
                 
                 # Transform hashed indexes to regular composite indexes
                 index_keys, was_hashed = self._transform_hashed_index(index_keys, index_name)
                 
+                # ── Rule: Cannot mix sparse and partialFilterExpression (#35) ──
+                if 'sparse' in index_options and 'partialFilterExpression' in index_options:
+                    self._print_warning(f"---- [MODIFIED] Index '{index_name}': Removing 'sparse' option (cannot mix with partialFilterExpression)")
+                    self.structural_incompatibilities.append({
+                        'collection': collection_ns,
+                        'index_name': index_name,
+                        'reason': "Cannot mix 'sparse' and 'partialFilterExpression'. Removed 'sparse' option."
+                    })
+                    del index_options['sparse']
+                
+                # ── Rule: Strip empty partialFilterExpression (#46) ──
+                if 'partialFilterExpression' in index_options:
+                    pfe = index_options['partialFilterExpression']
+                    if isinstance(pfe, dict) and len(pfe) == 0:
+                        self._print_warning(f"---- [MODIFIED] Index '{index_name}': Removing empty partialFilterExpression")
+                        del index_options['partialFilterExpression']
+                
                 # Transform partialFilterExpression if present
                 if 'partialFilterExpression' in index_options:
                     self._print_verbose(f"  Processing partialFilterExpression for index: {index_name}")
+                    
+                    # Rule: Transform implicit $and (multi-field conditions) to explicit $and (#31)
+                    index_options['partialFilterExpression'] = self._normalize_partial_filter_to_top_level_and(
+                        index_options['partialFilterExpression'], index_name
+                    )
+                    
                     transformed, is_compatible, issues = self._transform_partial_filter_expression(
                         index_options['partialFilterExpression'],
-                        f"{db_name}.{collection_name}",
+                        collection_ns,
                         index_name
                     )
                     if not is_compatible:
@@ -224,6 +321,20 @@ class SchemaMigration:
                         continue
                     index_options['partialFilterExpression'] = transformed
                 
+                # ── Rule: Detect and resolve index name conflicts ──
+                if index_name in created_index_names:
+                    # Name conflict — append a suffix to disambiguate
+                    suffix = 1
+                    new_name = f"{index_name}_dup{suffix}"
+                    while new_name in created_index_names:
+                        suffix += 1
+                        new_name = f"{index_name}_dup{suffix}"
+                    self._print_warning(f"---- [RENAMED] Index '{index_name}' renamed to '{new_name}' to avoid name conflict")
+                    self._print_verbose(f"  Index name conflict detected: '{index_name}' -> '{new_name}'")
+                    index_options['name'] = new_name
+                    index_name = new_name
+                
+                created_index_names.add(index_name)
                 self._print_success(f"---- Created index: {index_keys} with options: {index_options}")
                 self._print_verbose(f"  Creating index on destination: {index_keys}")
                 dest_collection.create_index(index_keys, **index_options)
@@ -231,6 +342,8 @@ class SchemaMigration:
         
         # Report all incompatible indexes at the end
         self._report_incompatible_indexes()
+        self._report_skipped_index_options()
+        self._report_structural_incompatibilities()
         
         self._print_verbose(f"Migration completed for all {len(collection_configs)} collection(s)")
 
@@ -299,35 +412,89 @@ class SchemaMigration:
         self._print_verbose(f"    Original partialFilterExpression: {partial_filter}")
         
         for field, condition in partial_filter.items():
-            if isinstance(condition, dict):
-                # Check for operators in the condition
+            # ── Handle top-level logical operators ($and, $or, $nor) ──
+            if field in self.UNSUPPORTED_PARTIAL_FILTER_LOGICAL_OPERATORS:
+                # $or, $nor are not supported in partialFilterExpression
+                issue = f"Logical operator '{field}' is not supported in partialFilterExpression"
+                issues.append(issue)
+                is_compatible = False
+                self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                continue
+            elif field in self.SUPPORTED_PARTIAL_FILTER_LOGICAL_OPERATORS:
+                # $and is supported — recursively validate each clause
+                if isinstance(condition, list):
+                    transformed_clauses = []
+                    for clause in condition:
+                        sub_transformed, sub_compatible, sub_issues = self._transform_partial_filter_expression(
+                            clause, collection_namespace, index_name
+                        )
+                        if not sub_compatible:
+                            is_compatible = False
+                            issues.extend(sub_issues)
+                        else:
+                            transformed_clauses.append(sub_transformed)
+                    if is_compatible and transformed_clauses:
+                        transformed[field] = transformed_clauses
+                else:
+                    issue = f"Logical operator '{field}' expects an array of conditions"
+                    issues.append(issue)
+                    is_compatible = False
+                    self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                continue
+            elif isinstance(condition, dict):
+                # ── Check for operators in the condition ──
                 new_condition = {}
                 field_compatible = True
                 
                 for op, value in condition.items():
+                    # $in: convert single-value to $eq, reject multi-value
                     if op == '$in':
-                        # $in operator found - check if single value
                         if isinstance(value, list) and len(value) == 1:
-                            # Single value - convert to $eq
                             single_value = value[0]
                             self._print_verbose(f"    Converting $in with single value to $eq for field '{field}'")
                             new_condition['$eq'] = single_value
                         elif isinstance(value, list) and len(value) > 1:
-                            # Multiple values - not compatible
                             issue = f"Field '{field}' uses $in with multiple values {value} (not supported)"
                             issues.append(issue)
                             field_compatible = False
                             is_compatible = False
                             self._print_verbose(f"    INCOMPATIBLE: {issue}")
                         else:
-                            # Empty or non-list - treat as incompatible
                             issue = f"Field '{field}' uses $in with invalid value {value}"
                             issues.append(issue)
                             field_compatible = False
                             is_compatible = False
                             self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                    
+                    # $exists: only $exists: true is supported (#20)
+                    elif op == '$exists':
+                        if value is True or value == 1:
+                            new_condition[op] = value
+                        else:
+                            issue = f"Field '{field}' uses $exists: false (only $exists: true is supported)"
+                            issues.append(issue)
+                            field_compatible = False
+                            is_compatible = False
+                            self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                    
+                    # $not: not supported in partialFilterExpression (#18)
+                    elif op == '$not':
+                        issue = f"Field '{field}' uses unsupported operator '$not'"
+                        issues.append(issue)
+                        field_compatible = False
+                        is_compatible = False
+                        self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                    
+                    # Explicitly unsupported operators: $ne, $nin, $all, $elemMatch, $size, $regex, etc.
+                    elif op in self.UNSUPPORTED_PARTIAL_FILTER_FIELD_OPERATORS:
+                        issue = f"Field '{field}' uses unsupported operator '{op}'"
+                        issues.append(issue)
+                        field_compatible = False
+                        is_compatible = False
+                        self._print_verbose(f"    INCOMPATIBLE: {issue}")
+                    
+                    # Any other unknown $ operator not in supported set
                     elif op.startswith('$') and op not in self.SUPPORTED_PARTIAL_FILTER_OPERATORS:
-                        # Unsupported operator
                         issue = f"Field '{field}' uses unsupported operator '{op}'"
                         issues.append(issue)
                         field_compatible = False
@@ -402,6 +569,141 @@ class SchemaMigration:
         self._print_warning("Please review these indexes and manually adjust the partialFilterExpression")
         self._print_warning("to use only supported operators before re-running the migration.")
         self._print_warning("="*80 + "\n")
+
+    def _report_skipped_index_options(self) -> None:
+        """
+        Report all indexes skipped due to unsupported options (collation, hidden, etc.).
+        """
+        if not self.skipped_index_options:
+            return
+        
+        self._print_warning("\n" + "="*80)
+        self._print_warning("UNSUPPORTED INDEX OPTIONS REPORT")
+        self._print_warning("="*80)
+        self._print_warning(f"\nFound {len(self.skipped_index_options)} index(es) with unsupported options:")
+        self._print_warning(f"Unsupported options: {', '.join(sorted(self.UNSUPPORTED_INDEX_OPTIONS))}\n")
+        
+        for idx, skipped in enumerate(self.skipped_index_options, 1):
+            self._print_warning(f"{idx}. Collection: {skipped['collection']}")
+            self._print_warning(f"   Index Name: {skipped['index_name']}")
+            self._print_warning(f"   Unsupported Option: {skipped['option']} = {skipped['value']}")
+            print()
+        
+        self._print_warning("="*80)
+        self._print_warning("These indexes were skipped because they use options not supported on the destination.")
+        self._print_warning("Please create equivalent indexes manually without the unsupported options if needed.")
+        self._print_warning("="*80 + "\n")
+
+    def _report_structural_incompatibilities(self) -> None:
+        """
+        Report all structural index incompatibilities found during migration.
+        Covers: duplicate text indexes, compound 2dsphere, multiple hashed fields,
+        sparse+partial conflicts, etc.
+        """
+        if not self.structural_incompatibilities:
+            return
+        
+        self._print_warning("\n" + "="*80)
+        self._print_warning("STRUCTURAL INDEX INCOMPATIBILITIES REPORT")
+        self._print_warning("="*80)
+        self._print_warning(f"\nFound {len(self.structural_incompatibilities)} index(es) with structural issues:\n")
+        
+        for idx, entry in enumerate(self.structural_incompatibilities, 1):
+            self._print_warning(f"{idx}. Collection: {entry['collection']}")
+            self._print_warning(f"   Index Name: {entry['index_name']}")
+            self._print_warning(f"   Reason: {entry['reason']}")
+            print()
+        
+        self._print_warning("="*80)
+        self._print_warning("Please review these indexes and manually adjust them for the destination.")
+        self._print_warning("="*80 + "\n")
+
+    def _is_compound_geospatial_index(self, index_keys: List[Tuple[str, Any]]) -> bool:
+        """
+        Check if an index is a compound index that mixes geospatial (2dsphere/2d)
+        key types with regular ascending/descending fields.
+        
+        Compound geospatial indexes like { location: '2dsphere', status: 1 } are
+        not supported on DocumentDB/Cosmos DB.
+        
+        :param index_keys: The index keys as a list of tuples
+        :return: True if the index is a compound geospatial index
+        """
+        if len(index_keys) <= 1:
+            return False
+        
+        geo_types = {'2dsphere', '2d'}
+        has_geo = any(direction in geo_types for _, direction in index_keys)
+        has_regular = any(direction not in geo_types and direction != 'text' and direction != 'hashed'
+                         for _, direction in index_keys)
+        
+        return has_geo and has_regular
+
+    def _normalize_partial_filter_to_top_level_and(
+            self,
+            partial_filter: Dict[str, Any],
+            index_name: str) -> Dict[str, Any]:
+        """
+        Normalize a partialFilterExpression that has multiple top-level field conditions
+        with operators into an explicit top-level $and.
+        
+        DocumentDB only supports $and at the top level of partialFilterExpression.
+        When multiple fields each have operator conditions (e.g.,
+        { "score": { "$gte": 50, "$lte": 100 }, "isVerified": true }),
+        this must be restructured as:
+        { "$and": [ { "score": { "$gte": 50 } }, { "score": { "$lte": 100 } }, { "isVerified": true } ] }
+        
+        :param partial_filter: The original partialFilterExpression
+        :param index_name: The index name for reporting
+        :return: The normalized partialFilterExpression
+        """
+        # Count how many top-level fields have operator conditions (dict with $ keys)
+        field_entries = []
+        needs_normalization = False
+        
+        for field, condition in partial_filter.items():
+            # Skip logical operators — they're handled separately
+            if field.startswith('$'):
+                field_entries.append((field, condition))
+                continue
+            
+            if isinstance(condition, dict):
+                operator_keys = [k for k in condition.keys() if k.startswith('$')]
+                if len(operator_keys) > 1:
+                    # Multiple operators on the same field — split each into its own clause
+                    needs_normalization = True
+                    for op in operator_keys:
+                        field_entries.append((field, {op: condition[op]}))
+                else:
+                    field_entries.append((field, condition))
+            else:
+                field_entries.append((field, condition))
+        
+        # Check if there are multiple top-level field conditions (not just logical operators)
+        non_logical_fields = [(f, c) for f, c in field_entries if not f.startswith('$')]
+        logical_fields = [(f, c) for f, c in field_entries if f.startswith('$')]
+        
+        if needs_normalization or (len(non_logical_fields) > 1 and any(
+                isinstance(c, dict) and any(k.startswith('$') for k in c.keys())
+                for _, c in non_logical_fields
+        )):
+            # Restructure as explicit $and
+            and_clauses = [{f: c} for f, c in field_entries if not f.startswith('$')]
+            self._print_warning(f"---- [MODIFIED] Index '{index_name}': Restructured multi-field partialFilterExpression to explicit $and")
+            self._print_verbose(f"  Normalized partialFilterExpression from implicit multi-field to explicit $and")
+            result = {'$and': and_clauses}
+            # Preserve any existing logical operators
+            for f, c in logical_fields:
+                result[f] = c
+            return result
+        
+        # If we split operators on a single field, rebuild with split operators under $and
+        if needs_normalization:
+            and_clauses = [{f: c} for f, c in field_entries]
+            self._print_warning(f"---- [MODIFIED] Index '{index_name}': Split multi-operator field condition to explicit $and")
+            return {'$and': and_clauses}
+        
+        return partial_filter
 
     def _get_shard_key(self, source_db: Database, collection_config: CollectionConfig):
         """
