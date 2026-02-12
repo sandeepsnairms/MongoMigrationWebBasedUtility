@@ -67,7 +67,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             lock (_lock)
             {
                 _totalEventCount++;
+#if LEGACY_MONGODB_DRIVER
+                var changeCollectionKey = $"{change.CollectionNamespace?.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#else
                 var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#endif
                 if (changeCollectionKey != _collectionKey)
                     return;
 
@@ -92,7 +96,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             lock (_lock)
             {
                 _totalEventCount++;
+#if LEGACY_MONGODB_DRIVER
+                var changeCollectionKey = $"{change.CollectionNamespace?.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#else
                 var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#endif
                 if (changeCollectionKey != _collectionKey)
                     return;
 
@@ -115,7 +123,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             lock (_lock)
             {
                 _totalEventCount++;
+#if LEGACY_MONGODB_DRIVER
+                var changeCollectionKey = $"{change.CollectionNamespace?.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#else
                 var changeCollectionKey = $"{change.DatabaseNamespace?.DatabaseName}.{change.CollectionNamespace?.CollectionName}";
+#endif
                 if (changeCollectionKey != _collectionKey)
                     return;
 
@@ -147,10 +159,12 @@ namespace OnlineMongoMigrationProcessor.Helpers.JobManagement
             {
                 changeTimestamp = MongoHelper.BsonTimestampToUtcDateTime(change.ClusterTime);
             }
+#if !LEGACY_MONGODB_DRIVER
             else if (change.WallTime != null)
             {
                 changeTimestamp = change.WallTime.Value;
             }
+#endif
            
             // Always track latest (last change in batch) - for checkpoint on success
             if (change.ResumeToken != null && change.ResumeToken != BsonNull.Value)

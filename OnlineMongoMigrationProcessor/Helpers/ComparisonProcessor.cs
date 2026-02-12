@@ -71,9 +71,16 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         agg = agg.Match(userFilterDoc);
                     }
 
+#if LEGACY_MONGODB_DRIVER
+                    // Sample() not available in legacy driver; use $sample aggregation stage directly
+                    var randomDocsCursor = await agg
+                        .AppendStage<BsonDocument>(new BsonDocument("$sample", new BsonDocument("size", config.CompareSampleSize)))
+                        .ToCursorAsync(cancellationToken);
+#else
                     var randomDocsCursor = await agg
                         .Sample(config.CompareSampleSize)
                         .ToCursorAsync(cancellationToken);
+#endif
 
 
                     var randomDocs = await randomDocsCursor.ToListAsync(cancellationToken);

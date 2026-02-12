@@ -20,7 +20,6 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using ZstdSharp.Unsafe;
 
 // CS4014: Use explicit discards for intentional fire-and-forget tasks.
 

@@ -20,7 +20,6 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
-using ZstdSharp.Unsafe;
 
 
 namespace OnlineMongoMigrationProcessor.Workers
@@ -363,9 +362,11 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             _migrationProcessor.ProcessRunning = true;
             
+#if !LEGACY_MONGODB_DRIVER
             // Set the delegate to wait for resume token tasks before processing collections
             _migrationProcessor.WaitForResumeTokenTaskDelegate = WaitForResumeTokenTask;
             _log.WriteLine("WaitForResumeTokenTaskDelegate set for migration processor", LogType.Debug);
+#endif
 
             return TaskResult.Success;
         }
@@ -476,6 +477,10 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task<TaskResult> SetCollectionResumeToken(MigrationUnit mu, bool syncBack, CancellationToken _cts, List<Task> resumeTokenTasks)
         {
+#if LEGACY_MONGODB_DRIVER
+            // Change stream resume tokens not supported with legacy MongoDB driver
+            return TaskResult.Success;
+#else
             _log.WriteLine($"SetCollectionResumeToken called for {mu.DatabaseName}.{mu.CollectionName} - ResetChangeStream: {mu.ResetChangeStream}", LogType.Debug);
             bool useServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy;
             if (useServerLevel)
@@ -534,6 +539,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
            
             return TaskResult.Success;
+#endif
         }
 
         private async Task<TaskResult> PreparePartitionsAsync(CancellationToken _cts, bool skipPartitioning)
@@ -794,6 +800,10 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         private async Task SetupServerLevelResumeTokenAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts, bool syncBack)
         {
+#if LEGACY_MONGODB_DRIVER
+            // Change stream resume tokens not supported with legacy MongoDB driver
+            return;
+#else
             MigrationJobContext.AddVerboseLog($"SetupServerLevelResumeTokenAsync: mu={mu.DatabaseName}.{mu.CollectionName}, syncBack={syncBack}");
 
             if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) || !context.UseServerLevel)
@@ -831,6 +841,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 context.ServerLevelResumeTokenSet = true;
             }
+#endif
         }
 
         private async Task<TaskResult> PrepareTargetCollectionAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)

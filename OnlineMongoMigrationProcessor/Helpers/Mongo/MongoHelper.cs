@@ -555,6 +555,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             return version;
         }
 
+#if !LEGACY_MONGODB_DRIVER
         public async static Task ResetCS(MigrationJob job, MigrationUnit mu, bool syncBack)
         {
             MigrationJobContext.AddVerboseLog($"{(syncBack ? "SyncBack: " : string.Empty)}Resetting change stream resume token for {mu.DatabaseName}.{mu.CollectionName}");
@@ -898,6 +899,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 ResetCounters(mu, syncBack);
             }
         }
+#endif
 
     
         public static async Task<(bool Exits,bool IsCollection)> CheckIsCollectionAsync(MongoClient client, string databaseName, string collectionName)
@@ -1450,6 +1452,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
 
 
+#if !LEGACY_MONGODB_DRIVER
         /// <summary>
         /// Common function to set resume token properties on either MigrationJob or MigrationUnit
         /// </summary>
@@ -1612,6 +1615,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             mu.CSUpdatesInLastBatch = 0;
 
         }
+#endif
 
         public static BsonTimestamp ConvertToBsonTimestamp(DateTime dateTime)
         {

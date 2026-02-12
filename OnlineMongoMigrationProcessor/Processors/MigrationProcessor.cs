@@ -20,7 +20,9 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected IMongoCollection<BsonDocument>? _targetCollection;
         protected MigrationSettings _config;
         protected CancellationTokenSource _cts;
+#if !LEGACY_MONGODB_DRIVER
         protected MongoChangeStreamProcessor? _changeStreamProcessor;
+#endif
                 
         protected Log _log;
         protected MigrationWorker? _migrationWorker;
@@ -31,6 +33,7 @@ namespace OnlineMongoMigrationProcessor.Processors
 
         public bool IsChangeStreamRunning = false;
 
+#if !LEGACY_MONGODB_DRIVER
         // Expose WaitForResumeTokenTaskDelegate from the change stream processor
         public Func<string, Task>? WaitForResumeTokenTaskDelegate
         {
@@ -41,6 +44,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                     _changeStreamProcessor.WaitForResumeTokenTaskDelegate = value;
             }
         }
+#endif
 
         protected MigrationProcessor(Log log, MongoClient sourceClient, MigrationSettings config, MigrationWorker? migrationWorker = null)
         {
@@ -69,8 +73,10 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             _cts?.Cancel();
 
+#if !LEGACY_MONGODB_DRIVER
             if (_changeStreamProcessor != null)
                 _changeStreamProcessor.ExecutionCancelled = true;
+#endif
         }
 
         /// <summary>
@@ -104,6 +110,10 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
             MigrationJobContext.AddVerboseLog($"MigrationProcessor.AddCollectionToChangeStreamQueue: migrationUnitId={mu.Id}");
 
+#if LEGACY_MONGODB_DRIVER
+            _log.WriteLine($"Online migration (change streams) is not supported with the legacy MongoDB driver. Skipping {mu.DatabaseName}.{mu.CollectionName}", LogType.Warning);
+            return false;
+#else
             if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
                 return false;
             
@@ -119,6 +129,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             _changeStreamProcessor?.AddCollectionsToProcess(mu.Id, _cts);
 
             return true;
+#endif
         }
 
 
@@ -126,6 +137,11 @@ namespace OnlineMongoMigrationProcessor.Processors
         {
             MigrationJobContext.AddVerboseLog("MigrationProcessor.RunChangeStreamProcessorForAllCollections: called");
 
+#if LEGACY_MONGODB_DRIVER
+            _log.WriteLine("Online migration (change streams) is not supported with the legacy MongoDB driver.", LogType.Warning);
+            return false;
+        }
+#else
             //only once allowed per job
             if(IsChangeStreamRunning)
                 return false;
@@ -164,6 +180,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
             return true;            
         }
+#endif
 
         
         public void StopOfflineOrInvokeChangeStreams()

@@ -5,7 +5,6 @@ using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
-using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;

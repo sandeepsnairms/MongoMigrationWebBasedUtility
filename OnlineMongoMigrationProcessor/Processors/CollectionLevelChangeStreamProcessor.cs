@@ -15,6 +15,7 @@ using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
+#if !LEGACY_MONGODB_DRIVER
 namespace OnlineMongoMigrationProcessor
 {
     public class CollectionLevelChangeStreamProcessor : ChangeStreamProcessor
@@ -1408,3 +1409,4 @@ namespace OnlineMongoMigrationProcessor
 
     }
 }
+#endif // !LEGACY_MONGODB_DRIVER

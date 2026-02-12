@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
 	<AssemblyName>OnlineMongoMigrationProcessor</AssemblyName>
 	<NoWarn>CS8602;CS8603;CS8604;CS8618;CS1998;CS0219;CS0618;CS0105;CS8600;CS8625;CS8619;CS0168;CS8629;CS0472</NoWarn>
+	<!-- Define LEGACY_MONGODB_DRIVER when using MongoDB.Driver less than 2.19 to disable online migration features (change streams).
+	     Remove this line when upgrading to a newer MongoDB.Driver version. -->
+	<DefineConstants>$(DefineConstants);LEGACY_MONGODB_DRIVER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,8 +20,8 @@
     <PackageReference Include="Azure.Identity" Version="1.13.2" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.23.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.0" />
-    <PackageReference Include="MongoDB.Bson" Version="3.1.0" />
-    <PackageReference Include="MongoDB.Driver" Version="3.1.0" />
+    <PackageReference Include="MongoDB.Bson" Version="2.7.3" />
+    <PackageReference Include="MongoDB.Driver" Version="2.7.3" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
