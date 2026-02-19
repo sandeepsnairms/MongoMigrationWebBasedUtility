@@ -519,7 +519,18 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         }
 
-                        await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts,false);                            
+                        // Use isolated probe for collections without OriginalResumeToken (except RUOptimizedCopy jobs)
+                        //if (string.IsNullOrEmpty(mu.OriginalResumeToken) 
+                        //    && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy)
+                        //{
+                            _log.WriteLine($"Using isolated probe for resume token initialization: {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                            await MongoHelper.TryInitializeResumeTokenWithIsolatedProbeAsync(_log, MigrationJobContext.CurrentlyActiveJob, mu, syncBack, _cts, syncBack ? null : _config.CACertContentsForSourceServer);
+                        //}
+                        //else
+                        //{
+                        //    _log.WriteLine($"Using in-process resume token initialization: {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+                        //    await MongoHelper.SetChangeStreamResumeTokenAsync(_log, mongoClient, MigrationJobContext.CurrentlyActiveJob, mu, durationSeconds, syncBack, _cts, false);
+                        //}
                     }
                     catch (Exception ex)
                     {

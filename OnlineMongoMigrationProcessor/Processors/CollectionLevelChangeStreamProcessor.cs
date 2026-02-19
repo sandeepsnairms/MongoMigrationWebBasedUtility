@@ -8,7 +8,11 @@ using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using static OnlineMongoMigrationProcessor.Helpers.Mongo.MongoHelper;
@@ -23,6 +27,8 @@ namespace OnlineMongoMigrationProcessor
         
         private MongoClient _changeStreamMongoClient;
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _flushLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
+        private readonly SemaphoreSlim _resumeTokenInitLock = new SemaphoreSlim(1, 1);
+        private static readonly TimeSpan StaleCursorProbeThreshold = TimeSpan.FromHours(48);
 
         public CollectionLevelChangeStreamProcessor(Log log, MongoClient sourceClient, MongoClient targetClient, ActiveMigrationUnitsCache muCache, MigrationSettings config, bool syncBack = false, MigrationWorker? migrationWorker = null)
             : base(log, sourceClient, targetClient, muCache, config, syncBack, migrationWorker)
@@ -188,6 +194,50 @@ namespace OnlineMongoMigrationProcessor
                 .ToList();
         }
 
+        private bool ShouldProbeBeforeProcessing(MigrationUnit mu)
+        {
+            if (mu == null || mu.ResetChangeStream)
+            {
+                return false;
+            }
+
+            DateTime cursorTimestamp = _syncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+            string resumeToken = _syncBack ? mu.SyncBackResumeToken ?? string.Empty : mu.ResumeToken ?? string.Empty;
+
+            return cursorTimestamp > DateTime.MinValue
+                && string.IsNullOrEmpty(resumeToken)
+                && (DateTime.UtcNow - cursorTimestamp.ToUniversalTime()) > StaleCursorProbeThreshold;
+        }
+
+        private async Task<bool> EnsureProbeEligibilityAsync(MigrationUnit mu)
+        {
+            if (!ShouldProbeBeforeProcessing(mu))
+            {
+                return true;
+            }
+
+            var currentJob = MigrationJobContext.CurrentlyActiveJob;
+            string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
+            _log.WriteLine($"{_syncBackPrefix}Stale cursor with empty resume token for {collectionKey}; running probe before processing.", LogType.Debug);
+
+            bool probeFoundChange = await MongoHelper.TryInitializeResumeTokenWithIsolatedProbeAsync(
+                _log,
+                currentJob,
+                mu,
+                _syncBack,
+                CancellationToken.None,
+                _syncBack ? null : _config.CACertContentsForSourceServer,
+                persistChangesToMigrationUnit: false);
+
+            if (!probeFoundChange)
+            {
+                _log.ShowInMonitor($"{_syncBackPrefix}Skipping {collectionKey} - stale cursor and probe found no new change.");
+                return false;
+            }
+
+            return true;
+        }
+
         private void LogProcessingConfiguration(int collectionCount)
         {
             _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {collectionCount} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, collectionCount)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds. Collections without a resume token will be skipped and rechecked every 4 rounds.", LogType.Info);
@@ -265,6 +315,11 @@ namespace OnlineMongoMigrationProcessor
             {
                 try
                 {
+                      if (!await EnsureProbeEligibilityAsync(mu))
+                      {
+                          return;
+                      }
+
                       await SetChangeStreamOptionandWatch(mu, true, seconds);
                 }
                 catch (Exception ex) when (ex is TimeoutException)
@@ -383,8 +438,15 @@ namespace OnlineMongoMigrationProcessor
         private async Task InitializeResumeTokensForUnsetUnitsAsync(CancellationToken token)
         {
             MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.InitializeResumeTokensForUnsetUnitsAsync: starting, unitsToProcess={_migrationUnitsToProcess.Count}");
+            if (!_resumeTokenInitLock.Wait(0))
+            {
+                MigrationJobContext.AddVerboseLog("CollectionLevelChangeStreamProcessor.InitializeResumeTokensForUnsetUnitsAsync: skipped because another initialization run is already in progress");
+                return;
+            }
+
             try
             {
+                var currentJob = MigrationJobContext.CurrentlyActiveJob;
                 bool shownlog = false;
                 foreach (var unitId in _migrationUnitsToProcess.Keys)
                 {
@@ -398,9 +460,19 @@ namespace OnlineMongoMigrationProcessor
                     // Check if both ResumeToken and OriginalResumeToken are not set
                     bool needToSetToken = false;
                     if(_syncBack)
-                        needToSetToken = string.IsNullOrEmpty(mu.SyncBackResumeToken) && !mu.ResetChangeStream;
+                    {
+                        needToSetToken = string.IsNullOrEmpty(mu.SyncBackResumeToken)
+                            && !mu.ResetChangeStream
+                            && mu.SyncBackCursorUtcTimestamp > DateTime.MinValue
+                            && (DateTime.UtcNow - mu.SyncBackCursorUtcTimestamp.ToUniversalTime()) > StaleCursorProbeThreshold;
+                    }
                     else
-                        needToSetToken = string.IsNullOrEmpty(mu.ResumeToken) && !mu.ResetChangeStream;
+                    {
+                        needToSetToken = string.IsNullOrEmpty(mu.ResumeToken)
+                            && !mu.ResetChangeStream
+                            && mu.CursorUtcTimestamp > DateTime.MinValue
+                            && (DateTime.UtcNow - mu.CursorUtcTimestamp.ToUniversalTime()) > StaleCursorProbeThreshold;
+                    }
 
                     
                     if (needToSetToken)
@@ -415,20 +487,29 @@ namespace OnlineMongoMigrationProcessor
                         
                         try
                         {
-
-                            await MongoHelper.SetChangeStreamResumeTokenAsync(
-                                _log,
-                                _syncBack ? _targetClient : _sourceClient,
-                                MigrationJobContext.CurrentlyActiveJob,
-                                mu,
-                                30,
-                                _syncBack,
-                                token,
-                                true);
+                            //if (string.IsNullOrEmpty(mu.OriginalResumeToken)
+                            //    && currentJob.JobType != JobType.RUOptimizedCopy)
+                            //{
+                                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Using isolated probe for resume token initialization: {mu.DatabaseName}.{mu.CollectionName}");
+                                await MongoHelper.TryInitializeResumeTokenWithIsolatedProbeAsync(_log, currentJob, mu, _syncBack, token, _syncBack ? null : _config.CACertContentsForSourceServer);
+                            //}
+                            //else
+                            //{
+                            //    MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Using in-process resume token initialization: {mu.DatabaseName}.{mu.CollectionName}");
+                            //    await MongoHelper.SetChangeStreamResumeTokenAsync(
+                            //        _log,
+                            //        _syncBack ? _targetClient : _sourceClient,
+                            //        currentJob,
+                            //        mu,
+                            //        30,
+                            //        _syncBack,
+                            //        token,
+                            //        true);
+                            //}
                         }
                         catch (Exception ex)
                         {
-                           // do nothing
+                            _log.WriteLine($"{_syncBackPrefix}Resume token initialization failed for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex.Message}", LogType.Debug);
                         }
                     }
 
@@ -440,6 +521,10 @@ namespace OnlineMongoMigrationProcessor
             catch (Exception ex)
             {
                 _log.WriteLine($"{_syncBackPrefix}Error in InitializeResumeTokensForUnsetUnitsAsync. Details: {ex}", LogType.Error);
+            }
+            finally
+            {
+                _resumeTokenInitLock.Release();
             }
         }
 

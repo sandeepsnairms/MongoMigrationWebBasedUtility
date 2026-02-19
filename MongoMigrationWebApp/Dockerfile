@@ -14,6 +14,7 @@ ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["MongoMigrationWebApp/MongoMigrationWebApp.csproj", "MongoMigrationWebApp/"]
 COPY ["OnlineMongoMigrationProcessor/OnlineMongoMigrationProcessor.csproj", "OnlineMongoMigrationProcessor/"]
+COPY ["ResumeTokenProbeExe/ResumeTokenProbeExe.csproj", "ResumeTokenProbeExe/"]
 RUN dotnet restore "./MongoMigrationWebApp/MongoMigrationWebApp.csproj"
 COPY . .
 WORKDIR "/src/MongoMigrationWebApp"

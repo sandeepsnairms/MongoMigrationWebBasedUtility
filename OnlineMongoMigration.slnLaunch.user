@@ -1,0 +1,15 @@
+[
+  {
+    "Name": "New Profile",
+    "Projects": [
+      {
+        "Path": "MongoMigrationWebApp\\MongoMigrationWebApp.csproj",
+        "Action": "Start"
+      },
+      {
+        "Path": "ResumeTokenProbeExe\\ResumeTokenProbeExe.csproj",
+        "Action": "Start"
+      }
+    ]
+  }
+]
