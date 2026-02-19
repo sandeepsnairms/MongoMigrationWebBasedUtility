@@ -1183,7 +1183,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error building dump query: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                _log?.WriteLine($"Error building dump query for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 throw;
             }
         }
@@ -1236,6 +1236,8 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
                 }
                 catch (TimeoutException ex)
                 {
@@ -1245,6 +1247,8 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
                 }
                 catch (Exception ex) when (ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                                            ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
@@ -1255,10 +1259,94 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
+                }
+                catch (MongoConnectionException ex) when (IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount connection failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to connection failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
+                }
+                catch (IOException ex) when (IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount IO failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to IO failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
+                }
+                catch (System.Net.Sockets.SocketException ex) when (IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount socket failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to socket failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(GetRetryDelayMs(attempt));
                 }
             }
 
             return (false, -1);
+        }
+
+        private static int GetRetryDelayMs(int attempt)
+        {
+            int baseDelayMs = 500;
+            int maxDelayMs = 5000;
+            int delayMs = baseDelayMs * (1 << Math.Min(attempt - 1, 4));
+            return Math.Min(delayMs, maxDelayMs);
+        }
+
+        private static bool IsTransientCountException(Exception ex)
+        {
+            Exception? current = ex;
+            while (current != null)
+            {
+                if (current is MongoExecutionTimeoutException || current is TimeoutException)
+                {
+                    return true;
+                }
+
+                if (current is System.Net.Sockets.SocketException socketEx)
+                {
+                    if (socketEx.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.TimedOut ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionAborted ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.HostDown ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkDown ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkReset ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkUnreachable ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.HostUnreachable)
+                    {
+                        return true;
+                    }
+                }
+
+                string message = current.Message ?? string.Empty;
+                if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("unable to read data from the transport connection", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                current = current.InnerException;
+            }
+
+            return false;
         }
 
         /// <summary>
