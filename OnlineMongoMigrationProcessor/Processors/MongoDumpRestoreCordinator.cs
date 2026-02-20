@@ -20,7 +20,6 @@ using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
-using ZstdSharp.Unsafe;
 
 // CS4014: Use explicit discards for intentional fire-and-forget tasks.
 
@@ -1184,7 +1183,7 @@ namespace OnlineMongoMigrationProcessor
             }
             catch (Exception ex)
             {
-                _log?.WriteLine($"Error building dump query: {Helper.RedactPii(ex.ToString())}", LogType.Error);
+                _log?.WriteLine($"Error building dump query for {mu.DatabaseName}.{mu.CollectionName}[{chunkIndex}]: {Helper.RedactPii(ex.ToString())}", LogType.Error);
                 throw;
             }
         }
@@ -1237,6 +1236,8 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
                 }
                 catch (TimeoutException ex)
                 {
@@ -1246,6 +1247,8 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
                 }
                 catch (Exception ex) when (ex.Message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                                            ex.Message.Contains("timed out", StringComparison.OrdinalIgnoreCase))
@@ -1256,6 +1259,41 @@ namespace OnlineMongoMigrationProcessor
                         _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to timeout", LogType.Warning);
                         return (false, -1);
                     }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
+                }
+                catch (MongoConnectionException ex) when (Helper.IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount connection failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to connection failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
+                }
+                catch (IOException ex) when (Helper.IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount IO failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to IO failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
+                }
+                catch (System.Net.Sockets.SocketException ex) when (Helper.IsTransientCountException(ex))
+                {
+                    _log?.WriteLine($"GetDocumentCount socket failure on attempt {attempt}/{maxRetries}: {Helper.RedactPii(ex.Message)}", LogType.Warning);
+                    if (attempt == maxRetries)
+                    {
+                        _log?.WriteLine($"GetDocumentCount failed after {maxRetries} attempts due to socket failures", LogType.Warning);
+                        return (false, -1);
+                    }
+
+                    Thread.Sleep(Helper.GetRetryDelayMs(attempt));
                 }
             }
 

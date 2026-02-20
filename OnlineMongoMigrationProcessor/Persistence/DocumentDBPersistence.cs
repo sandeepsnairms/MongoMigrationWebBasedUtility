@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using ZstdSharp.Unsafe;
 
 namespace OnlineMongoMigrationProcessor.Persistence
 {
@@ -220,10 +219,17 @@ namespace OnlineMongoMigrationProcessor.Persistence
 
                 var filter = Builders<BsonDocument>.Filter.Eq("_id", normalizedId);
 
+#if LEGACY_MONGODB_DRIVER
+                if (IsLog)
+                    _logCollection!.ReplaceOne(filter, document, new UpdateOptions { IsUpsert = true });
+                else
+                    _dataCollection!.ReplaceOne(filter, document, new UpdateOptions { IsUpsert = true });
+#else
                 if (IsLog)
                     _logCollection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
                 else
                     _dataCollection!.ReplaceOne(filter, document, new ReplaceOptions { IsUpsert = true });
+#endif
 
                 return true;
             }

@@ -20,6 +20,7 @@ using static System.Net.Mime.MediaTypeNames;
 
 #pragma warning disable CS8602 // Dereference of a possibly null reference.
 
+#if !LEGACY_MONGODB_DRIVER
 namespace OnlineMongoMigrationProcessor
 {
     public class ServerLevelChangeStreamProcessor : ChangeStreamProcessor
@@ -915,3 +916,4 @@ namespace OnlineMongoMigrationProcessor
         #endregion
     }
 }
+#endif // !LEGACY_MONGODB_DRIVER

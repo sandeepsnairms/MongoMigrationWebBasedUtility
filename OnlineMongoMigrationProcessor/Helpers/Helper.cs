@@ -5,7 +5,6 @@ using OnlineMongoMigrationProcessor.Context;
 using OnlineMongoMigrationProcessor.Helpers;
 using OnlineMongoMigrationProcessor.Helpers.Mongo;
 using OnlineMongoMigrationProcessor.Models;
-using SharpCompress.Common;
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -995,6 +994,65 @@ namespace OnlineMongoMigrationProcessor
         public static bool IsWindows()
         {
             return OperatingSystem.IsWindows();
+        }
+
+        /// <summary>
+        /// Calculates exponential backoff delay for retry attempts
+        /// </summary>
+        /// <param name="attempt">The retry attempt number (1-based)</param>
+        /// <returns>Delay in milliseconds</returns>
+        public static int GetRetryDelayMs(int attempt)
+        {
+            int baseDelayMs = 500;
+            int maxDelayMs = 5000;
+            int delayMs = baseDelayMs * (1 << Math.Min(attempt - 1, 4));
+            return Math.Min(delayMs, maxDelayMs);
+        }
+
+        /// <summary>
+        /// Checks if an exception is a transient count exception (timeout, network issue, etc.)
+        /// </summary>
+        /// <param name="ex">The exception to check</param>
+        /// <returns>True if the exception is transient and retry-able, false otherwise</returns>
+        public static bool IsTransientCountException(Exception ex)
+        {
+            Exception? current = ex;
+            while (current != null)
+            {
+                if (current is MongoExecutionTimeoutException || current is TimeoutException)
+                {
+                    return true;
+                }
+
+                if (current is System.Net.Sockets.SocketException socketEx)
+                {
+                    if (socketEx.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionReset ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.TimedOut ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionAborted ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.HostDown ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkDown ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkReset ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.NetworkUnreachable ||
+                        socketEx.SocketErrorCode == System.Net.Sockets.SocketError.HostUnreachable)
+                    {
+                        return true;
+                    }
+                }
+
+                string message = current.Message ?? string.Empty;
+                if (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("timed out", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("forcibly closed", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("connection reset", StringComparison.OrdinalIgnoreCase) ||
+                    message.Contains("unable to read data from the transport connection", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                current = current.InnerException;
+            }
+
+            return false;
         }
     }
 }
