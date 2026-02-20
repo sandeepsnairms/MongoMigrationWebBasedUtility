@@ -1676,7 +1676,7 @@ else if (@_showLogBackupFile)
 
     private async Task DecreaseDumpWorkers()
     {
-        if (CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.CurrentDumpWorkers > 1)
+        if (CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.CurrentDumpWorkers > 0)
         {
             int newCount = CurrentlyLoadedMigrationJob.CurrentDumpWorkers - 1;
             JobManager.AdjustDumpWorkers(newCount);
@@ -1696,7 +1696,7 @@ else if (@_showLogBackupFile)
 
     private async Task DecreaseRestoreWorkers()
     {
-        if (CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.CurrentRestoreWorkers > 1)
+        if (CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.CurrentRestoreWorkers > 0)
         {
             int newCount = CurrentlyLoadedMigrationJob.CurrentRestoreWorkers - 1;
             JobManager.AdjustRestoreWorkers(newCount);

@@ -90,6 +90,20 @@ namespace OnlineMongoMigrationProcessor
 
         private DateTime _downLoadPausedTill = DateTime.MinValue;
 
+        private const string ExclusiveDumpModeEnvVar = "ExclusiveDumpMode";
+        private const string ExclusiveRestoreModeEnvVar = "ExclusiveRestoreMode";
+
+        private bool IsEnvVarTrue(string variableName)
+        {
+            var value = Environment.GetEnvironmentVariable(variableName);
+            return bool.TryParse(value, out bool enabled) && enabled;
+        }
+
+        private (bool exclusiveDump, bool exclusiveRestore) GetExclusiveModeFlags()
+        {
+            return (IsEnvVarTrue(ExclusiveDumpModeEnvVar), IsEnvVarTrue(ExclusiveRestoreModeEnvVar));
+        }
+
         // Work item class for chunk processing
         private class ChunkWorkItem : IComparable<ChunkWorkItem>
         {
@@ -168,6 +182,25 @@ namespace OnlineMongoMigrationProcessor
                         maxRestoreWorkers = 1;
                     }
 
+                    var (exclusiveDump, exclusiveRestore) = GetExclusiveModeFlags();
+                    if (exclusiveDump && exclusiveRestore)
+                    {
+                        maxDumpWorkers = 0;
+                        maxRestoreWorkers = 0;
+                        log.WriteLine($"Both {ExclusiveDumpModeEnvVar} and {ExclusiveRestoreModeEnvVar} are true. Dump is paused", LogType.Warning);
+                        log.WriteLine($"Both {ExclusiveDumpModeEnvVar} and {ExclusiveRestoreModeEnvVar} are true. Restore is paused", LogType.Warning);
+                    }
+                    else if (exclusiveDump)
+                    {
+                        maxRestoreWorkers = 0;
+                        log.WriteLine($"{ExclusiveDumpModeEnvVar}=true. Running in exclusive dump mode", LogType.Warning);
+                    }
+                    else if (exclusiveRestore)
+                    {
+                        maxDumpWorkers = 0;
+                        log.WriteLine($"{ExclusiveRestoreModeEnvVar}=true. Running in exclusive restore mode", LogType.Warning);
+                    }
+
                     // Get or create shared worker pools
                     _dumpPool = WorkerPoolCoordinator.GetOrCreateDumpPool(jobId, log, maxDumpWorkers);
                     _restorePool = WorkerPoolCoordinator.GetOrCreateRestorePool(jobId, log, maxRestoreWorkers);
@@ -175,6 +208,16 @@ namespace OnlineMongoMigrationProcessor
                     // Store initial values in MigrationJobContext.CurrentlyActiveJob for UI monitoring
                     MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = maxDumpWorkers;
                     MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = maxRestoreWorkers;
+
+                    if (maxDumpWorkers == 0)
+                    {
+                        _log?.WriteLine("Dump is paused", LogType.Warning);
+                    }
+
+                    if (maxRestoreWorkers == 0)
+                    {
+                        _log?.WriteLine("Restore is paused", LogType.Warning);
+                    }
 
                     if (!MigrationJobContext.CurrentlyActiveJob.MaxInsertionWorkersPerCollection.HasValue)
                     {
@@ -221,12 +264,23 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-                int validatedCount = WorkerCountHelper.ValidateWorkerCount(newCount);
+                var (_, exclusiveRestore) = GetExclusiveModeFlags();
+                if (exclusiveRestore)
+                {
+                    _log?.WriteLine($"{ExclusiveRestoreModeEnvVar}=true. Dump workers forced to 0", LogType.Warning);
+                    newCount = 0;
+                }
+
+                int validatedCount = WorkerCountHelper.ValidateDumpRestoreWorkerCount(newCount);
                 _dumpPool.AdjustPoolSize(validatedCount);
 
                 // Update current value in context for UI monitoring
                 MigrationJobContext.CurrentlyActiveJob.CurrentDumpWorkers = validatedCount;
-                MigrationJobContext.CurrentlyActiveJob.MaxParallelDumpProcesses = validatedCount;
+
+                if (validatedCount == 0)
+                {
+                    _log?.WriteLine("Dump is paused", LogType.Warning);
+                }
 
                 _log?.WriteLine($"Dump workers adjusted to {validatedCount}");
             }
@@ -250,12 +304,23 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-                int validatedCount = WorkerCountHelper.ValidateWorkerCount(newCount);
+                var (exclusiveDump, _) = GetExclusiveModeFlags();
+                if (exclusiveDump)
+                {
+                    _log?.WriteLine($"{ExclusiveDumpModeEnvVar}=true. Restore workers forced to 0", LogType.Warning);
+                    newCount = 0;
+                }
+
+                int validatedCount = WorkerCountHelper.ValidateDumpRestoreWorkerCount(newCount);
                 _restorePool.AdjustPoolSize(validatedCount);
 
                 // Update current value in context for UI monitoring
                 MigrationJobContext.CurrentlyActiveJob.CurrentRestoreWorkers = validatedCount;
-                MigrationJobContext.CurrentlyActiveJob.MaxParallelRestoreProcesses = validatedCount;
+
+                if (validatedCount == 0)
+                {
+                    _log?.WriteLine("Restore is paused", LogType.Warning);
+                }
 
                 _log?.WriteLine($"Restore workers adjusted to {validatedCount}");
             }
