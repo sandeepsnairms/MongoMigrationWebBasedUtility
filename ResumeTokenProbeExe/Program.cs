@@ -34,6 +34,8 @@ internal static class Program
         try
         {
             string? jsonDebug = args.Length > 1 ? args[1] : null;
+
+            //jsonDebug="{\"ConnectionString\": \"<connstring>\",  \"DatabaseName\": \"<dbname>\",\n  \"CollectionName\": \"<collectionname>\",\n  \"TimeoutSeconds\": 30,\n  \"StartAtUtc\": \"2026-02-19T12:00:00Z\",\n  \"PEMFileContents\": \"\"\n}";
             var request = ParseRequest(args, jsonDebug);
             result = await RunProbeAsync(request);
         }
