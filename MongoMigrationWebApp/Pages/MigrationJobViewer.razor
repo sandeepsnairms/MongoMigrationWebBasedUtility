@@ -1157,15 +1157,10 @@ else if (@_showLogBackupFile)
     {
         try
         {
-            var url = $"/api/File/download/log/{jobId}/count";
-            var response = await HttpClient.GetAsync(url);
+            if (string.IsNullOrWhiteSpace(jobId))
+                return 0;
 
-            if (response.IsSuccessStatusCode)
-            {
-                var content = await response.Content.ReadAsStringAsync();
-                var result = System.Text.Json.JsonSerializer.Deserialize<LogCountResponse>(content);
-                return result?.count ?? 0;
-            }
+            return JobManager.GetLogCount(jobId);
         }
         catch { }
 

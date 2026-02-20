@@ -1,4 +1,4 @@
-@inject HttpClient HttpClient
+@inject Service.JobManager JobManager
 @inject IJSRuntime JS
 
 <div class="modal-backdrop" id="paginatedDownloadModal" aria-modal="true" role="dialog">
@@ -184,13 +184,11 @@
             _downloadingPage = pageNumber;
             StateHasChanged();
             
-            var url = $"/api/File/download/log/{JobId}/page/{pageNumber}/{PageSize}";
-            var response = await HttpClient.GetAsync(url);
-            
-            if (response.IsSuccessStatusCode)
+            var fileBytes = JobManager.DownloadLogPage(JobId, pageNumber, PageSize);
+
+            if (fileBytes != null)
             {
-                var fileBytes = await response.Content.ReadAsByteArrayAsync();
-                var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
+                var contentType = "application/octet-stream";
                 await JS.InvokeVoidAsync("downloadFile", fileBytes, $"{JobId}_page_{pageNumber}.txt", contentType);
                 
                 _downloadedPages.Add(pageNumber);
