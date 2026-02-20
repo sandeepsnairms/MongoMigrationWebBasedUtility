@@ -786,6 +786,40 @@ az containerapp update `
 
 **Note**: For most scenarios, using `update-aca-app.ps1` is recommended over manual updates as it handles both steps and provides better error handling.
 
+## Mongo Dump/Restore Advanced Configuration (ACA)
+
+ACA supports both **exclusive execution mode** and **separate tool versions** for `mongodump` and `mongorestore`.
+
+### 1) Separate dump/restore versions (configured by editing Dockerfile)
+
+For older/non-compatible sources (for example MongoDB 3.4), update the default URLs directly in `MongoMigrationWebApp/Dockerfile`:
+
+- `DUMP_DEFAULT_URL` (for `mongodump`)
+- `RESTORE_DEFAULT_URL` (for `mongorestore`)
+
+Then build the ACA image normally:
+
+Notes:
+- Tool version split for ACA is done at image build time (Docker), not via app UI.
+- Keep `DUMP_DEFAULT_URL` and `RESTORE_DEFAULT_URL` pinned to tested versions.
+
+### 2) ExclusiveDumpMode and ExclusiveRestoreMode
+
+Set Container App environment variables:
+
+- `ExclusiveDumpMode=true` → dump runs, restore is paused
+- `ExclusiveRestoreMode=true` → restore runs, dump is paused
+- if both are `true`, both are paused
+
+```powershell
+az containerapp update `
+  --name <container-app-name> `
+  --resource-group <resource-group-name> `
+  --set-env-vars ExclusiveDumpMode=true ExclusiveRestoreMode=false
+```
+
+If you use `update-aca-app.ps1`, these environment variables are preserved during image-only updates.
+
 ## Monitoring and Troubleshooting
 
 ### Common Deployment Issues

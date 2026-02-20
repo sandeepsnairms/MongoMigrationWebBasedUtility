@@ -5,8 +5,7 @@
       "launchBrowser": true,
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "ResourceDrive": "C:\\MigrationDrive",
-        "ExclusiveRestoreMode": "True"
+        "ResourceDrive": "C:\\MigrationDrive"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "https://localhost:7268;http://localhost:5105"

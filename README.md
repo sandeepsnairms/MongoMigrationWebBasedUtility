@@ -322,8 +322,13 @@ This is different from "Time Since Last Change" which shows when the last actual
 These settings are persisted per app instance and affect all jobs:
 
 - Mongo tools download URL
-    - HTTPS ZIP URL to mongo-tools used by Dump/Restore. If your app has no internet egress, upload the ZIP alongside your app content and point this URL to your app’s public URL of the file.
-    - Must start with https:// and end with .zip
+        - Supports either:
+            - Single HTTPS ZIP URL (same package provides both `mongodump` and `mongorestore`), or
+            - JSON with separate URLs:
+                - `{"MongoDumpURL":"https://...dump.zip","MongoRestoreURL":"https://...restore.zip"}`
+        - Use separate URLs when source compatibility requires different versions for dump vs restore (for example, migrations from older MongoDB versions such as 3.4).
+        - If your app has no internet egress, upload ZIP file(s) alongside your app content and point to those hosted URLs.
+        - URLs must start with `https://` and end with `.zip`.
 
 - Binary format utilized for the _id
     - Use when your source uses binary GUIDs for _id.
@@ -360,6 +365,36 @@ These settings are persisted per app instance and affect all jobs:
 Advanced notes:
 - App setting `AllowMongoDump` (see `MongoMigrationWebApp/appsettings.json`) toggles whether the “MongoDump and MongoRestore” option is available in the UI.
 - The app’s working folder defaults to the system temp path, or to `%ResourceDrive%\home\` when present (e.g., on Azure App Service). It stores job state under `migrationjobs` and logs under `migrationlogs`.
+
+#### Exclusive dump/restore modes and tool version split
+
+##### Exclusive dump/restore modes
+
+Use environment variables to run only one side of the pipeline:
+
+- `ExclusiveDumpMode=true`
+    - Runs dump workers only and pauses restore workers (`CurrentRestoreWorkers=0`).
+- `ExclusiveRestoreMode=true`
+    - Runs restore workers only and pauses dump workers (`CurrentDumpWorkers=0`).
+- If both are `true`, both dump and restore are paused.
+
+Set these variables in your hosting platform environment configuration:
+
+- **Azure Web App**: App Settings
+- **Azure Container Apps (ACA)**: Container App environment variables
+
+##### Separate tool versions for dump and restore
+
+You can use different versions of `mongodump` and `mongorestore` when source compatibility requires it (for example, older MongoDB sources such as 3.4).
+
+- **Azure Web App**
+    - Configure **Mongo tools download URL(s)** as JSON in settings:
+    - `{"MongoDumpURL":"https://...dump.zip","MongoRestoreURL":"https://...restore.zip"}`
+    - See [WebApp/README.md](WebApp/README.md).
+
+- **Azure Container Apps (ACA)**
+    - Configure separate versions at image build time in Docker (`MongoDumpURL` and `MongoRestoreURL` build args).
+    - See [ACA/README.md](ACA/README.md).
 
 ## Job lifecycle controls in Job Viewer
 

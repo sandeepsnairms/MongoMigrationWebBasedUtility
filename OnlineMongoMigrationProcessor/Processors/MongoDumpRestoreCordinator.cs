@@ -61,6 +61,8 @@ namespace OnlineMongoMigrationProcessor
         private string? _jobId;
         private Log? _log;
         private string? _mongoToolsFolder;
+        private string? _mongoDumpToolPath;
+        private string? _mongoRestoreToolPath;
 
         private string _mongoDumpOutputFolder = Path.Combine(Helper.GetWorkingFolder(), "mongodump");
         private readonly SemaphoreSlim _uploadLock = new(1, 1);
@@ -141,7 +143,7 @@ namespace OnlineMongoMigrationProcessor
         /// <param name="log">Logger instance</param>
         /// <param name="mongoToolsFolder">Optional path to mongo tools folder</param>
         /// <param name="onMigrationUnitCompleted">Optional callback invoked when a migration unit completes</param>
-        public void Initialize(string jobId, Log log, string? mongoToolsFolder = null, MigrationUnitCompletedHandler? onMigrationUnitCompleted = null, PendingTasksCompletedHandler? onPendingTasksCompleted=null)
+        public void Initialize(string jobId, Log log, string? mongoToolsFolder = null, string? mongoDumpToolPath = null, string? mongoRestoreToolPath = null, MigrationUnitCompletedHandler? onMigrationUnitCompleted = null, PendingTasksCompletedHandler? onPendingTasksCompleted=null)
         {
             MigrationJobContext.AddVerboseLog($"MongoDumpRestoreCordinator.Initialize: jobId={jobId}, mongoToolsFolder={mongoToolsFolder}");
             try
@@ -156,6 +158,8 @@ namespace OnlineMongoMigrationProcessor
                     _jobId = jobId;
                     _log = log;
                     _mongoToolsFolder = mongoToolsFolder;
+                    _mongoDumpToolPath = mongoDumpToolPath;
+                    _mongoRestoreToolPath = mongoRestoreToolPath;
                     _onMigrationUnitCompleted = onMigrationUnitCompleted;
                     _onPendingTasksCompleted = onPendingTasksCompleted;
                     _processNewTasks = true;
@@ -458,6 +462,8 @@ namespace OnlineMongoMigrationProcessor
                     _jobId = null;
                     _log = null;
                     _mongoToolsFolder = null;
+                    _mongoDumpToolPath = null;
+                    _mongoRestoreToolPath = null;
 
                     _downLoadPausedTill=DateTime.MinValue;
 
@@ -1167,12 +1173,13 @@ namespace OnlineMongoMigrationProcessor
 
             // Execute dump process
             var processExecutor = new ProcessExecutor(_log);
+            var dumpToolPath = GetMongoToolPath("mongodump");
             bool success = await Task.Run(() => processExecutor.Execute(
                 mu,
                 mu.MigrationChunks[chunkIndex],
                 chunkIndex,                
                 docCount,
-                $"{_mongoToolsFolder}mongodump",
+                dumpToolPath,
                 args,
                 dumpFilePath,
                 _processCts?.Token ?? CancellationToken.None,
@@ -1959,12 +1966,13 @@ namespace OnlineMongoMigrationProcessor
 
             // Execute restore process
             var processExecutor = new ProcessExecutor(_log);
+            var restoreToolPath = GetMongoToolPath("mongorestore");
             bool success = await Task.Run(() => processExecutor.Execute(
                 mu,
                 mu.MigrationChunks[chunkIndex],
                 chunkIndex,                
                 docCount,
-                $"{_mongoToolsFolder}mongorestore",
+                restoreToolPath,
                 args,
                 dumpFilePath,
                 _processCts?.Token ?? CancellationToken.None,
@@ -1973,6 +1981,33 @@ namespace OnlineMongoMigrationProcessor
             ), _processCts?.Token ?? CancellationToken.None);
 
             return success;
+        }
+
+        private string GetMongoToolPath(string toolName)
+        {
+            if (toolName.Equals("mongodump", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_mongoDumpToolPath))
+            {
+                return _mongoDumpToolPath;
+            }
+
+            if (toolName.Equals("mongorestore", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(_mongoRestoreToolPath))
+            {
+                return _mongoRestoreToolPath;
+            }
+
+            if (string.IsNullOrWhiteSpace(_mongoToolsFolder))
+            {
+                return toolName;
+            }
+
+            string toolFileName = toolName;
+            if (Helper.IsWindows() && !toolName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                toolFileName = toolName + ".exe";
+            }
+
+            string toolsFolder = _mongoToolsFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            return Path.Combine(toolsFolder, toolFileName);
         }
 
         /// <summary>

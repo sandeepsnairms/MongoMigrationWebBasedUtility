@@ -10,6 +10,8 @@ namespace OnlineMongoMigrationProcessor
       
         public string? CACertContentsForSourceServer { get; set; }
         public string? MongoToolsDownloadUrl { get; set; }
+        public string? MongoDumpToolPath { get; set; }
+        public string? MongoRestoreToolPath { get; set; }
         public bool ReadBinary { get; set; }
         public int LogPageSize { get; set; }
         public long ChunkSizeInMb { get; set; }
@@ -47,6 +49,8 @@ namespace OnlineMongoMigrationProcessor
                 {
                     ReadBinary = loadedObject.ReadBinary;
                     MongoToolsDownloadUrl = loadedObject.MongoToolsDownloadUrl;
+                    MongoDumpToolPath = loadedObject.MongoDumpToolPath;
+                    MongoRestoreToolPath = loadedObject.MongoRestoreToolPath;
                     ChunkSizeInMb = loadedObject.ChunkSizeInMb;
 					ChangeStreamMaxDocsInBatch = loadedObject.ChangeStreamMaxDocsInBatch == 0 ? 10000 : loadedObject.ChangeStreamMaxDocsInBatch;
 					ChangeStreamBatchDuration = loadedObject.ChangeStreamBatchDuration == 0 ? 120 : loadedObject.ChangeStreamBatchDuration;
@@ -73,6 +77,8 @@ namespace OnlineMongoMigrationProcessor
             {
                 ReadBinary = false;
                 MongoToolsDownloadUrl = "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-windows-x86_64-100.10.0.zip";
+                MongoDumpToolPath = string.Empty;
+                MongoRestoreToolPath = string.Empty;
                 ChunkSizeInMb = 512;
 				MongoCopyPageSize = 500;
 				ChangeStreamMaxDocsInBatch = 10000;
