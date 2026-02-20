@@ -601,6 +601,157 @@ namespace OnlineMongoMigrationProcessor
 
             return (gte, lt);
         }
+
+        /// <summary>
+        /// Samples the collection to find boundary values for splitting chunks.
+        /// Uses MongoDB $sample aggregation stage for efficient sampling.
+        /// </summary>
+        public static async Task<List<BsonDocument>> SampleCollectionForSplitPointAsync(
+            IMongoCollection<BsonDocument> collection,
+            MigrationChunk chunk,
+            BsonDocument? userFilterDoc,
+            int sampleSize)
+        {
+            MigrationJobContext.AddVerboseLog($"SampleCollectionForSplitPointAsync: sampleSize={sampleSize}, idField=_id");
+
+            try
+            {
+                // Build match stage for chunk bounds and user filter
+                var matchStages = new List<BsonDocument>();
+
+                // Get properly parsed bounds using SamplePartitioner (handles type-specific parsing)
+                var bounds = GetChunkBounds(chunk.Gte ?? "", chunk.Lt ?? "", chunk.DataType);
+                BsonValue? gteBsonValue = bounds.gte != null && !(bounds.gte is BsonMaxKey) && !(bounds.gte is BsonNull) ? bounds.gte : null;
+                BsonValue? ltBsonValue = bounds.lt != null && !(bounds.lt is BsonMaxKey) && !(bounds.lt is BsonNull) ? bounds.lt : null;
+
+                // Build range filter for _id
+                BsonDocument rangeFilter = new BsonDocument();
+                if (gteBsonValue != null)
+                {
+                    rangeFilter["$gte"] = gteBsonValue;
+                }
+                if (ltBsonValue != null)
+                {
+                    rangeFilter["$lt"] = ltBsonValue;
+                }
+
+                // Build the combined condition: data type + range + user filter
+                BsonDocument filterCondition = BuildDataTypeCondition(chunk.DataType, userFilterDoc, true);
+                
+                // Add range filter to the condition
+                if (rangeFilter.ElementCount > 0)
+                {
+                    if (filterCondition.Contains("_id") && filterCondition["_id"].IsBsonDocument)
+                    {
+                        // Merge with existing _id filter
+                        var existingIdFilter = filterCondition["_id"].AsBsonDocument;
+                        foreach (var element in rangeFilter)
+                        {
+                            existingIdFilter[element.Name] = element.Value;
+                        }
+                    }
+                    else
+                    {
+                        filterCondition["_id"] = rangeFilter;
+                    }
+                }
+
+                // Add combined filter to match stages
+                if (filterCondition != null && filterCondition.ElementCount > 0)
+                {
+                    matchStages.Add(new BsonDocument("$match", filterCondition));
+                }
+
+                // Add sample stage
+                var sampleStage = new BsonDocument("$sample", new BsonDocument("size", sampleSize));
+
+                // Add sort by _id to ensure consistent ordering
+                var sortStage = new BsonDocument("$sort", new BsonDocument("_id", 1));
+
+                // Execute aggregation
+                var pipeline = matchStages.Concat(new[] { sampleStage, sortStage }).ToList();
+
+                var samples = await collection.Aggregate<BsonDocument>(pipeline)
+                    .ToListAsync()
+                    .ConfigureAwait(false);
+
+                MigrationJobContext.AddVerboseLog($"Sampled {samples.Count} documents from {collection.CollectionNamespace.CollectionName} for split boundaries");
+                return samples;
+            }
+            catch (Exception ex)
+            {
+                MigrationJobContext.AddVerboseLog($"Error sampling collection for split points: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates sub-chunks based on sampled document boundaries.
+        /// Each sub-chunk spans from one sample value (inclusive) to the next (exclusive).
+        /// </summary>
+        public static async Task<List<MigrationChunk>> CreateSubChunksFromSampleAsync(
+            MigrationChunk originalChunk,
+            List<BsonDocument> samples,
+            string databaseName,
+            string collectionName)
+        {
+            MigrationJobContext.AddVerboseLog($"CreateSubChunksFromSampleAsync: creating {samples.Count - 1} sub-chunks from samples");
+
+            var subChunks = new List<MigrationChunk>();
+
+            try
+            {
+                for (int i = 0; i < samples.Count - 1; i++)
+                {
+                    var currentSample = samples[i];
+                    var nextSample = samples[i + 1];
+
+                    string gte = currentSample["_id"].ToJson();
+                    string lt = nextSample["_id"].ToJson();
+
+                    // Create sub-chunk (inherit properties from original)
+                    var subChunk = new MigrationChunk(
+                        gte,
+                        lt,
+                        originalChunk.DataType,
+                        false,
+                        false)
+                    {
+                        Id = i.ToString() // Will be reassigned in ReplaceChunkWithSubChunks
+                    };
+
+                    subChunks.Add(subChunk);
+                }
+
+                // Last sub-chunk goes up to original upper bound
+                if (samples.Count > 0)
+                {
+                    var lastSample = samples[samples.Count - 1];
+                    string lastGte = lastSample["_id"].ToJson();
+                    string lastLt = originalChunk.Lt ?? ""; // Use original upper bound or empty
+
+                    var lastSubChunk = new MigrationChunk(
+                        lastGte,
+                        lastLt,
+                        originalChunk.DataType,
+                        false,
+                        false)
+                    {
+                        Id = (samples.Count - 1).ToString()
+                    };
+
+                    subChunks.Add(lastSubChunk);
+                }
+
+                MigrationJobContext.AddVerboseLog($"Created {subChunks.Count} sub-chunks for {databaseName}.{collectionName} via sample-based splitting");
+                return subChunks;
+            }
+            catch (Exception ex)
+            {
+                MigrationJobContext.AddVerboseLog($"Error creating sub-chunks from samples: {ex.Message}");
+                throw;
+            }
+        }
     }
 
 

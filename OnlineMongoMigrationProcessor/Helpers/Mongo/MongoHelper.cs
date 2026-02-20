@@ -364,8 +364,15 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             {
                 FilterDefinition<BsonDocument> filter = GenerateQueryFilter(gte, lte, dataType, userFilterDoc, skipDataTypeFilter);
 
+                //bool genError= false;
+                //if (genError)
+                //    throw new Exception("Testing timeout");
+
                 // Execute the query and return the count with 10 minute timeout
                 return collection.CountDocuments(filter, new CountOptions { MaxTime = TimeSpan.FromMinutes(10) });
+
+
+                
             }
             catch(Exception ex)
             {

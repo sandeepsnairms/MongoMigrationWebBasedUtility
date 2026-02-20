@@ -148,6 +148,8 @@ namespace OnlineMongoMigrationProcessor
         public bool AggressiveCacheDeleted { get; set; } = false;
         public DateTime? AggressiveCacheDeletedOn { get; set; }
 
+        public long MaxDocsPerChunk;
+
         public List<MigrationChunk> MigrationChunks { get; set; }
 
         public MigrationUnit(MigrationJob job, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
