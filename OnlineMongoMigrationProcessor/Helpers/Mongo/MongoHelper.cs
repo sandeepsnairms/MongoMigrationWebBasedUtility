@@ -1823,6 +1823,20 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."))
             };
 
+            var bundledPaths = new List<string>
+            {
+                Path.Combine(AppContext.BaseDirectory, "ResumeTokenProbeArtifacts", "ResumeTokenProbeExe.dll"),
+                Path.Combine(AppContext.BaseDirectory, "ResumeTokenProbeExe", "ResumeTokenProbeExe.dll")
+            };
+
+            foreach (var candidate in bundledPaths)
+            {
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
             foreach (var root in searchRoots.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 try

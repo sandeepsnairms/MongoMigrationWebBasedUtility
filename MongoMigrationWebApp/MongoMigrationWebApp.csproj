@@ -36,13 +36,13 @@
 
     <Copy
       SourceFiles="@(ResumeTokenProbeArtifacts)"
-      DestinationFiles="@(ResumeTokenProbeArtifacts->'$(OutDir)ResumeTokenProbeExe\%(RecursiveDir)%(Filename)%(Extension)')"
+      DestinationFiles="@(ResumeTokenProbeArtifacts->'$(OutDir)ResumeTokenProbeArtifacts\%(RecursiveDir)%(Filename)%(Extension)')"
       SkipUnchangedFiles="true"
       Condition="Exists('%(ResumeTokenProbeArtifacts.Identity)')" />
 
     <Copy
       SourceFiles="@(ResumeTokenProbeArtifacts)"
-      DestinationFiles="@(ResumeTokenProbeArtifacts->'$(PublishDir)ResumeTokenProbeExe\%(RecursiveDir)%(Filename)%(Extension)')"
+      DestinationFiles="@(ResumeTokenProbeArtifacts->'$(PublishDir)ResumeTokenProbeArtifacts\%(RecursiveDir)%(Filename)%(Extension)')"
       SkipUnchangedFiles="true"
       Condition="'$(PublishDir)' != '' and Exists('%(ResumeTokenProbeArtifacts.Identity)')" />
   </Target>
