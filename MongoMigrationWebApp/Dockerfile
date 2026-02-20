@@ -53,10 +53,10 @@ RUN set -eux; \
         zlib1g; \
     if [ -z "$MongoDumpURL" ] || [ -z "$MongoRestoreURL" ]; then \
         if [ "${TARGETARCH:-amd64}" = "arm64" ]; then \
-            DUMP_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-arm64-100.9.4.tgz"; \
+            DUMP_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-arm64-100.13.0.tgz"; \
             RESTORE_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-arm64-100.13.0.tgz"; \
         else \
-            DUMP_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.9.4.tgz"; \
+            DUMP_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.13.0.tgz"; \
             RESTORE_DEFAULT_URL="https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2204-x86_64-100.13.0.tgz"; \
         fi; \
         MongoDumpURL="${MongoDumpURL:-$DUMP_DEFAULT_URL}"; \
