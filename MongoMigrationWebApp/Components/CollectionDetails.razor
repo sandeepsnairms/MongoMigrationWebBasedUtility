@@ -88,6 +88,8 @@
                                         <div><span class="lbl">Failed (with retries):</span> @FormatLong(MigrationUnit.CSErrors)</div>
                                         <div><span class="lbl">Avg Read Latency (ms):</span> @MigrationUnit.CSAvgReadLatencyInMS.ToString("F2")</div>
                                         <div><span class="lbl">Avg Write Latency (ms):</span> @MigrationUnit.CSAvgWriteLatencyInMS.ToString("F2")</div>
+                                        <div><span class="lbl">Last Change UTC Time:</span> @(MigrationUnit.CSLastChangeUTCTime?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A")</div>
+                                        <div><span class="lbl">Last Resume Token With Change:</span> @(MigrationUnit.CSLastResumeTokenWithChange ?? "N/A")</div>
                                         @if (Helper.GetChangeStreamMode(MigrationJob) == "Aggressive" && MigrationUnit.AggressiveCacheDeleted)
                                         {
                                             <div><span class="lbl">Aggressive:</span> Completed on @(MigrationUnit.AggressiveCacheDeletedOn?.ToString("yyyy-MM-dd HH:mm:ss") ?? "N/A") UTC</div>
