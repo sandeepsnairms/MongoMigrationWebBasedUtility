@@ -789,6 +789,8 @@ namespace OnlineMongoMigrationProcessor
 
                     if (flushedEventCount > 0)
                     {
+                        mu.CSLastResumeTokenWithChange = docs.LatestResumeToken;
+                        mu.CSLastChangeUTCTime = docs.LatestTimestamp;
                         mu.CSAvgReadLatencyInMS = Math.Round((double)docs.CSTotalReadDurationInMS / flushedEventCount, 2);
                         mu.CSAvgWriteLatencyInMS = Math.Round((double)docs.CSTotaWriteDurationInMS / flushedEventCount, 2);
                     }

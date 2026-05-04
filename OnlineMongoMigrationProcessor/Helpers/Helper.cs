@@ -539,7 +539,14 @@ namespace OnlineMongoMigrationProcessor
 
         public static string GetTimestampDiff(MigrationUnitBasic mu, bool isSyncBack)
         {
-            DateTime timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+            // Prefer CSLastChangeUTCTime when available (more accurate last-change time)
+            // Falls back to cursor timestamps when CSLastChangeUTCTime is not set
+            DateTime timestamp;
+            if (mu.CSLastChangeUTCTime.HasValue && mu.CSLastChangeUTCTime.Value != DateTime.MinValue)
+                timestamp = mu.CSLastChangeUTCTime.Value;
+            else
+                timestamp = isSyncBack ? mu.SyncBackCursorUtcTimestamp : mu.CursorUtcTimestamp;
+
             if (timestamp == DateTime.MinValue || mu.ResetChangeStream)
                 return "NA";
             

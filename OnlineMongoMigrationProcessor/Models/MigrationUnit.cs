@@ -48,6 +48,7 @@ namespace OnlineMongoMigrationProcessor
         public CollectionStatus SourceStatus { get; set; }
         public bool ResetChangeStream { get; set; }
         public DataType? DataTypeFor_Id { get; set; } = null;
+        public DateTime? CSLastChangeUTCTime { get; set; }
 
         // Skip tracking for max retries exceeded
         public bool SkippedDueToMaxRetries { get; set; } = false;
@@ -130,7 +131,6 @@ namespace OnlineMongoMigrationProcessor
         public long CSNormalizedUpdatesInLastBatch { get; set; }
         public int CSLastBatchDurationSeconds { get; set; }
         public string? CSLastResumeTokenWithChange { get; set; }
-        public DateTime? CSLastChangeUTCTime { get; set; }
 
         public string? UserFilter { get; set; }
         public string? SyncBackResumeToken { get; set; }
@@ -231,6 +231,7 @@ namespace OnlineMongoMigrationProcessor
             mub.DataTypeFor_Id = this.DataTypeFor_Id;
             mub.SkippedDueToMaxRetries = this.SkippedDueToMaxRetries;
             mub.FailedOperation = this.FailedOperation;
+            mub.CSLastChangeUTCTime = this.CSLastChangeUTCTime;
             return mub;
         }
 
