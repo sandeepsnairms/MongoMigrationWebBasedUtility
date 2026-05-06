@@ -78,9 +78,9 @@
                                         <div><span class="lbl">Start Resume Token:</span> @(MigrationUnit.OriginalResumeToken ?? "N/A")</div>
                                         <div><span class="lbl">Current Timestamp:</span> @MigrationUnit.CursorUtcTimestamp</div>
                                         <div><span class="lbl">Current Resume Token:</span> @(MigrationUnit.ResumeToken ?? "N/A")</div>
-                                        <div><span class="lbl">First Change Replayed:</span> @MigrationUnit.InitialDocumenReplayed</div>
+                                        <div><span class="lbl">First Change Replayed:</span> @(string.IsNullOrEmpty(MigrationUnit.ResumeDocumentKey) ? "N/A" : MigrationUnit.InitialDocumenReplayed.ToString())</div>
                                         <div><span class="lbl">First Change Document:</span> @(MigrationUnit.ResumeDocumentKey?.ToString() ?? "N/A")</div>
-                                        <div><span class="lbl">First Change Operation:</span> @MigrationUnit.ResumeTokenOperation</div>
+                                        <div><span class="lbl">First Change Operation:</span> @(string.IsNullOrEmpty(MigrationUnit.ResumeDocumentKey) ? "N/A" : MigrationUnit.ResumeTokenOperation.ToString())</div>
                                         <div><span class="lbl">Inserted:</span> @FormatLong(MigrationUnit.CSDocsInserted) (from @FormatLong(MigrationUnit.CSDInsertEvents) events)</div>
                                         <div><span class="lbl">Deleted:</span> @FormatLong(MigrationUnit.CSDocsDeleted) (from @FormatLong(MigrationUnit.CSDeleteEvents) events)</div>
                                         <div><span class="lbl">Updated:</span> @FormatLong(MigrationUnit.CSDocsUpdated) (from @FormatLong(MigrationUnit.CSUpdateEvents) events)</div>

@@ -50,6 +50,8 @@ namespace OnlineMongoMigrationProcessor
         public DataType? DataTypeFor_Id { get; set; } = null;
         public DateTime? CSLastChangeUTCTime { get; set; }
 
+        public bool OpLogExpired { get; set; } = false;
+
         // Skip tracking for max retries exceeded
         public bool SkippedDueToMaxRetries { get; set; } = false;
         public string? FailedOperation { get; set; } = null; // "Dump" or "Restore"
@@ -232,6 +234,7 @@ namespace OnlineMongoMigrationProcessor
             mub.SkippedDueToMaxRetries = this.SkippedDueToMaxRetries;
             mub.FailedOperation = this.FailedOperation;
             mub.CSLastChangeUTCTime = this.CSLastChangeUTCTime;
+            mub.OpLogExpired = this.OpLogExpired;
             return mub;
         }
 

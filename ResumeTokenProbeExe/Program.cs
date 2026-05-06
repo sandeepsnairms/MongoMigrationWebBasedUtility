@@ -220,8 +220,8 @@ internal static class Program
 
                 return new ProbeResult
                 {
-                    Success = false,
-                    Error = "Timeout - no changes detected within the time window"
+                    Success = true,
+                    Error = "No changes detected within the time window"
                 };
             }
             catch (OperationCanceledException)

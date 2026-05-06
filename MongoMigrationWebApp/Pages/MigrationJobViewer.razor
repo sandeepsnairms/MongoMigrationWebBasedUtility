@@ -648,6 +648,11 @@ else if (@_showLogBackupFile)
                 var lagText = Helper.GetTimestampDiff(mu, CurrentlyLoadedMigrationJob.ProcessingSyncBack);
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
+
+                // CS Last Checked column (includes "Resume Token Expired" for OpLogExpired)
+                var lastCheckedText = GetTimeSinceLastBatch(CurrentlyLoadedMigrationJob, mu);
+                if (lastCheckedText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    return true;
             }
 
             // Last Batch Changes Count
@@ -804,6 +809,9 @@ else if (@_showLogBackupFile)
 
         if (migrationUnit == null || migrationUnit.CSLastChecked == null || migrationUnit.CSLastChecked == DateTime.MinValue)
             return "NA";
+
+        if (migrationUnit.OpLogExpired)
+            return "Resume Token Expired";
 
         return Helper.GetTimestampDiff(migrationUnit.CSLastChecked.Value);
     }
