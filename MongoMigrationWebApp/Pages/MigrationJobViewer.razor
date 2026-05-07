@@ -285,7 +285,7 @@
             {
                 @foreach (var mu in GetFilteredAndPagedUnits())
                 {
-                    <tr>
+                    <tr class="@GetCollectionRowClass(mu)">
                         <td>
                             <i class="bi bi-info-circle-fill me-2 collection-info-icon" title="More info" style="cursor: pointer;"
                                @onclick="() => ShowCollectionDetails(mu)"></i>
@@ -649,7 +649,7 @@ else if (@_showLogBackupFile)
                 if (lagText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
 
-                // CS Last Checked column (includes "Resume Token Expired" for OpLogExpired)
+                // CS Last Checked column (includes "Resume Token Expired" / "Watch Failed" for OpLogError)
                 var lastCheckedText = GetTimeSinceLastBatch(CurrentlyLoadedMigrationJob, mu);
                 if (lastCheckedText.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
@@ -795,6 +795,17 @@ else if (@_showLogBackupFile)
 
     
 
+    private string GetCollectionRowClass(MigrationUnitBasic mu)
+    {
+        if (mu.SourceStatus == CollectionStatus.NotFound || mu.SourceStatus == CollectionStatus.IsView)
+            return "table-danger";
+
+        if (mu.OpLogError != ChangeStreamError.None)
+            return "table-danger";
+
+        return string.Empty;
+    }
+
     private string GetTimeSinceLastBatch(MigrationJob job,MigrationUnitBasic mu)
     {
         if (job.ChangeStreamLevel == OnlineMongoMigrationProcessor.Models.ChangeStreamLevel.Server)
@@ -810,8 +821,10 @@ else if (@_showLogBackupFile)
         if (migrationUnit == null || migrationUnit.CSLastChecked == null || migrationUnit.CSLastChecked == DateTime.MinValue)
             return "NA";
 
-        if (migrationUnit.OpLogExpired)
-            return "Resume Token Expired";
+        if (migrationUnit.OpLogError != ChangeStreamError.None)
+            return migrationUnit.OpLogError == ChangeStreamError.ResumeTokenExpired 
+                ? "Resume Token Expired" 
+                : "Watch Failed";
 
         return Helper.GetTimestampDiff(migrationUnit.CSLastChecked.Value);
     }

@@ -1104,7 +1104,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             string databaseName, string collectionName,
             int timeoutSeconds, CancellationToken cancellationToken)
         {
-            const int hardTimeoutSeconds = 300; // 5-minute absolute ceiling via Task.WhenAny
+            const int hardTimeoutSeconds = 300; // 15-minute absolute ceiling via Task.WhenAny
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
             

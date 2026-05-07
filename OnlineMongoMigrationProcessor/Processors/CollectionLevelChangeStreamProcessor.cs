@@ -213,7 +213,7 @@ namespace OnlineMongoMigrationProcessor
                     bool isReady=false;
                     if (hasCursorTimestamp)
                     {
-                        isReady = !mu.ResetChangeStream && !mu.OpLogExpired;
+                        isReady = !mu.ResetChangeStream && mu.OpLogError == ChangeStreamError.None;
                     }
 
                     return isReady;
@@ -304,8 +304,8 @@ namespace OnlineMongoMigrationProcessor
                         continue;
                     }
 
-                    // Skip collections with expired oplog
-                    if (mu.OpLogExpired)
+                    // Skip collections with change stream errors
+                    if (mu.OpLogError != ChangeStreamError.None)
                     {
                         continue;
                     }
@@ -423,9 +423,9 @@ namespace OnlineMongoMigrationProcessor
             _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts. Collections without a resume token will be skipped.");
         }
 
-        private bool HandleOpLogError(MigrationUnit mu)
+        private bool HandleOpLogError(MigrationUnit mu, ChangeStreamError errorType = ChangeStreamError.ResumeTokenExpired)
         {
-            MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.HandleOpLogError: muId={mu?.Id}, collection={mu?.DatabaseName}.{mu?.CollectionName}");
+            MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.HandleOpLogError: muId={mu?.Id}, collection={mu?.DatabaseName}.{mu?.CollectionName}, errorType={errorType}");
             
             try
             {
@@ -433,9 +433,12 @@ namespace OnlineMongoMigrationProcessor
                     return false;
 
                 mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
-                mu.OpLogExpired = true;
-                _log.WriteLine($"{_syncBackPrefix}OpLog expired for {mu.DatabaseName}.{mu.CollectionName}. Collection will be excluded from change stream processing.", LogType.Warning);
-                _log.ShowInMonitor($"{_syncBackPrefix}OpLog expired for {mu.DatabaseName}.{mu.CollectionName}. Collection will be excluded from change stream processing.");
+                mu.OpLogError = errorType;
+                string reason = errorType == ChangeStreamError.ResumeTokenExpired 
+                    ? "Resume Token expired" 
+                    : "Watch failed (cursor creation timed out)";
+                _log.WriteLine($"{_syncBackPrefix}{reason} for {mu.DatabaseName}.{mu.CollectionName}. Collection will be excluded from change stream processing.", LogType.Warning);
+                _log.ShowInMonitor($"{_syncBackPrefix}{reason} for {mu.DatabaseName}.{mu.CollectionName}. Collection will be excluded from change stream processing.");
                 MigrationJobContext.SaveMigrationUnit(mu, true);
                 return false;
             }
@@ -527,10 +530,7 @@ namespace OnlineMongoMigrationProcessor
                     seconds = CalculateBatchDuration(seconds, collectionKey);
                     var (options, resolvedTargetCollection) = await ConfigureChangeStreamOptionsAsync(mu, seconds, collectionKey, changeStreamCollection, targetCollection);
 
-                    using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
-                    CancellationToken cancellationToken = cancellationTokenSource.Token;
-
-                    await WatchCollection(mu, options, changeStreamCollection!, resolvedTargetCollection, cancellationToken, seconds);
+                    await WatchCollection(mu, options, changeStreamCollection!, resolvedTargetCollection, seconds);
                 }
 				catch (OperationCanceledException ex)
                 {
@@ -794,7 +794,7 @@ namespace OnlineMongoMigrationProcessor
 
         
 
-        private async Task WatchCollection(MigrationUnit mu, ChangeStreamOptions options, IMongoCollection<BsonDocument> changeStreamCollection, IMongoCollection<BsonDocument> targetCollection, CancellationToken cancellationToken, int seconds)
+        private async Task WatchCollection(MigrationUnit mu, ChangeStreamOptions options, IMongoCollection<BsonDocument> changeStreamCollection, IMongoCollection<BsonDocument> targetCollection, int seconds)
         {
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}WatchCollection started for {collectionKey} - Duration: {seconds}s, ResumeToken: {(!string.IsNullOrEmpty(mu.ResumeToken) ? "SET" : "NOT SET")}", LogType.Debug);
@@ -825,32 +825,59 @@ namespace OnlineMongoMigrationProcessor
                 readStopwatch.Start();
 
                 IChangeStreamCursor<ChangeStreamDocument<BsonDocument>>? cursor = null;
+                bool cursorCreationTimedOut = false;
                 try
                 {
-                    // 1. Create cursor
-                    cursor = await CreateChangeStreamCursorAsync(
-                        changeStreamCollection,
-                        pipelineArray,
-                        options,
-                        cancellationToken,
-                        collectionKey
-                    );
+                    // 1. Create cursor with a dedicated 5-minute timeout (independent of batch duration).
+                    //    The batch CTS is intentionally NOT linked here — cursor creation
+                    //    must get the full 5 minutes even when the batch is shorter (e.g. 30s).
+                    using var cursorCreationCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+                    var cursorCreationSw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        cursor = await CreateChangeStreamCursorAsync(
+                            changeStreamCollection,
+                            pipelineArray,
+                            options,
+                            cursorCreationCts.Token,
+                            collectionKey
+                        );
+                    }
+                    catch (OperationCanceledException) when (cursorCreationCts.IsCancellationRequested)
+                    {
+                        // Cursor creation exceeded 5-minute timeout
+                        cursorCreationTimedOut = true;
+                        throw;
+                    }
+                    finally
+                    {
+                        cursorCreationSw.Stop();
+                    }
+
+                    if (cursorCreationSw.Elapsed.TotalSeconds > seconds)
+                    {
+                        _log.WriteLine($"{_syncBackPrefix}Cursor creation for {collectionKey} took {cursorCreationSw.Elapsed.TotalSeconds:F1}s, exceeding batch duration of {seconds}s", LogType.Warning);
+                    }
+
                     if (cursor == null)
                     {
                         MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Cursor is null for {collectionKey}");
                         return;
                     }
 
-                    MigrationJobContext.AddVerboseLog($"{_syncBackPrefix} Cursor created for {collectionKey}. Starting processing...");
+                    MigrationJobContext.AddVerboseLog($"{_syncBackPrefix} Cursor created for {collectionKey} in {cursorCreationSw.Elapsed.TotalSeconds:F1}s. Starting processing...");
 
-                    // 2. Process cursor
+                    // 2. Process cursor with a fresh batch-duration CTS that starts NOW
+                    //    (after cursor creation), so processing always gets the full batch time.
+                    using var batchCts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+
                     await ProcessChangeStreamCursorAsync(
                         cursor,
                         mu,
                         changeStreamCollection,
                         targetCollection,
                         accumulatedChangesInColl,
-                        cancellationToken,
+                        batchCts.Token,
                         seconds,
                         userFilterDoc,
                         readStopwatch
@@ -868,9 +895,15 @@ namespace OnlineMongoMigrationProcessor
                     _log.WriteLine($"{_syncBackPrefix}Expired resume token or cursor for {collectionKey} - oplog position {currentPos} was deleted. Will not be processed for Change stream.", LogType.Warning);
                     HandleOpLogError(mu);
                 }
+                catch (OperationCanceledException) when (cursorCreationTimedOut)
+                {
+                    _log.WriteLine($"{_syncBackPrefix}Cursor creation timed out (5 min) for {collectionKey}. Marking as WatchFailed.", LogType.Warning);
+                    HandleOpLogError(mu, ChangeStreamError.WatchFailed);
+                }
                 catch (OperationCanceledException)
                 {
-                    MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}OperationCanceledException in WatchCollection for {collectionKey}");
+                    // Batch-duration CTS expired — normal end of batch
+                    _log.WriteLine($"{_syncBackPrefix}Batch duration expired for {collectionKey}.", LogType.Debug);
                 }
                 catch (Exception ex)
                 {
@@ -1218,11 +1251,11 @@ namespace OnlineMongoMigrationProcessor
                     }
 
                     // Advance the resume token using the server's postBatchResumeToken.
-                    // ONLY for idle collections (no events at all). When events were
-                    // processed, the flush already set mu.ResumeToken to the last
-                    // actually-processed change's token. Advancing past that with
-                    // postBatchResumeToken could skip unprocessed changes from a
-                    // partially-iterated cursor batch (e.g. CTS fired mid-batch).
+                    // TotalEventCount is reset to 0 at the start of each WatchCollection call,
+                    // so TotalEventCount == 0 here means no events were read in this batch.
+                    // When events were processed, the flush already advanced mu.ResumeToken
+                    // to the last change's token. We only use postBatchResumeToken for idle
+                    // collections to keep CursorUtcTimestamp current.
                     if (accumulatedChangesInColl.TotalEventCount == 0)
                     {
                         try
@@ -1236,13 +1269,12 @@ namespace OnlineMongoMigrationProcessor
                                 {
                                     SetResumeParameters(mu, DateTime.UtcNow, tokenJson, _syncBack);
                                     MigrationJobContext.SaveMigrationUnit(mu, true);
-                                    MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Advanced resume token via postBatchResumeToken for {collectionKey} (idle collection, no events)");
                                 }
                             }
                         }
                         catch (Exception ex)
                         {
-                            MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Could not retrieve postBatchResumeToken for {collectionKey}: {ex.Message}");
+                            _log.WriteLine($"{_syncBackPrefix}Could not retrieve postBatchResumeToken for {collectionKey}: {ex.Message}", LogType.Debug);
                         }
                     }
                 }
