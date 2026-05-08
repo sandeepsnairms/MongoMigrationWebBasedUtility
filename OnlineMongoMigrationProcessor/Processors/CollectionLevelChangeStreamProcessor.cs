@@ -267,7 +267,7 @@ namespace OnlineMongoMigrationProcessor
 
         private void LogProcessingConfiguration(int collectionCount)
         {
-            _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {collectionCount} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, collectionCount)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds. Collections without a resume token will be skipped and rechecked every 4 rounds.", LogType.Info);
+            _log.WriteLine($"{_syncBackPrefix}Starting collection-level change stream processing for {collectionCount} collection(s). Each round-robin batch will process {Math.Min(_concurrentProcessors, collectionCount)} collections. Max duration per batch {_processorRunMaxDurationInSec} seconds.", LogType.Info);
         }
 
         private int CalculateBatchDuration(List<string> batchKeys)
@@ -361,7 +361,7 @@ namespace OnlineMongoMigrationProcessor
 
         private async Task ExecuteBatchTasks(List<Task> tasks, List<string> collectionProcessed, int seconds)
         {
-            _log.WriteLine($"{_syncBackPrefix}Processing change streams for {collectionProcessed.Count} collections: {string.Join(", ", collectionProcessed)}, collections without a resume token have been skipped. Batch Duration {seconds} seconds", LogType.Info);
+            _log.WriteLine($"{_syncBackPrefix}Processing change streams for {collectionProcessed.Count} collections: {string.Join(", ", collectionProcessed)}. Batch Duration {seconds} seconds", LogType.Info);
 
             try
             {
@@ -420,7 +420,7 @@ namespace OnlineMongoMigrationProcessor
         private void LogRoundCompletion(long loops, int totalKeys)
         {
             MigrationJobContext.AddVerboseLog($"CollectionLevelChangeStreamProcessor.LogRoundCompletion: loops={loops}, totalKeys={totalKeys}");
-            _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts. Collections without a resume token will be skipped.");
+            _log.WriteLine($"{_syncBackPrefix}Completed round {loops} of change stream processing for all {totalKeys} collection(s). Starting a new round; collections are sorted by their previous batch change counts.");
         }
 
         private bool HandleOpLogError(MigrationUnit mu, ChangeStreamError errorType = ChangeStreamError.ResumeTokenExpired)
@@ -692,7 +692,15 @@ namespace OnlineMongoMigrationProcessor
             }
             else
             {
-                _log.WriteLine($"{_syncBackPrefix}Skipping auto-replay for {collectionKey} - InitialDocReplayed: {mu.InitialDocumenReplayed}, IsSimulated: {MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun}, ChangeStreamMode: {MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode}", LogType.Debug);
+                // In Aggressive or Simulated mode, auto-replay is skipped — the change stream
+                // handles the first change itself.  Mark the flag so the UI doesn't show a
+                // misleading "False".
+                if (!mu.InitialDocumenReplayed)
+                {
+                    mu.InitialDocumenReplayed = true;
+                    MigrationJobContext.SaveMigrationUnit(mu, false);
+                    _log.WriteLine($"{_syncBackPrefix}Auto-replay not needed for {collectionKey} (IsSimulated={MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun}, ChangeStreamMode={MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode}), marking InitialDocumenReplayed=true", LogType.Debug);
+                }
             }
         }
 
@@ -1315,7 +1323,6 @@ namespace OnlineMongoMigrationProcessor
                 mu.CSUpdatesInLastBatch = eventCounter; 
                 mu.CSNormalizedUpdatesInLastBatch = (long)(eventCounter / (mu.CSLastBatchDurationSeconds > 0 ? mu.CSLastBatchDurationSeconds : 1));
                 mu.CSLastChecked = System.DateTime.UtcNow;
-
 
                 // Transfer latency metrics from accumulatedChangesInColl to mu
                 if (eventCounter > 0)
