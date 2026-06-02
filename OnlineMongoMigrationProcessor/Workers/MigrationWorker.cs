@@ -44,6 +44,13 @@ namespace OnlineMongoMigrationProcessor.Workers
         bool _syncBack = false;
         private string? _webAppBaseUrl = null;
 
+        // Process-wide SSL failure tracking for keep-alive. Some hosts (e.g. behind a proxy that intermittently
+        // breaks TLS) produce a flood of SSL errors that the retry loop alone can't recover from; once we hit
+        // the threshold we stop calling KeepAlive for the rest of the app lifetime to avoid noisy logs and CPU.
+        private const int KeepAliveSslFailureThreshold = 10;
+        private static int _keepAliveSslFailureCount = 0;
+        private static bool _keepAliveDisabledForProcess = false;
+
         private CancellationTokenSource? _compare_cts;
         private CancellationTokenSource? _cts;
 
@@ -51,11 +58,83 @@ namespace OnlineMongoMigrationProcessor.Workers
         
         // Track resume token setup tasks per collection to enable per-collection waiting
         private Dictionary<string, Task> _resumeTokenTasksByCollection = new Dictionary<string, Task>();
-       
+        
         public MigrationWorker()
         {            
             _log = new Log();          
             MigrationJobContext.JobList.SetLog(_log);
+        }
+
+        /// <summary>
+        /// Gets the effective overwrite setting for a migration unit.
+        /// Per-unit Overwrite value takes precedence over job-level AppendMode.
+        /// Returns: true if unit should overwrite (drop target first), false if append.
+        /// </summary>
+        private bool GetEffectiveOverwrite(MigrationUnit mu)
+        {
+            // Simulated run always skips overwrite
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+                return false;
+
+            // Per-unit override takes precedence
+            if (mu.Overwrite.HasValue)
+                return mu.Overwrite.Value;
+
+            // Fall back to job-level AppendMode (inverted: AppendMode=true means Overwrite=false)
+            return !MigrationJobContext.CurrentlyActiveJob.AppendMode;
+        }
+
+        /// <summary>
+        /// Gets the effective skip-indexes setting for a migration unit.
+        /// Per-unit IndexingStrategy takes precedence over job-level SkipIndexes.
+        /// Returns: true if indexes should be skipped, false if indexes should be migrated.
+        /// </summary>
+        private bool GetEffectiveSkipIndexes(MigrationUnit mu)
+        {
+            // Simulated run always skips indexes
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+                return true;
+
+            // Per-unit override takes precedence
+            if (mu.IndexingStrategy.HasValue)
+                return mu.IndexingStrategy.Value == IndexingStrategy.DontIndex;
+
+            // Fall back to job-level SkipIndexes
+            return MigrationJobContext.CurrentlyActiveJob.SkipIndexes;
+        }
+
+        /// <summary>
+        /// Gets the effective sharding strategy for a migration unit.
+        /// Per-unit value wins; null means "inherit existing pre-feature behaviour".
+        /// Simulated runs force <see cref="ShardingStrategy.DontShard"/> regardless of the stored value
+        /// so that no shardCollection command can be issued against the target.
+        /// Note: actual shardCollection execution today lives in the Python SchemaMigration tool;
+        /// the .NET worker exposes this helper so any future .NET-side sharding path consumes the
+        /// per-unit value through one entry point.
+        /// </summary>
+        private ShardingStrategy GetEffectiveShardingStrategy(MigrationUnit mu)
+        {
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+                return ShardingStrategy.DontShard;
+
+            return mu.ShardingStrategy ?? ShardingStrategy.SameAsSource;
+        }
+
+        /// <summary>
+        /// Gets the effective target shard/node identifier for a migration unit.
+        /// Only meaningful when <see cref="GetEffectiveShardingStrategy"/> returns
+        /// <see cref="ShardingStrategy.DontShard"/>; null means "let the server decide".
+        /// Simulated runs always return null.
+        /// </summary>
+        private string? GetEffectiveMoveToShard(MigrationUnit mu)
+        {
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
+                return null;
+
+            if (GetEffectiveShardingStrategy(mu) != ShardingStrategy.DontShard)
+                return null;
+
+            return mu.MoveToShard;
         }
 
         /// <summary>
@@ -889,7 +968,9 @@ namespace OnlineMongoMigrationProcessor.Workers
         {
             MigrationJobContext.AddVerboseLog($"PrepareTargetCollectionAsync: mu={mu.DatabaseName}.{mu.CollectionName}");
 
-            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun || MigrationJobContext.CurrentlyActiveJob.AppendMode || mu.TargetCreated)
+            // Skip if simulated run, append mode (or per-unit Overwrite=false), or already created
+            var effectiveOverwrite = GetEffectiveOverwrite(mu);
+            if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun || !effectiveOverwrite || mu.TargetCreated)
                 return TaskResult.Success;
 
             var database = _sourceClient!.GetDatabase(mu.DatabaseName);
@@ -898,9 +979,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
                 return TaskResult.FailedAfterRetries;
             
+            var skipIndexes = GetEffectiveSkipIndexes(mu);
             var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, 
                 MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], 
-                collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
+                collection, skipIndexes);
 
             if (_cts.IsCancellationRequested)
                 return TaskResult.Canceled;
@@ -935,17 +1017,19 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (_cts.IsCancellationRequested)
                 return TaskResult.Canceled;
 
+            var effectiveOverwrite = GetEffectiveOverwrite(mu);
             if (!MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun && 
-                !MigrationJobContext.CurrentlyActiveJob.AppendMode && 
+                effectiveOverwrite && 
                 !mu.TargetCreated)
             {
                 try
                 {
                     var database = _sourceClient!.GetDatabase(mu.DatabaseName);
                     var collection = database.GetCollection<BsonDocument>(mu.CollectionName);
+                    var skipIndexes = GetEffectiveSkipIndexes(mu);
                     await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, 
                         MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], 
-                        collection, MigrationJobContext.CurrentlyActiveJob.SkipIndexes);
+                        collection, skipIndexes);
                 }
                 catch
                 {
@@ -1258,16 +1342,32 @@ namespace OnlineMongoMigrationProcessor.Workers
                    Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob);
         }
 
+        private static bool IsSslFailure(Exception ex)
+        {
+            for (var cur = ex; cur != null; cur = cur.InnerException)
+            {
+                if (cur is System.Security.Authentication.AuthenticationException)
+                    return true;
+                if (cur.Message?.IndexOf("SSL", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
         private async Task<TaskResult> WaitForMigrationProcessorCompletionAsync(CancellationToken ctsToken)
         {
             MigrationJobContext.AddVerboseLog("Waiting for migration processor to complete all activities");
             
             // Get the web app base URL from class-level variable
-            bool useKeepAlive = !string.IsNullOrEmpty(_webAppBaseUrl);
+            bool useKeepAlive = !string.IsNullOrEmpty(_webAppBaseUrl) && !_keepAliveDisabledForProcess;
             
             if (useKeepAlive)
             {
                 _log.WriteLine($"Keep-alive mechanism enabled with base URL: {_webAppBaseUrl}", LogType.Debug);
+            }
+            else if (_keepAliveDisabledForProcess)
+            {
+                _log.WriteLine("Keep-alive disabled for this process due to repeated SSL failures; will remain off until app restart.", LogType.Info);
             }
 
             int counter = 0;
@@ -1308,6 +1408,17 @@ namespace OnlineMongoMigrationProcessor.Workers
                     catch (Exception ex)
                     {
                         _log.WriteLine($"Keep-alive call failed. Details: {ex}", LogType.Debug);
+
+                        if (IsSslFailure(ex))
+                        {
+                            int count = Interlocked.Increment(ref _keepAliveSslFailureCount);
+                            if (count >= KeepAliveSslFailureThreshold && !_keepAliveDisabledForProcess)
+                            {
+                                _keepAliveDisabledForProcess = true;
+                                useKeepAlive = false;
+                                _log.WriteLine($"Keep-alive disabled for the rest of this process after {count} SSL failures. It will re-enable only on app restart.", LogType.Warning);
+                            }
+                        }
                     }
                 }
 

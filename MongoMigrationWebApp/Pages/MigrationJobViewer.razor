@@ -159,6 +159,16 @@
     <ManageCollections MigrationJob="@CurrentlyLoadedMigrationJob" MigrationUnits="@JobManager.GetMigrationUnits(CurrentlyLoadedMigrationJob)" SourceConnectionString="@MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id]" OnCollectionsUpdated="@OnCollectionsUpdated" />
 }
 
+@if (_manageCollectionsModalOpen && CurrentlyLoadedMigrationJob != null)
+{
+    <ManageCollectionsModal MigrationJob="@CurrentlyLoadedMigrationJob" 
+                            MigrationUnits="@JobManager.GetMigrationUnits(CurrentlyLoadedMigrationJob)" 
+                            SourceConnectionString="@MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id]"
+                            TargetConnectionString="@MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id]"
+                            OnCollectionsCommitted="@OnManageCollectionsCommitted" 
+                            OnCancelled="@(() => _manageCollectionsModalOpen = false)" />
+}
+
 @if (_resetChangeStreamDialogOpen && CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.JobType!= OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy)
 {
     <ResetChangeStream Job="@CurrentlyLoadedMigrationJob" MigrationUnits="@((@JobManager.GetMigrationUnits(CurrentlyLoadedMigrationJob) ?? new List<MigrationUnit>()).Where(mu => mu.SourceStatus != CollectionStatus.NotFound && mu.SourceStatus != CollectionStatus.IsView).ToList())" OnCollectionsUpdated="@OnCSReset" />
@@ -417,6 +427,7 @@
 {
     <div class="d-flex align-items-center mb-3 mt-4">
         <button class="btn btn-primary mx-2" title="You can add or remove collections from this job. Be sure to pause the job before doing so." @onclick="ManageCollections" disabled="@_isLoadingCollections">Update Collections</button>
+        <button class="btn btn-primary mx-2" title="Advanced: Add or remove collections with per-collection options. Be sure to pause the job before doing so." @onclick="OpenManageCollectionsModal" disabled="@_isLoadingCollections">Manage Collections</button>
         @if (CurrentlyLoadedMigrationJob != null && Helper.IsOnline(CurrentlyLoadedMigrationJob))
         {
             <button class="btn btn-warning mx-2" title="Reset the change stream checkpoint to start from the beginning. This may add extra load to the migration process and could delay other collections. Ensure the job is paused before continuing." @onclick="ResetChangeStream">
@@ -572,6 +583,7 @@ else if (@_showLogBackupFile)
     private bool _yesNoDialogOpen;
     private YesNoDialog.Category _yesNoDiaLogType= YesNoDialog.Category.CutoverNot;
     private bool _manageCollectionDialogOpen;
+    private bool _manageCollectionsModalOpen;
     private bool _resetChangeStreamDialogOpen;
     private bool _collectionDetailsDialogOpen;
 
@@ -1507,6 +1519,31 @@ else if (@_showLogBackupFile)
                 _errorMessage = "Please pause the job before updating collections.";
         }
     }
+    
+    private void OpenManageCollectionsModal()
+    {
+        _errorMessage = string.Empty;
+
+        // Check if both SourceConnectionString and TargetConnectionString are available
+        if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id]) ||
+            string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id]))
+        {
+            _errorMessage = "Source connection string is not available. Please use 'Resume Job' → 'With Updated Connection Strings' to provide connection details, then pause the job before updating collections.";
+            return;
+        }
+
+        if (IsResumeEnabled() && !(CurrentlyLoadedMigrationJob?.ProcessingSyncBack ?? false))
+        {
+            _manageCollectionsModalOpen = true;
+        }
+        else
+        {
+            if (CurrentlyLoadedMigrationJob?.ProcessingSyncBack ?? false)
+                _errorMessage = "You cannot update collections after sync back has started.";
+            else
+                _errorMessage = "Please pause the job before updating collections.";
+        }
+    }
     private async Task ResumeJobWithNewConnectionString()
     {
         await DecideAndResumeJob(true);
@@ -1617,6 +1654,13 @@ else if (@_showLogBackupFile)
         }
     }
 
+
+    private async Task OnManageCollectionsCommitted()
+    {
+        _manageCollectionsModalOpen = false;
+        OnCollectionsUpdated(JobManager.GetMigrationUnits(CurrentlyLoadedMigrationJob));
+        await Task.CompletedTask;
+    }
 
     private async void OnCollectionsUpdated(List<MigrationUnit> migrationUnits)
     {

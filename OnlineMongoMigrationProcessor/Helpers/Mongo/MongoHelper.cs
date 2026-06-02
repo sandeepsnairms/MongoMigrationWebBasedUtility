@@ -24,7 +24,7 @@ using System.Threading.Tasks;
 
 namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 {
-    internal static class MongoHelper
+    public static class MongoHelper
     {
         // Define the new delegate type - made public for use in ParallelWriteHelper
         public delegate void CounterDelegate<TMigration>(
@@ -2108,6 +2108,111 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 DataType.Object => value.ToJson(),
                 _ => value.ToString()
             };
+        }
+
+        /// <summary>
+        /// Discovers cluster nodes (shards) for the Cosmos vCore / MongoDB target.
+        /// Returns shard IDs for vCore, node identifiers for replica sets, or empty for standalone/RU.
+        /// Used to populate the "Move to" dropdown when ShardingStrategy = DontShard.
+        /// </summary>
+        public static async Task<List<string>> GetClusterNodesAsync(string connectionString)
+        {
+            var nodes = new List<string>();
+            
+            try
+            {
+                var client = new MongoClient(connectionString);
+                
+                // 1. vCore: db.adminCommand({ listShards: 1 }) -> { shards: [ { _id, host, ... } ], ok: 1 }
+                if (connectionString.Contains("mongocluster.cosmos.azure.com"))
+                {
+                    try
+                    {
+                        var adminDb = client.GetDatabase("admin");
+                        var command = new BsonDocument { { "listShards", 1 } };
+                        var result = await adminDb.RunCommandAsync<BsonDocument>(command);
+
+                        if (result.Contains("shards") && result["shards"].IsBsonArray)
+                        {
+                            foreach (var shard in result["shards"].AsBsonArray)
+                            {
+                                if (shard.IsBsonDocument && shard.AsBsonDocument.Contains("_id"))
+                                {
+                                    nodes.Add(shard.AsBsonDocument["_id"].AsString);
+                                }
+                            }
+                        }
+
+                        if (nodes.Count > 0)
+                            return nodes;
+                    }
+                    catch
+                    {
+                        // Fall through to next probes
+                    }
+                }
+                
+                // 2. RU (MongoDB API for Cosmos DB): Return empty - no sharding control available
+                if (Helper.IsRU(connectionString))
+                {
+                    return nodes; // Empty list
+                }
+                
+                // 3. Native sharded cluster: Query config.shards
+                try
+                {
+                    var configDb = client.GetDatabase("config");
+                    var shardsCollection = configDb.GetCollection<BsonDocument>("shards");
+                    
+                    var shardsCursor = await shardsCollection.FindAsync(FilterDefinition<BsonDocument>.Empty);
+                    var shardDocs = await shardsCursor.ToListAsync();
+                    
+                    foreach (var doc in shardDocs)
+                    {
+                        if (doc.Contains("_id"))
+                        {
+                            nodes.Add(doc["_id"].AsString);
+                        }
+                    }
+                    
+                    if (nodes.Count > 0)
+                        return nodes;
+                }
+                catch
+                {
+                    // Not a sharded cluster or no access to config db
+                }
+                
+                // 4. Native replica set: Use SDAM (Server Discovery and Monitoring)
+                try
+                {
+                    var cluster = client.Cluster;
+                    var description = cluster.Description;
+                    if (description.Type == ClusterType.ReplicaSet)
+                    {
+                        foreach (var server in description.Servers)
+                        {
+                            // Add server endpoint as node identifier
+                            nodes.Add(server.EndPoint.ToString());
+                        }
+                        
+                        if (nodes.Count > 0)
+                            return nodes;
+                    }
+                }
+                catch
+                {
+                    // SDAM probe failed
+                }
+                
+                // 5. Standalone or unable to determine: Return empty
+                return nodes;
+            }
+            catch (Exception ex)
+            {
+                MigrationJobContext.AddVerboseLog($"GetClusterNodesAsync failed: {ex.Message}");
+                return nodes; // Empty list on error
+            }
         }
 
     }
