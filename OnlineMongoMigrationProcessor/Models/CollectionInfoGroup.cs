@@ -12,12 +12,12 @@ namespace OnlineMongoMigrationProcessor.Models
         
         /// <summary>
         /// Per-collection overwrite mode. When TRUE, target collection is dropped before migration.
-        /// Null inherits job-level AppendMode behavior.
+        /// Defaults to false (append mode) when not set.
         /// </summary>
         public bool? Overwrite { get; set; }
         
         /// <summary>
-        /// Per-collection indexing strategy. Null inherits job-level SkipIndexes behavior.
+        /// Per-collection indexing strategy. Defaults to migrating indexes when not set.
         /// </summary>
         public IndexingStrategy? IndexingStrategy { get; set; }
         
@@ -34,8 +34,9 @@ namespace OnlineMongoMigrationProcessor.Models
     
     public enum IndexingStrategy
     {
-        SameAsSource,   // Migrate indexes from source
-        DontIndex       // Skip index migration
+        SameAsSource,           // Migrate indexes from source (non-blocking)
+        SameAsSourceBlocking,   // Migrate indexes from source (blocking)
+        DontIndex               // Skip index migration
     }
     
     public enum ShardingStrategy

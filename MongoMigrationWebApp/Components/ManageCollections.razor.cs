@@ -16,7 +16,7 @@ using System.Text.Json;
 
 namespace MongoMigrationWebApp.Components
 {
-    public partial class ManageCollectionsModal : ComponentBase
+    public partial class ManageCollections : ComponentBase
     {
         [Parameter, EditorRequired]
         public MigrationJob MigrationJob { get; set; } = null!;
@@ -558,12 +558,25 @@ namespace MongoMigrationWebApp.Components
         {
             _showCancelConfirmation = false;
             await OnCancelled.InvokeAsync();
+            await InvokeAsync(StateHasChanged);
         }
 
         private void CancelCancelConfirmation()
         {
             _showCancelConfirmation = false;
             StateHasChanged();
+        }
+
+        private async void HandleCancelConfirmationResult(YesNoDialog.YesNoDialogResult result)
+        {
+            if (result.IsConfirmed)
+            {
+                ConfirmCancel();
+            }
+            else
+            {
+                CancelCancelConfirmation();
+            }
         }
 
         // === SUMMARY VIEW ===

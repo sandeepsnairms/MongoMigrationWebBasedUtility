@@ -112,6 +112,7 @@ else
                     <div><span class="lbl">Ended On (UTC):</span> @(mu.BulkCopyEndedOn?.ToString() ?? "N/A")</div>
                     <div><span class="lbl">Duration:</span> @duration</div>
                     <div><span class="lbl">Indexes Migrated:</span> @mu.IndexesMigrated</div>
+                    <div><span class="lbl">Index Build Progress:</span> @(mu.IndexBuildComplete ? "Complete" : $"{mu.IndexPercent:F1}%")</div>
                     <div><span class="lbl">Estimated Count:</span> @FormatLong(mu.EstimatedDocCount)</div>
                     <div><span class="lbl">Actual Count:</span> @FormatLong(mu.ActualDocCount)</div>
                     <div><span class="lbl">Count While Copying:</span> @FormatLong(mu.SourceCountDuringCopy)</div>

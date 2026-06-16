@@ -52,8 +52,17 @@ namespace OnlineMongoMigrationProcessor
         }
         public double DumpPercent { get; set; }
         public double RestorePercent { get; set; }
+        /// <summary>
+        /// Tracks progress of non-unique index builds after offline data copy (0–100).
+        /// Only applies when IndexingStrategy is SameAsSource or SameAsSourceBlocking.
+        /// </summary>
+        public double IndexPercent { get; set; }
         public bool DumpComplete { get; set; }
         public bool RestoreComplete { get; set; }
+        /// <summary>
+        /// Set to true when all non-unique index builds have completed on the target.
+        /// </summary>
+        public bool IndexBuildComplete { get; set; }
 
         public CollectionStatus SourceStatus { get; set; }
         public bool ResetChangeStream { get; set; }
@@ -162,15 +171,15 @@ namespace OnlineMongoMigrationProcessor
 
         public string? UserFilter { get; set; }
         
-        // Per-collection options (nullable = inherit job-level defaults)
+        // Per-collection options (nullable = use defaults when not set)
         /// <summary>
         /// Per-collection overwrite mode. When TRUE, target collection is dropped before migration.
-        /// Null inherits job-level AppendMode behavior.
+        /// Defaults to false (append mode) when not set.
         /// </summary>
         public bool? Overwrite { get; set; }
         
         /// <summary>
-        /// Per-collection indexing strategy. Null inherits job-level SkipIndexes behavior.
+        /// Per-collection indexing strategy. Defaults to migrating indexes when not set.
         /// </summary>
         public IndexingStrategy? IndexingStrategy { get; set; }
         
@@ -397,8 +406,10 @@ namespace OnlineMongoMigrationProcessor
             mub.SyncBackCursorUtcTimestamp = this.SyncBackCursorUtcTimestamp;
             mub.DumpPercent = this.DumpPercent;
             mub.RestorePercent = this.RestorePercent;
+            mub.IndexPercent = this.IndexPercent;
             mub.DumpComplete = this.DumpComplete;
             mub.RestoreComplete = this.RestoreComplete;
+            mub.IndexBuildComplete = this.IndexBuildComplete;
             mub.SourceStatus = this.SourceStatus;
             mub.ResetChangeStream = this.ResetChangeStream;
             mub.SkipDataTypeFilterForId = this.SkipDataTypeFilterForId;

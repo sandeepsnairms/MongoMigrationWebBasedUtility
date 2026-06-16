@@ -205,6 +205,157 @@ namespace OnlineMongoMigrationProcessor.Processors
 #endif
 
         
+        /// <summary>
+        /// Builds non-unique indexes on the target after offline data copy completes.
+        /// For blocking mode: waits for index builds to complete, monitoring via currentOp.
+        /// For non-blocking mode: starts index builds and monitors progress asynchronously.
+        /// Updates mu.IndexPercent and mu.IndexBuildComplete accordingly.
+        /// Returns true if change stream can proceed immediately (non-blocking or no indexes needed).
+        /// </summary>
+        public async Task<bool> BuildNonUniqueIndexesAfterCopyAsync(MigrationUnit mu)
+        {
+            // Skip if indexes are not being migrated
+            if (!mu.IndexingStrategy.HasValue || mu.IndexingStrategy.Value == IndexingStrategy.DontIndex)
+            {
+                mu.IndexPercent = 100;
+                mu.IndexBuildComplete = true;
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+                return true;
+            }
+
+            // Skip if already complete
+            if (mu.IndexBuildComplete)
+                return true;
+
+            var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id];
+            var sourceDatabase = _sourceClient!.GetDatabase(mu.DatabaseName);
+            var sourceCollection = sourceDatabase.GetCollection<BsonDocument>(mu.CollectionName);
+            var targetDatabaseName = mu.GetEffectiveTargetDatabaseName();
+            var targetCollectionName = mu.GetEffectiveTargetCollectionName();
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, targetDatabaseName, targetCollectionName);
+
+            bool isBlocking = mu.IndexingStrategy.Value == IndexingStrategy.SameAsSourceBlocking;
+
+            _log.WriteLine($"Starting non-unique index build ({(isBlocking ? "blocking" : "non-blocking")}) for {namespaceForLog}");
+
+            // Build non-unique indexes
+            int count = await MongoHelper.BuildNonUniqueIndexesAsync(_log, mu, targetConnStr, sourceCollection);
+            if (count < 0)
+            {
+                _log.WriteLine($"Failed to build non-unique indexes for {namespaceForLog}", LogType.Error);
+                return !isBlocking; // In non-blocking mode, don't block change stream on failure
+            }
+
+            if (count == 0)
+            {
+                // No non-unique indexes to build
+                mu.IndexPercent = 100;
+                mu.IndexBuildComplete = true;
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+                _log.WriteLine($"No non-unique indexes to build for {namespaceForLog}");
+                return true;
+            }
+
+            if (isBlocking)
+            {
+                // Wait for all index builds to complete by polling currentOp
+                _log.WriteLine($"Waiting for blocking index builds to complete on {namespaceForLog}");
+                return await WaitForIndexBuildsAsync(mu, targetConnStr, targetDatabaseName, targetCollectionName);
+            }
+            else
+            {
+                // Non-blocking: start monitoring in background, don't block change stream
+                _ = Task.Run(() => MonitorIndexBuildsAsync(mu, targetConnStr, targetDatabaseName, targetCollectionName));
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Polls currentOp until all index builds on the collection complete. (Blocking mode)
+        /// </summary>
+        private async Task<bool> WaitForIndexBuildsAsync(MigrationUnit mu, string targetConnStr, string databaseName, string collectionName)
+        {
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, databaseName, collectionName);
+            const int pollIntervalMs = 5000;
+            const int maxAttempts = 8640; // ~12 hours at 5s intervals
+
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (_cts.Token.IsCancellationRequested)
+                    return false;
+
+                var (activeBuilds, progress) = await MongoHelper.CheckIndexBuildProgressAsync(_log, targetConnStr, databaseName, collectionName);
+
+                mu.IndexPercent = Math.Min(100, Math.Max(0, progress));
+                MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                if (activeBuilds == 0)
+                {
+                    mu.IndexPercent = 100;
+                    mu.IndexBuildComplete = true;
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
+                    _log.WriteLine($"Blocking index builds completed for {namespaceForLog}");
+                    return true;
+                }
+
+                if (attempt % 12 == 0) // Log every ~60 seconds
+                    _log.WriteLine($"Index build in progress for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+
+                await Task.Delay(pollIntervalMs, _cts.Token);
+            }
+
+            _log.WriteLine($"Index build monitoring timed out for {namespaceForLog}", LogType.Warning);
+            return false;
+        }
+
+        /// <summary>
+        /// Monitors index builds asynchronously and updates IndexPercent. (Non-blocking mode)
+        /// </summary>
+        private async Task MonitorIndexBuildsAsync(MigrationUnit mu, string targetConnStr, string databaseName, string collectionName)
+        {
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, databaseName, collectionName);
+            const int pollIntervalMs = 10000;
+            const int maxAttempts = 4320; // ~12 hours at 10s intervals
+
+            try
+            {
+                for (int attempt = 0; attempt < maxAttempts; attempt++)
+                {
+                    if (_cts.Token.IsCancellationRequested)
+                        return;
+
+                    var (activeBuilds, progress) = await MongoHelper.CheckIndexBuildProgressAsync(_log, targetConnStr, databaseName, collectionName);
+
+                    mu.IndexPercent = Math.Min(100, Math.Max(0, progress));
+                    MigrationJobContext.SaveMigrationUnit(mu, true);
+
+                    if (activeBuilds == 0)
+                    {
+                        mu.IndexPercent = 100;
+                        mu.IndexBuildComplete = true;
+                        MigrationJobContext.SaveMigrationUnit(mu, true);
+                        _log.WriteLine($"Non-blocking index builds completed for {namespaceForLog}");
+                        return;
+                    }
+
+                    if (attempt % 6 == 0) // Log every ~60 seconds
+                        _log.WriteLine($"Index build in progress (non-blocking) for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+
+                    await Task.Delay(pollIntervalMs, _cts.Token);
+                }
+
+                _log.WriteLine($"Non-blocking index build monitoring timed out for {namespaceForLog}", LogType.Warning);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Error monitoring index builds for {namespaceForLog}: {ex.Message}", LogType.Warning);
+            }
+        }
+
         public void StopOfflineOrInvokeChangeStreams()
         {
             // Handle offline completion and post-upload CS logic

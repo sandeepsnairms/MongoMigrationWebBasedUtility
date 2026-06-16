@@ -6,7 +6,7 @@ namespace MongoMigrationWebApp.Models
 {
     /// <summary>
     /// Represents a draft collection addition before it's committed to the job.
-    /// Used in ManageCollectionsModal for temporary state management.
+    /// Used in ManageCollections for temporary state management.
     /// </summary>
     public record PendingAddition
     {

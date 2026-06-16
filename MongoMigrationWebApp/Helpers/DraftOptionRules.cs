@@ -4,7 +4,7 @@ using OnlineMongoMigrationProcessor.Models;
 namespace MongoMigrationWebApp.Helpers
 {
     // Single source of truth for the per-collection option conditional matrix used in
-    // ManageCollectionsModal (Add form, Edit form, Bulk toolbar, AddDraft, SaveEdit,
+    // ManageCollections (Add form, Edit form, Bulk toolbar, AddDraft, SaveEdit,
     // BulkSetOverwrite, RenderOptionsBadges). Rules:
     //   - Overwrite = FALSE  -> Indexing, Sharding, Move-to are not meaningful (target is not recreated).
     //   - Sharding != DontShard -> Move-to is not meaningful.

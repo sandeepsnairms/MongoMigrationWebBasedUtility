@@ -44,9 +44,9 @@ namespace OnlineMongoMigrationProcessor
 
         /// <summary>
         /// Callback invoked by coordinator when a migration unit completes dump/restore.
-        /// Handles post-processing like change stream setup.
+        /// Handles post-processing like non-unique index building and change stream setup.
         /// </summary>
-        private void OnMigrationUnitCompleted(MigrationUnit mu)
+        private async void OnMigrationUnitCompleted(MigrationUnit mu)
         {
             MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.OnMigrationUnitCompleted: mu={mu.DatabaseName}.{mu.CollectionName}");
             _log.WriteLine($"Processing completion callback for migration unit {mu.DatabaseName}. {mu.CollectionName}", LogType.Debug);
@@ -57,8 +57,12 @@ namespace OnlineMongoMigrationProcessor
                 return;
             }
 
-            // Start change stream processing for the completed migration unit
-            AddCollectionToChangeStreamQueue(mu);
+            // Build non-unique indexes after data copy completes
+            bool canProceedToChangeStream = await BuildNonUniqueIndexesAfterCopyAsync(mu);
+
+            // Start change stream processing (gated by blocking index completion)
+            if (canProceedToChangeStream)
+                AddCollectionToChangeStreamQueue(mu);
 
             PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
             PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);

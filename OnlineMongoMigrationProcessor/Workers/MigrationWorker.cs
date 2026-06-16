@@ -67,7 +67,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
         /// <summary>
         /// Gets the effective overwrite setting for a migration unit.
-        /// Per-unit Overwrite value takes precedence over job-level AppendMode.
+        /// Per-unit Overwrite value determines behavior.
         /// Returns: true if unit should overwrite (drop target first), false if append.
         /// </summary>
         private bool GetEffectiveOverwrite(MigrationUnit mu)
@@ -76,17 +76,17 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 return false;
 
-            // Per-unit override takes precedence
+            // Per-unit override (defaults to false / append if not set)
             if (mu.Overwrite.HasValue)
                 return mu.Overwrite.Value;
 
-            // Fall back to job-level AppendMode (inverted: AppendMode=true means Overwrite=false)
-            return !MigrationJobContext.CurrentlyActiveJob.AppendMode;
+            // Default: append mode (don't overwrite)
+            return false;
         }
 
         /// <summary>
         /// Gets the effective skip-indexes setting for a migration unit.
-        /// Per-unit IndexingStrategy takes precedence over job-level SkipIndexes.
+        /// Per-unit IndexingStrategy determines behavior.
         /// Returns: true if indexes should be skipped, false if indexes should be migrated.
         /// </summary>
         private bool GetEffectiveSkipIndexes(MigrationUnit mu)
@@ -95,12 +95,25 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun)
                 return true;
 
-            // Per-unit override takes precedence
+            // Per-unit override
             if (mu.IndexingStrategy.HasValue)
                 return mu.IndexingStrategy.Value == IndexingStrategy.DontIndex;
 
-            // Fall back to job-level SkipIndexes
-            return MigrationJobContext.CurrentlyActiveJob.SkipIndexes;
+            // Default: migrate indexes
+            return false;
+        }
+
+        /// <summary>
+        /// Gets whether blocking index creation should be used for a migration unit.
+        /// Returns: true if indexes should be created in blocking mode, false for non-blocking (background).
+        /// </summary>
+        private bool GetEffectiveBlockingIndexes(MigrationUnit mu)
+        {
+            if (mu.IndexingStrategy.HasValue)
+                return mu.IndexingStrategy.Value == IndexingStrategy.SameAsSourceBlocking;
+
+            // Default: non-blocking
+            return false;
         }
 
         /// <summary>
@@ -132,6 +145,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return null;
 
             if (GetEffectiveShardingStrategy(mu) != ShardingStrategy.DontShard)
+                return null;
+
+            // "Auto" should have been resolved by ResolveAutoShardAssignmentsAsync;
+            // if it wasn't, treat as null (no move)
+            if (string.Equals(mu.MoveToShard, "Auto", StringComparison.OrdinalIgnoreCase))
                 return null;
 
             return mu.MoveToShard;
@@ -355,23 +373,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             else
             {
-                if (MigrationJobContext.CurrentlyActiveJob.AppendMode)
+                if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
                 {
-                    _log.WriteLine("Target collections will not be dropped, and no indexes will be modified or created. Only new data will be migrated.", LogType.Warning);
-                }
-                else
-                {
-                    if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
-                    {
-                        _log.WriteLine("This migration job will not transfer the indexes to the target collections. Use the schema migration script at https://aka.ms/mongoruschemamigrationscript to create the indexes on the target collections.", LogType.Warning);
-                    }
-                    else
-                    {
-                        if (MigrationJobContext.CurrentlyActiveJob.SkipIndexes)
-                        {
-                            _log.WriteLine("No indexes will be created.", LogType.Warning);
-                        }
-                    }
+                    _log.WriteLine("This migration job will not transfer the indexes to the target collections. Use the schema migration script at https://aka.ms/mongoruschemamigrationscript to create the indexes on the target collections.", LogType.Warning);
                 }
             }
             if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.DumpAndRestore)
@@ -698,6 +702,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             _log.WriteLine("About to enter foreach loop for migration units", LogType.Debug);
 
+            // Resolve "Auto" shard assignments before processing
+            await ResolveAutoShardAssignmentsAsync(unitsForPrep);
+
             int unitIndex = 0;
             foreach (var mu in unitsForPrep)
             {
@@ -778,8 +785,24 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 if (_migrationProcessor != null && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
                 {
-                    _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
-                    _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue via fast-path", LogType.Debug);
+                    // For blocking mode, only add to change stream if index builds are complete
+                    bool isBlocking = GetEffectiveBlockingIndexes(mu);
+                    if (isBlocking && !mu.IndexBuildComplete)
+                    {
+                        _log.WriteLine($"Blocking index builds not yet complete for {mu.DatabaseName}.{mu.CollectionName} - deferring change stream", LogType.Debug);
+                        // Trigger non-unique index build if not already done
+                        bool canProceed = await _migrationProcessor.BuildNonUniqueIndexesAfterCopyAsync(mu);
+                        if (canProceed)
+                        {
+                            _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
+                            _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue after blocking index build", LogType.Debug);
+                        }
+                    }
+                    else
+                    {
+                        _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
+                        _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue via fast-path", LogType.Debug);
+                    }
                 }
 
                 return TaskResult.Success;
@@ -979,16 +1002,24 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (string.IsNullOrWhiteSpace(MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
                 return TaskResult.FailedAfterRetries;
             
+            var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id];
             var skipIndexes = GetEffectiveSkipIndexes(mu);
+            // When indexing strategy requires index building, only create unique indexes
+            // before data copy. Non-unique indexes will be built after offline copy completes.
+            bool useUniqueOnly = !skipIndexes && (mu.IndexingStrategy == IndexingStrategy.SameAsSource || mu.IndexingStrategy == IndexingStrategy.SameAsSourceBlocking);
             var result = await MongoHelper.DeleteAndCopyIndexesAsync(_log, mu, 
-                MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], 
-                collection, skipIndexes);
+                targetConnStr, collection, skipIndexes, uniqueOnly: useUniqueOnly);
 
             if (_cts.IsCancellationRequested)
                 return TaskResult.Canceled;
 
             if (!result)
                 return TaskResult.Retry;
+
+            // Apply sharding or move collection after creation and before data copy
+            var shardingResult = await ApplyShardingStrategyAsync(mu, _cts);
+            if (shardingResult != TaskResult.Success)
+                return shardingResult;
 
             MigrationJobContext.SaveMigrationUnit(mu, false);
 
@@ -999,7 +1030,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 _log.WriteLine("SyncBack: Checking if change stream is enabled on target");
                 var retValue = await MongoHelper.IsChangeStreamEnabledAsync(_log, string.Empty, 
-                    MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id], mu, true);
+                    targetConnStr, mu, true);
                 
                 context.CheckedCS = true;
                 
@@ -1008,6 +1039,125 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             return TaskResult.Success;
+        }
+
+        /// <summary>
+        /// Applies sharding strategy to the target collection after creation.
+        /// SameAsSource: reads shard key from source, applies hashed shard key on target.
+        /// DontShard + MoveToShard: moves collection to specified shard using moveCollection.
+        /// </summary>
+        private async Task<TaskResult> ApplyShardingStrategyAsync(MigrationUnit mu, CancellationToken _cts)
+        {
+            var strategy = GetEffectiveShardingStrategy(mu);
+            var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id];
+            var targetClient = MongoClientFactory.Create(_log, targetConnStr);
+            var targetDatabaseName = mu.GetEffectiveTargetDatabaseName();
+            var targetCollectionName = mu.GetEffectiveTargetCollectionName();
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, targetDatabaseName, targetCollectionName);
+
+            if (strategy == ShardingStrategy.SameAsSource)
+            {
+                // Read shard key from source and apply on target
+                var sourceShardKey = await MongoHelper.GetShardKeyFromSourceAsync(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName);
+                if (sourceShardKey != null)
+                {
+                    _log.WriteLine($"Applying shard key from source for {namespaceForLog}");
+                    var shardResult = await MongoHelper.ShardCollectionAsync(_log, targetClient, targetDatabaseName, targetCollectionName, sourceShardKey);
+                    if (!shardResult)
+                    {
+                        _log.WriteLine($"Failed to shard collection {namespaceForLog}, continuing without sharding", LogType.Warning);
+                    }
+                }
+                else
+                {
+                    _log.WriteLine($"Source collection {namespaceForLog} is not sharded, skipping shard key migration", LogType.Debug);
+                }
+            }
+            else if (strategy == ShardingStrategy.DontShard)
+            {
+                // Move collection to specified shard if MoveToShard is set
+                var moveToShard = GetEffectiveMoveToShard(mu);
+                if (!string.IsNullOrWhiteSpace(moveToShard))
+                {
+                    _log.WriteLine($"Moving collection {namespaceForLog} to shard: {moveToShard}");
+                    var moveResult = await MongoHelper.MoveCollectionAsync(_log, targetClient, targetDatabaseName, targetCollectionName, moveToShard);
+                    if (!moveResult)
+                    {
+                        _log.WriteLine($"Failed to move collection {namespaceForLog} to shard {moveToShard}, continuing", LogType.Warning);
+                    }
+                }
+            }
+
+            if (_cts.IsCancellationRequested)
+                return TaskResult.Canceled;
+
+            return TaskResult.Success;
+        }
+
+        /// <summary>
+        /// Resolves "Auto" MoveToShard values by distributing collections across available shards
+        /// using greedy bin-packing by source storage size (largest-first).
+        /// Collections are assigned to the shard with the least accumulated storage.
+        /// </summary>
+        private async Task ResolveAutoShardAssignmentsAsync(List<MigrationUnit> units)
+        {
+            var autoUnits = units.Where(mu =>
+                GetEffectiveShardingStrategy(mu) == ShardingStrategy.DontShard &&
+                string.Equals(mu.MoveToShard, "Auto", StringComparison.OrdinalIgnoreCase)
+            ).ToList();
+
+            if (autoUnits.Count == 0)
+                return;
+
+            _log.WriteLine($"Resolving auto-shard assignments for {autoUnits.Count} collection(s)", LogType.Debug);
+
+            // Get available shards/nodes from the target using the same layered probe as the UI
+            var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id];
+            var shards = await MongoHelper.GetClusterNodesAsync(targetConnStr);
+
+            if (shards.Count == 0)
+            {
+                _log.WriteLine("No shards available on target - cannot auto-distribute. Clearing MoveToShard.", LogType.Warning);
+                foreach (var mu in autoUnits)
+                    mu.MoveToShard = null;
+                return;
+            }
+
+            if (shards.Count == 1)
+            {
+                _log.WriteLine($"Only one shard available ({shards[0]}) - assigning all auto collections to it", LogType.Debug);
+                foreach (var mu in autoUnits)
+                    mu.MoveToShard = shards[0];
+                return;
+            }
+
+            // Get storage sizes from source (in parallel)
+            var sizeTasks = autoUnits.Select(async mu =>
+            {
+                var size = await MongoHelper.GetCollectionStorageSizeAsync(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName);
+                return (Unit: mu, Size: size);
+            });
+
+            var sizeResults = await Task.WhenAll(sizeTasks);
+
+            // Greedy bin-packing: sort by size descending, assign to shard with least storage
+            var sortedUnits = sizeResults.OrderByDescending(r => r.Size).ToList();
+            var shardLoad = shards.ToDictionary(s => s, _ => 0L);
+
+            foreach (var (unit, size) in sortedUnits)
+            {
+                var targetShard = shardLoad.OrderBy(kv => kv.Value).First().Key;
+                unit.MoveToShard = targetShard;
+                shardLoad[targetShard] += size;
+
+                _log.WriteLine($"Auto-shard: {unit.DatabaseName}.{unit.CollectionName} ({size / (1024 * 1024):N0} MB) -> {targetShard}", LogType.Debug);
+            }
+
+            // Log distribution summary
+            foreach (var kv in shardLoad.OrderBy(kv => kv.Key))
+            {
+                _log.WriteLine($"Shard {kv.Key} total assigned storage: {kv.Value / (1024 * 1024):N0} MB", LogType.Debug);
+            }
         }
 
         private async Task<TaskResult> HandleMissingCollectionAsync(MigrationUnit mu, CancellationToken _cts)

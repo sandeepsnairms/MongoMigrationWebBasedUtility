@@ -146,8 +146,12 @@ namespace OnlineMongoMigrationProcessor.Processors
                 mu.RestoreComplete = true;
                 mu.BulkCopyEndedOn = DateTime.UtcNow;
 
-                // Start change stream processing for the completed migration unit
-                AddCollectionToChangeStreamQueue(mu);
+                // Build non-unique indexes after data copy completes
+                bool canProceedToChangeStream = await BuildNonUniqueIndexesAfterCopyAsync(mu);
+
+                // Start change stream processing (gated by blocking index completion)
+                if (canProceedToChangeStream)
+                    AddCollectionToChangeStreamQueue(mu);
 
                 MigrationJobContext.SaveMigrationUnit(mu,true);
                 

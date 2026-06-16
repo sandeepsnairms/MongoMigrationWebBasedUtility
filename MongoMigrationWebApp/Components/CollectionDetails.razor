@@ -49,6 +49,7 @@
                                     <div><span class="lbl">Before Copying:</span> @FormatLong(MigrationUnit.ActualDocCount)</div>
                                     <div><span class="lbl">While Processing:</span> @FormatLong(MigrationUnit.SourceCountDuringCopy)</div>
                                     <div><span class="lbl">Indexes Created:</span> @MigrationUnit.IndexesMigrated</div>
+                                    <div><span class="lbl">Index Build Progress:</span> @(MigrationUnit.IndexBuildComplete ? "Complete" : $"{MigrationUnit.IndexPercent:F1}%")</div>
                                 </td>
                             </tr>
 

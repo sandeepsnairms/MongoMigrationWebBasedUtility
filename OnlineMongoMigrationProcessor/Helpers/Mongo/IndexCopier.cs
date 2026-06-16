@@ -36,11 +36,78 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             "$or", "$nor"
         };
 
+        /// <summary>
+        /// Index filter mode for selective index copying.
+        /// </summary>
+        public enum IndexFilter
+        {
+            All,
+            UniqueOnly,
+            NonUniqueOnly
+        }
+
+        /// <summary>
+        /// Copies all indexes from source to target (original behavior).
+        /// </summary>
         public async Task<int> CopyIndexesAsync(IMongoCollection<BsonDocument> sourceCollection,
             MongoClient _targetClient,
             string databaseName,
             string collectionName,
             Log log)
+        {
+            return await CopyIndexesInternalAsync(sourceCollection, _targetClient, databaseName, collectionName, log, IndexFilter.All);
+        }
+
+        /// <summary>
+        /// Copies only unique indexes from source to target.
+        /// Call this before offline data copy to enforce uniqueness constraints during insertion.
+        /// </summary>
+        public async Task<int> CopyUniqueIndexesAsync(IMongoCollection<BsonDocument> sourceCollection,
+            MongoClient _targetClient,
+            string databaseName,
+            string collectionName,
+            Log log)
+        {
+            return await CopyIndexesInternalAsync(sourceCollection, _targetClient, databaseName, collectionName, log, IndexFilter.UniqueOnly);
+        }
+
+        /// <summary>
+        /// Copies only non-unique indexes from source to target.
+        /// Call this after offline data copy completes for better performance.
+        /// </summary>
+        public async Task<int> CopyNonUniqueIndexesAsync(IMongoCollection<BsonDocument> sourceCollection,
+            MongoClient _targetClient,
+            string databaseName,
+            string collectionName,
+            Log log)
+        {
+            return await CopyIndexesInternalAsync(sourceCollection, _targetClient, databaseName, collectionName, log, IndexFilter.NonUniqueOnly);
+        }
+
+        /// <summary>
+        /// Returns the count of non-unique indexes on the source collection (excluding _id_).
+        /// Used for calculating IndexPercent progress.
+        /// </summary>
+        public async Task<int> CountNonUniqueIndexesAsync(IMongoCollection<BsonDocument> sourceCollection, Log log)
+        {
+            var indexDocuments = await sourceCollection.Indexes.List().ToListAsync();
+            int count = 0;
+            foreach (var indexDocument in indexDocuments)
+            {
+                var indexName = indexDocument.GetValue("name", null)?.AsString;
+                if (indexName == "_id_") continue;
+                bool isUnique = indexDocument.TryGetValue("unique", out var unique) && unique.ToBoolean();
+                if (!isUnique) count++;
+            }
+            return count;
+        }
+
+        private async Task<int> CopyIndexesInternalAsync(IMongoCollection<BsonDocument> sourceCollection,
+            MongoClient _targetClient,
+            string databaseName,
+            string collectionName,
+            Log log,
+            IndexFilter filter)
         {
  
             var targetCollection = _targetClient
@@ -67,6 +134,11 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 try
                 {
                     var keys = indexDocument["key"].AsBsonDocument;
+
+                    // Determine uniqueness for filtering
+                    bool isUnique = indexDocument.TryGetValue("unique", out var uniqueVal) && uniqueVal.ToBoolean();
+                    if (filter == IndexFilter.UniqueOnly && !isUnique) continue;
+                    if (filter == IndexFilter.NonUniqueOnly && isUnique) continue;
 
                     if (HasUnsupportedIndexOption(indexDocument, indexName, databaseName, collectionName, log))
                     {

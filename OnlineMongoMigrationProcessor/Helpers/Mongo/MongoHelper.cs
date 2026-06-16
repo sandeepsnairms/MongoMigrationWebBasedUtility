@@ -1222,7 +1222,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         }
 
 
-        public static async Task<bool> DeleteAndCopyIndexesAsync(Log log,MigrationUnit mu, string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes)
+        public static async Task<bool> DeleteAndCopyIndexesAsync(Log log,MigrationUnit mu, string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool skipIndexes, bool uniqueOnly = false)
         {
             MigrationJobContext.AddVerboseLog($"Starting index copy for {sourceCollection.CollectionNamespace.DatabaseNamespace.DatabaseName}.{sourceCollection.CollectionNamespace.CollectionName}");
             try
@@ -1255,9 +1255,14 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 }
 
                 if (skipIndexes)
+                {
+                    // Ensure the collection is created even when indexes are skipped
+                    await targetDatabase.CreateCollectionAsync(targetCollectionName);
+                    mu.TargetCreated = true;
                     return true;
+                }
 
-                log.WriteLine($"Creating indexes for: {namespaceForLog}");
+                log.WriteLine($"Creating {(uniqueOnly ? "unique " : "")}indexes for: {namespaceForLog}");
                 
 
                 // Create the target collection
@@ -1267,9 +1272,13 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 var targetCollection = targetDatabase.GetCollection<BsonDocument>(targetCollectionName);
 
                 IndexCopier indexCopier = new IndexCopier();
-                int count=await indexCopier.CopyIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
+                int count;
+                if (uniqueOnly)
+                    count = await indexCopier.CopyUniqueIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
+                else
+                    count = await indexCopier.CopyIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
                 mu.IndexesMigrated = count;
-                log.WriteLine($"{count} Indexes copied successfully to {namespaceForLog}");
+                log.WriteLine($"{count} {(uniqueOnly ? "unique " : "")}Indexes copied successfully to {namespaceForLog}");
                 
                 return true;
             }
@@ -1278,6 +1287,253 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 			    log.WriteLine($"Error copying indexes: {ex}", LogType.Error);
                 
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Retrieves the shard key definition for a collection from the source config.collections.
+        /// Returns null if the collection is not sharded or the shard key cannot be determined.
+        /// </summary>
+        public static async Task<BsonDocument?> GetShardKeyFromSourceAsync(Log log, MongoClient sourceClient, string databaseName, string collectionName)
+        {
+            try
+            {
+                var configDb = sourceClient.GetDatabase("config");
+                var collectionsCol = configDb.GetCollection<BsonDocument>("collections");
+                var ns = $"{databaseName}.{collectionName}";
+
+                var filter = Builders<BsonDocument>.Filter.Eq("_id", ns);
+                var doc = await collectionsCol.Find(filter).FirstOrDefaultAsync();
+
+                if (doc != null && doc.Contains("key"))
+                {
+                    var key = doc["key"].AsBsonDocument;
+                    log.WriteLine($"Found shard key for {ns}: {key}", LogType.Debug);
+                    return key;
+                }
+
+                log.WriteLine($"No shard key found for {ns}", LogType.Debug);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error reading shard key for {databaseName}.{collectionName}: {ex.Message}", LogType.Warning);
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Shards a target collection using a hashed version of the source shard key.
+        /// Only single-field shard keys are supported on Cosmos DB; compound keys use the first field.
+        /// </summary>
+        public static async Task<bool> ShardCollectionAsync(Log log, MongoClient targetClient, string databaseName, string collectionName, BsonDocument sourceShardKey)
+        {
+            var ns = $"{databaseName}.{collectionName}";
+            try
+            {
+                // Convert to hashed shard key (Cosmos DB only supports hashed)
+                // For compound keys, use just the first field
+                BsonDocument hashedKey;
+                if (sourceShardKey.ElementCount > 1)
+                {
+                    var firstField = sourceShardKey.Elements.First().Name;
+                    log.WriteLine($"Compound shard key {sourceShardKey} not fully supported. Using first field '{firstField}' as hashed.", LogType.Warning);
+                    hashedKey = new BsonDocument(firstField, "hashed");
+                }
+                else
+                {
+                    hashedKey = new BsonDocument(
+                        sourceShardKey.Elements.Select(e => new BsonElement(e.Name, "hashed"))
+                    );
+                }
+
+                log.WriteLine($"Sharding collection {ns} with key: {hashedKey}");
+
+                var adminDb = targetClient.GetDatabase("admin");
+                var command = new BsonDocument
+                {
+                    { "shardCollection", ns },
+                    { "key", hashedKey }
+                };
+
+                await adminDb.RunCommandAsync<BsonDocument>(command);
+                log.WriteLine($"Successfully sharded collection {ns}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error sharding collection {ns}: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Gets the storage size (in bytes) of a source collection using collStats.
+        /// Returns 0 if the size cannot be determined.
+        /// </summary>
+        public static async Task<long> GetCollectionStorageSizeAsync(Log log, MongoClient sourceClient, string databaseName, string collectionName)
+        {
+            try
+            {
+                var db = sourceClient.GetDatabase(databaseName);
+                var command = new BsonDocument
+                {
+                    { "collStats", collectionName }
+                };
+
+                var result = await db.RunCommandAsync<BsonDocument>(command);
+
+                if (result.Contains("storageSize"))
+                    return result["storageSize"].ToInt64();
+
+                if (result.Contains("size"))
+                    return result["size"].ToInt64();
+
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error getting storage size for {databaseName}.{collectionName}: {ex.Message}", LogType.Warning);
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// Moves an unsharded collection to a specific shard using the moveCollection admin command.
+        /// </summary>
+        public static async Task<bool> MoveCollectionAsync(Log log, MongoClient targetClient, string databaseName, string collectionName, string toShard)
+        {
+            var ns = $"{databaseName}.{collectionName}";
+            try
+            {
+                log.WriteLine($"Moving collection {ns} to shard: {toShard}");
+
+                var adminDb = targetClient.GetDatabase("admin");
+                var command = new BsonDocument
+                {
+                    { "moveCollection", ns },
+                    { "toShard", toShard }
+                };
+
+                await adminDb.RunCommandAsync<BsonDocument>(command);
+                log.WriteLine($"Successfully moved collection {ns} to shard {toShard}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error moving collection {ns} to shard {toShard}: {ex.Message}", LogType.Error);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Builds non-unique indexes on the target collection after offline data copy.
+        /// Returns the number of non-unique indexes created.
+        /// </summary>
+        public static async Task<int> BuildNonUniqueIndexesAsync(Log log, MigrationUnit mu, string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
+        {
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, mu.GetEffectiveTargetDatabaseName(), mu.GetEffectiveTargetCollectionName());
+            log.WriteLine($"Building non-unique indexes for: {namespaceForLog}");
+
+            try
+            {
+                var targetClient = MongoClientFactory.Create(log, targetConnectionString);
+                var targetDatabaseName = mu.GetEffectiveTargetDatabaseName();
+                var targetCollectionName = mu.GetEffectiveTargetCollectionName();
+
+                IndexCopier indexCopier = new IndexCopier();
+                int count = await indexCopier.CopyNonUniqueIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
+                mu.IndexesMigrated += count;
+                log.WriteLine($"{count} non-unique indexes created on {namespaceForLog}");
+                return count;
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error building non-unique indexes on {namespaceForLog}: {ex}", LogType.Error);
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// Checks active index builds on a target collection using the currentOp command.
+        /// Returns (activeCount, totalProgress) where totalProgress is 0-100.
+        /// </summary>
+        public static async Task<(int ActiveBuilds, double ProgressPercent)> CheckIndexBuildProgressAsync(Log log, string targetConnectionString, string databaseName, string collectionName)
+        {
+            try
+            {
+                var targetClient = MongoClientFactory.Create(log, targetConnectionString);
+                var adminDb = targetClient.GetDatabase("admin");
+
+                var currentOpCommand = new BsonDocument
+                {
+                    { "currentOp", 1 },
+                    { "active", true },
+                    { "$all", true }
+                };
+
+                var result = await adminDb.RunCommandAsync<BsonDocument>(currentOpCommand);
+
+                if (!result.Contains("inprog"))
+                    return (0, 100);
+
+                var inprog = result["inprog"].AsBsonArray;
+                int activeBuilds = 0;
+                double totalProgress = 0;
+
+                foreach (var op in inprog)
+                {
+                    var opDoc = op.AsBsonDocument;
+                    
+                    // Look for index build operations on this specific collection
+                    if (opDoc.TryGetValue("command", out var command) && command.IsBsonDocument)
+                    {
+                        var cmdDoc = command.AsBsonDocument;
+                        if (cmdDoc.Contains("createIndexes"))
+                        {
+                            var ns = opDoc.GetValue("ns", "").AsString;
+                            if (ns == $"{databaseName}.{collectionName}" || 
+                                cmdDoc["createIndexes"].AsString == collectionName)
+                            {
+                                activeBuilds++;
+                                if (opDoc.TryGetValue("progress", out var progress) && progress.IsBsonDocument)
+                                {
+                                    var done = progress.AsBsonDocument.GetValue("done", 0).ToDouble();
+                                    var total = progress.AsBsonDocument.GetValue("total", 1).ToDouble();
+                                    if (total > 0)
+                                        totalProgress += (done / total) * 100;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Also check via msg field for index build operations
+                    if (opDoc.TryGetValue("msg", out var msg) && msg.IsString && msg.AsString.Contains("Index Build"))
+                    {
+                        var ns = opDoc.GetValue("ns", "").AsString;
+                        if (ns == $"{databaseName}.{collectionName}")
+                        {
+                            activeBuilds++;
+                            if (opDoc.TryGetValue("progress", out var progress) && progress.IsBsonDocument)
+                            {
+                                var done = progress.AsBsonDocument.GetValue("done", 0).ToDouble();
+                                var total = progress.AsBsonDocument.GetValue("total", 1).ToDouble();
+                                if (total > 0)
+                                    totalProgress += (done / total) * 100;
+                            }
+                        }
+                    }
+                }
+
+                if (activeBuilds == 0)
+                    return (0, 100);
+
+                return (activeBuilds, totalProgress / activeBuilds);
+            }
+            catch (Exception ex)
+            {
+                log.WriteLine($"Error checking index build progress for {databaseName}.{collectionName}: {ex.Message}", LogType.Warning);
+                return (0, 100); // Assume complete on error to avoid blocking
             }
         }
 
