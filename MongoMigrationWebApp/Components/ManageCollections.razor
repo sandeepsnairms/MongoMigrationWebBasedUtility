@@ -67,44 +67,60 @@
                                 <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetOverwrite(false))" title="Set Overwrite = FALSE (append) on selected drafts">
                                     Overwrite: FALSE
                                 </button>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.SameAsSource))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: copy indexes (non-blocking)")">
-                                    Indexing: Non-blocking
-                                </button>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.SameAsSourceBlocking))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: copy indexes (blocking)")">
-                                    Indexing: Blocking
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.DontIndex))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: skip indexes")">
-                                    Indexing: None
-                                </button>
-                                <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetSharding(ShardingStrategy.SameAsSource))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Sharding: copy sharding from source")">
-                                    Sharding: Same as source
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetSharding(ShardingStrategy.DontShard))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Sharding: do not shard")">
-                                    Sharding: None
-                                </button>
-                                @if (AllSelectedHaveDontShard() && !AnySelectedHasOverwriteFalse())
+                                @if (!IsRuOptimizedCopyJob)
                                 {
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.SameAsSource))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: copy indexes (non-blocking)")">
+                                        Indexing: Non-blocking
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.SameAsSourceBlocking))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: copy indexes (blocking)")">
+                                        Indexing: Blocking
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetIndexing(IndexingStrategy.DontIndex))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Indexing: skip indexes")">
+                                        Indexing: None
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="@(() => BulkSetSharding(ShardingStrategy.SameAsSource))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Sharding: copy sharding from source")">
+                                        Sharding: Same as source
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetSharding(ShardingStrategy.DontShard))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Sharding: do not shard")">
+                                        Sharding: None
+                                    </button>
+                                    @if (AllSelectedHaveDontShard() && !AnySelectedHasOverwriteFalse())
+                                    {
+                                        <div class="btn-group">
+                                            <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Place selected drafts on a specific shard">
+                                                Move to...
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item" @onclick="@(() => BulkSetMoveToAuto())">Auto (let the server choose)</a></li>
+                                                @foreach (var node in _clusterNodes)
+                                                {
+                                                    <li><a class="dropdown-item" @onclick="@(() => BulkSetMoveToShard(node))">@node</a></li>
+                                                }
+                                            </ul>
+                                        </div>
+                                    }
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="BulkClearFilter" title="Remove filter from selected drafts">
+                                        Clear filter
+                                    </button>
                                     <div class="btn-group">
-                                        <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Place selected drafts on a specific shard">
-                                            Move to...
+                                        <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Pin _id BSON type for selected drafts">
+                                            _id type...
                                         </button>
                                         <ul class="dropdown-menu">
-                                            <li><a class="dropdown-item" @onclick="@(() => BulkSetMoveToAuto())">Auto (let the server choose)</a></li>
-                                            @foreach (var node in _clusterNodes)
+                                            <li><a class="dropdown-item" @onclick="@(() => BulkSetDataTypeForId(null))">Unknown / Multiple (auto-detect)</a></li>
+                                            @foreach (var dt in IdDataTypeOptions)
                                             {
-                                                <li><a class="dropdown-item" @onclick="@(() => BulkSetMoveToShard(node))">@node</a></li>
+                                                var captured = dt;
+                                                <li><a class="dropdown-item" @onclick="@(() => BulkSetDataTypeForId(captured))">@captured</a></li>
                                             }
                                         </ul>
                                     </div>
-                                }
-                                <button class="btn btn-sm btn-outline-secondary" @onclick="BulkClearFilter" title="Remove filter from selected drafts">
-                                    Clear filter
-                                </button>
-                                @if (AnySelectedHasOverwriteFalse())
-                                {
-                                    <span class="text-muted small">
-                                        Indexing / Sharding / Move-to locked: one or more selected drafts have Overwrite = FALSE.
-                                    </span>
+                                    @if (AnySelectedHasOverwriteFalse())
+                                    {
+                                        <span class="text-muted small">
+                                            Indexing / Sharding / Move-to locked: one or more selected drafts have Overwrite = FALSE.
+                                        </span>
+                                    }
                                 }
                             }
                             else
@@ -215,6 +231,7 @@
                                     <th>Indexing</th>
                                     <th>Sharding</th>
                                     <th>Move to</th>
+                                    <th>_id type</th>
                                     <th>Filter</th>
                                 </tr>
                             </thead>
@@ -230,6 +247,7 @@
                                         <tr class="@(isConflict ? "table-warning" : "")">
                                             <td>− Remove</td>
                                             <td>@ns</td>
+                                            <td>—</td>
                                             <td>—</td>
                                             <td>—</td>
                                             <td>—</td>
@@ -255,6 +273,7 @@
                                         <td>@(draft.IndexingStrategy?.ToString() ?? "—")</td>
                                         <td>@(draft.ShardingStrategy?.ToString() ?? "—")</td>
                                         <td>@(draft.MoveToShard ?? "—")</td>
+                                        <td>@(draft.DataTypeForId?.ToString() ?? "Unknown/Multiple")</td>
                                         <td title="@(draft.Filter ?? string.Empty)">@(string.IsNullOrWhiteSpace(draft.Filter) ? "—" : TruncateFilter(draft.Filter))</td>
                                     </tr>
                                 }
@@ -346,7 +365,7 @@
             builder.OpenElement(14, "td");
             if (!isPendingRemoval)
             {
-                builder.AddMarkupContent(15, RenderOptionsBadges(unit.Overwrite, unit.IndexingStrategy, unit.ShardingStrategy, unit.MoveToShard, unit.UserFilter));
+                builder.AddMarkupContent(15, RenderOptionsBadges(unit.Overwrite, unit.IndexingStrategy, unit.ShardingStrategy, unit.MoveToShard, unit.UserFilter, unit.DataTypeForId));
             }
             builder.CloseElement();
 
@@ -407,7 +426,7 @@
 
             // Options summary
             builder.OpenElement(14, "td");
-            builder.AddMarkupContent(15, RenderOptionsBadges(draft.Overwrite, draft.IndexingStrategy, draft.ShardingStrategy, draft.MoveToShard, draft.Filter));
+            builder.AddMarkupContent(15, RenderOptionsBadges(draft.Overwrite, draft.IndexingStrategy, draft.ShardingStrategy, draft.MoveToShard, draft.Filter, draft.DataTypeForId));
             builder.CloseElement();
 
             // Actions — only Edit on draft rows (delete via checkbox + bulk toolbar)
@@ -447,7 +466,7 @@
         }
     };
 
-    private string RenderOptionsBadges(bool? overwrite, IndexingStrategy? indexing, ShardingStrategy? sharding, string? moveToShard, string? filter)
+    private string RenderOptionsBadges(bool? overwrite, IndexingStrategy? indexing, ShardingStrategy? sharding, string? moveToShard, string? filter, DataType? dataTypeForId = null)
     {
         // Run inputs through the central rules helper so badges never show options that are locked
         // by the current Overwrite/Sharding/simulated-run combination.
@@ -458,6 +477,9 @@
             html.Append("<span class=\"badge bg-warning text-dark me-1\" title=\"Target collection will be dropped before migration\">Overwrite</span>");
         else
             html.Append("<span class=\"badge bg-light text-dark border me-1\" title=\"Documents will be appended to the target\">Append</span>");
+
+        if (IsRuOptimizedCopyJob)
+            return html.ToString();
 
         if (n.Indexing == IndexingStrategy.DontIndex)
             html.Append("<span class=\"badge bg-light text-dark border me-1\" title=\"Indexes will not be migrated\">No indexes</span>");
@@ -473,6 +495,9 @@
 
         if (!string.IsNullOrWhiteSpace(n.MoveToShard))
             html.Append($"<span class=\"badge bg-info text-dark me-1\" title=\"Place collection on shard {System.Net.WebUtility.HtmlEncode(n.MoveToShard)}\">Move to {System.Net.WebUtility.HtmlEncode(n.MoveToShard)}</span>");
+
+        if (dataTypeForId.HasValue)
+            html.Append($"<span class=\"badge bg-light text-dark border me-1\" title=\"_id BSON type pinned by user\">_id: {dataTypeForId.Value}</span>");
 
         if (!string.IsNullOrWhiteSpace(filter))
             html.Append("<span class=\"badge bg-info text-dark me-1\" title=\"A filter is applied to this collection\">Filtered</span>");
@@ -527,6 +552,8 @@
         builder.CloseElement();
         builder.CloseElement();
 
+        if (!IsRuOptimizedCopyJob)
+        {
         // Indexing
         var isIndexingLocked = DraftOptionRules.IsIndexingLocked(_formOverwrite, simulated);
         builder.OpenElement(30, "div");
@@ -615,6 +642,28 @@
         builder.AddAttribute(78, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _formFilter = e.Value?.ToString()));
         builder.CloseElement();
         builder.CloseElement();
+
+        // _id BSON type (skips probing when pinned)
+        builder.OpenElement(110, "div");
+        builder.AddAttribute(111, "class", "col-md-6");
+        builder.AddMarkupContent(112, "<label class=\"form-label\">_id data type (optional)</label>");
+        builder.OpenElement(113, "select");
+        builder.AddAttribute(114, "class", "form-select form-select-sm");
+        builder.AddAttribute(115, "value", _formDataTypeForId?.ToString() ?? string.Empty);
+        builder.AddAttribute(116, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+        {
+            var val = e.Value?.ToString();
+            _formDataTypeForId = string.IsNullOrEmpty(val) ? (DataType?)null : Enum.Parse<DataType>(val);
+        }));
+        builder.AddMarkupContent(117, "<option value=\"\">Unknown / Multiple (auto-detect)</option>");
+        foreach (var dt in IdDataTypeOptions)
+        {
+            builder.AddMarkupContent(118, $"<option value=\"{dt}\">{dt}</option>");
+        }
+        builder.CloseElement();
+        builder.AddMarkupContent(119, "<small class=\"form-text text-muted\">Identify the data type to optimize and speed up partitioning.</small>");
+        builder.CloseElement();
+        }
 
         builder.CloseElement(); // row
 

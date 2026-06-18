@@ -2233,13 +2233,23 @@ namespace OnlineMongoMigrationProcessor.Workers
             MigrationJobContext.AddVerboseLog($"Chunking {databaseName}.{collectionName}");
             _log.WriteLine($"CreateMultipleChunks started for {databaseName}.{collectionName} - totalChunks: {totalChunks}, minDocsInChunk: {minDocsInChunk}", LogType.Debug);
 
-            _log.WriteLine($"Determining data types for {databaseName}.{collectionName}", LogType.Debug);
-            var dataTypes = DetermineDataTypes();
-            _log.WriteLine($"Data types determined - count: {dataTypes.Count}", LogType.Debug);
+            List<DataType> dataTypes;
+            if (migrationUnit.DataTypeForId.HasValue)
+            {
+                // User pinned the _id type; skip probing and use it directly.
+                dataTypes = new List<DataType> { migrationUnit.DataTypeForId.Value };
+                _log.WriteLine($"User-pinned _id data type {migrationUnit.DataTypeForId.Value} for {databaseName}.{collectionName}", LogType.Debug);
+            }
+            else
+            {
+                _log.WriteLine($"Determining data types for {databaseName}.{collectionName}", LogType.Debug);
+                dataTypes = DetermineDataTypes();
+                _log.WriteLine($"Data types determined - count: {dataTypes.Count}", LogType.Debug);
 
-            // Probe the source so we only spend partitioning effort on _id types that actually exist.
-            _log.ShowInMonitor($"Detecting _id data type(s) in use for {databaseName}.{collectionName}");
-            dataTypes = MongoHelper.PruneAbsentIdDataTypes(_log, collection, dataTypes, MongoHelper.GetFilterDoc(migrationUnit.UserFilter), cts);
+                // Probe the source so we only spend partitioning effort on _id types that actually exist.
+                _log.ShowInMonitor($"Detecting _id data type(s) in use for {databaseName}.{collectionName}");
+                dataTypes = MongoHelper.PruneAbsentIdDataTypes(_log, collection, dataTypes, MongoHelper.GetFilterDoc(migrationUnit.UserFilter), cts);
+            }
 
             // If exactly one _id type survives, downstream queries can skip the $type predicate entirely,
             // and an ObjectId-only collection also unlocks ObjectId-specific partitioning optimizations.

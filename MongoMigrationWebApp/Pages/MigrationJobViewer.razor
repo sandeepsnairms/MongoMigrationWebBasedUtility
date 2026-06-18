@@ -1,4 +1,4 @@
-@page "/migrationjobviewer/{jobId}"
+﻿@page "/migrationjobviewer/{jobId}"
 @using MigrationJobType = OnlineMongoMigrationProcessor.MigrationJob
 @using MongoMigrationWebApp.Components
 @using MongoMigrationWebApp.Helpers
@@ -594,7 +594,7 @@ else if (@_showLogBackupFile)
     private int _logEntryCount = 0;
     private OnlineMongoMigrationProcessor.MigrationSettings? _config;
 
-    // Pause cooldown: 30-second cooling period before resume is allowed
+    // Pause cooldown: 10-second cooling period before resume is allowed
     private DateTime? _pauseCooldownUntil;
     private Timer? _pauseCooldownTimer;
 
@@ -1757,7 +1757,7 @@ else if (@_showLogBackupFile)
         StartPauseCooldown();
         await InvokeAsync(StateHasChanged);
         // Run StopMigration on a background thread so the Blazor circuit isn't blocked
-        // by the 30-second worker await in StopCoordinatedProcessing.
+        // by the 10-second worker await in StopCoordinatedProcessing.
         await Task.Run(() => JobManager.StopMigration());
         MigrationJobContext.SaveMigrationJob(CurrentlyLoadedMigrationJob);
         _refreshTimer = null;
@@ -1872,7 +1872,7 @@ else if (@_showLogBackupFile)
 
     private void StartPauseCooldown()
     {
-        _pauseCooldownUntil = DateTime.UtcNow.AddSeconds(30);
+        _pauseCooldownUntil = DateTime.UtcNow.AddSeconds(10);
         _pauseCooldownTimer?.Dispose();
         _pauseCooldownTimer = new Timer(async _ =>
         {

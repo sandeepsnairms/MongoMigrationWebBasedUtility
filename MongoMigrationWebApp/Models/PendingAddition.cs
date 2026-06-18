@@ -22,6 +22,8 @@ namespace MongoMigrationWebApp.Models
         public IndexingStrategy? IndexingStrategy { get; init; }
         public ShardingStrategy? ShardingStrategy { get; init; }
         public string? MoveToShard { get; init; }
+        // User-pinned single _id BSON type. Null means "Unknown / Multiple" (let partitioner detect).
+        public DataType? DataTypeForId { get; init; }
         
         /// <summary>
         /// Converts this draft to a MigrationUnit for commitment.
@@ -37,6 +39,7 @@ namespace MongoMigrationWebApp.Models
             unit.IndexingStrategy = IndexingStrategy;
             unit.ShardingStrategy = ShardingStrategy;
             unit.MoveToShard = MoveToShard;
+            unit.DataTypeForId = DataTypeForId;
         }
     }
 }

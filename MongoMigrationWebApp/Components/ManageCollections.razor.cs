@@ -18,6 +18,22 @@ namespace MongoMigrationWebApp.Components
 {
     public partial class ManageCollections : ComponentBase
     {
+        private bool IsRuOptimizedCopyJob => MigrationJob?.JobType == JobType.RUOptimizedCopy;
+
+        // Curated list of _id BSON types the user can pin (excludes the catch-all DataType.Other).
+        // Null/empty selection in the UI represents "Unknown / Multiple" and leaves DataTypeForId unset.
+        private static readonly DataType[] IdDataTypeOptions = new[]
+        {
+            DataType.ObjectId,
+            DataType.Int,
+            DataType.Int64,
+            DataType.Decimal128,
+            DataType.Date,
+            DataType.BinData,
+            DataType.String,
+            DataType.Object,
+        };
+
         [Parameter, EditorRequired]
         public MigrationJob MigrationJob { get; set; } = null!;
 
@@ -59,6 +75,8 @@ namespace MongoMigrationWebApp.Components
         private ShardingStrategy? _formSharding = ShardingStrategy.SameAsSource;
         private string? _formMoveToShard = null;
         private string? _formFilter = null;
+        // null = "Unknown / Multiple" (let partitioner detect).
+        private DataType? _formDataTypeForId = null;
         // Set when an edit panel just opened, so OnAfterRender can scroll it into view.
         private Guid? _pendingScrollDraftId;
 
@@ -130,6 +148,7 @@ namespace MongoMigrationWebApp.Components
             _formSharding = ShardingStrategy.SameAsSource;
             _formMoveToShard = null;
             _formFilter = null;
+            _formDataTypeForId = null;
         }
 
         private async Task AddCollections()
@@ -143,7 +162,7 @@ namespace MongoMigrationWebApp.Components
             }
 
             // Validate filter JSON if provided
-            if (!string.IsNullOrWhiteSpace(_formFilter))
+            if (!IsRuOptimizedCopyJob && !string.IsNullOrWhiteSpace(_formFilter))
             {
                 try
                 {
@@ -222,6 +241,12 @@ namespace MongoMigrationWebApp.Components
                 _formOverwrite, _formIndexing, _formSharding, _formMoveToShard,
                 MigrationJob.IsSimulatedRun);
 
+            if (IsRuOptimizedCopyJob)
+            {
+                normalized = new DraftOptionRules.Normalized(_formOverwrite, IndexingStrategy.DontIndex, null, null);
+                filter = null;
+            }
+
             _drafts.Add(new PendingAddition
             {
                 DatabaseName = db,
@@ -232,7 +257,8 @@ namespace MongoMigrationWebApp.Components
                 Overwrite = normalized.Overwrite,
                 IndexingStrategy = normalized.Indexing,
                 ShardingStrategy = normalized.Sharding,
-                MoveToShard = normalized.MoveToShard
+                MoveToShard = normalized.MoveToShard,
+                DataTypeForId = IsRuOptimizedCopyJob ? null : _formDataTypeForId
             });
             return true;
         }
@@ -277,6 +303,7 @@ namespace MongoMigrationWebApp.Components
                     _formSharding = draft.ShardingStrategy;
                     _formMoveToShard = draft.MoveToShard;
                     _formFilter = draft.Filter;
+                    _formDataTypeForId = draft.DataTypeForId;
                 }
             }
         }
@@ -301,7 +328,7 @@ namespace MongoMigrationWebApp.Components
             if (draft == null) return;
 
             // Validate filter JSON if provided
-            if (!string.IsNullOrWhiteSpace(_formFilter))
+            if (!IsRuOptimizedCopyJob && !string.IsNullOrWhiteSpace(_formFilter))
             {
                 try
                 {
@@ -319,6 +346,10 @@ namespace MongoMigrationWebApp.Components
             var normalized = DraftOptionRules.Normalize(
                 _formOverwrite, _formIndexing, _formSharding, _formMoveToShard,
                 MigrationJob.IsSimulatedRun);
+            if (IsRuOptimizedCopyJob)
+            {
+                normalized = new DraftOptionRules.Normalized(_formOverwrite, IndexingStrategy.DontIndex, null, null);
+            }
             var index = _drafts.IndexOf(draft);
             _drafts[index] = draft with
             {
@@ -326,7 +357,8 @@ namespace MongoMigrationWebApp.Components
                 IndexingStrategy = normalized.Indexing,
                 ShardingStrategy = normalized.Sharding,
                 MoveToShard = normalized.MoveToShard,
-                Filter = _formFilter
+                Filter = IsRuOptimizedCopyJob ? null : _formFilter,
+                DataTypeForId = IsRuOptimizedCopyJob ? null : _formDataTypeForId
             };
 
             _expandedDraftId = null;
@@ -425,9 +457,11 @@ namespace MongoMigrationWebApp.Components
                 _drafts[index] = draft with
                 {
                     Overwrite = normalized.Overwrite,
-                    IndexingStrategy = normalized.Indexing,
-                    ShardingStrategy = normalized.Sharding,
-                    MoveToShard = normalized.MoveToShard
+                    IndexingStrategy = IsRuOptimizedCopyJob ? IndexingStrategy.DontIndex : normalized.Indexing,
+                    ShardingStrategy = IsRuOptimizedCopyJob ? null : normalized.Sharding,
+                    MoveToShard = IsRuOptimizedCopyJob ? null : normalized.MoveToShard,
+                    Filter = IsRuOptimizedCopyJob ? null : draft.Filter,
+                    DataTypeForId = IsRuOptimizedCopyJob ? null : draft.DataTypeForId
                 };
             }
             RefreshPagination();
@@ -502,6 +536,20 @@ namespace MongoMigrationWebApp.Components
 
                 var index = _drafts.IndexOf(draft);
                 _drafts[index] = draft with { Filter = null };
+            }
+            RefreshPagination();
+        }
+
+        // null clears the user pin (=> "Unknown / Multiple"); a value pins the _id type for selected drafts.
+        private void BulkSetDataTypeForId(DataType? dataType)
+        {
+            foreach (var id in _selectedDraftIds)
+            {
+                var draft = _drafts.FirstOrDefault(d => d.Id == id);
+                if (draft == null) continue;
+
+                var index = _drafts.IndexOf(draft);
+                _drafts[index] = draft with { DataTypeForId = dataType };
             }
             RefreshPagination();
         }
@@ -629,8 +677,21 @@ namespace MongoMigrationWebApp.Components
                 // Step 2: Add drafts as new MigrationUnits
                 foreach (var draft in _drafts)
                 {
+                    var effectiveDraft = draft;
+                    if (IsRuOptimizedCopyJob)
+                    {
+                        effectiveDraft = draft with
+                        {
+                            IndexingStrategy = IndexingStrategy.DontIndex,
+                            ShardingStrategy = null,
+                            MoveToShard = null,
+                            Filter = null,
+                            DataTypeForId = null
+                        };
+                    }
+
                     var unit = new MigrationUnit(MigrationJob, draft.DatabaseName, draft.CollectionName, new List<MigrationChunk>());
-                    draft.ApplyToMigrationUnit(unit);
+                    effectiveDraft.ApplyToMigrationUnit(unit);
 
                     MigrationJob.MigrationUnitBasics ??= new List<MigrationUnitBasic>();
                     MigrationJob.MigrationUnitBasics.Add(unit.GetBasic());

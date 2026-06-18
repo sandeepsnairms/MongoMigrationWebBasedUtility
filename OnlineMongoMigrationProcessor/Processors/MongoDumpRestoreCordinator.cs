@@ -3674,7 +3674,7 @@ namespace OnlineMongoMigrationProcessor
                     _log?.WriteLine($"Waiting for {pendingTasks.Count} in-flight worker(s) to finish...", LogType.Info);
                     try
                     {
-                        Task.WaitAll(pendingTasks.ToArray(), TimeSpan.FromSeconds(30));
+                        Task.WaitAll(pendingTasks.ToArray(), TimeSpan.FromSeconds(10));
                     }
                     catch (AggregateException)
                     {

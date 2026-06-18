@@ -69,6 +69,9 @@ namespace OnlineMongoMigrationProcessor
         // Set to true when partitioning detected exactly one _id BSON type (or the user-pinned one),
         // letting downstream readers omit the $type predicate.
         public bool SkipDataTypeFilterForId { get; set; }
+        // User-pinned single _id BSON type. When set, partitioning skips type probing and uses
+        // only this type; null means "unknown / multiple" and lets the partitioner detect.
+        public DataType? DataTypeForId { get; set; }
         public DateTime? CSLastChangeUTCTime { get; set; }
         public DateTime? SyncBackCSLastChangeUTCTime { get; set; }
 
@@ -413,6 +416,7 @@ namespace OnlineMongoMigrationProcessor
             mub.SourceStatus = this.SourceStatus;
             mub.ResetChangeStream = this.ResetChangeStream;
             mub.SkipDataTypeFilterForId = this.SkipDataTypeFilterForId;
+            mub.DataTypeForId = this.DataTypeForId;
             mub.SkippedDueToMaxRetries = this.SkippedDueToMaxRetries;
             mub.FailedOperation = this.FailedOperation;
             mub.CSLastChangeUTCTime = this.CSLastChangeUTCTime;
