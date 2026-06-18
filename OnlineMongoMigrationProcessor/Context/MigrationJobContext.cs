@@ -36,6 +36,11 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static ActiveMigrationUnitsCache MigrationUnitsCache { get; set; }
 
+        // Reference to the active MigrationProcessor (registered by MigrationWorker when a job starts).
+        // Used by PurgeMigrationUnit to clear in-memory processor state when a collection is removed
+        // from a running job.
+        public static OnlineMongoMigrationProcessor.Processors.MigrationProcessor? ActiveMigrationProcessor { get; set; }
+
         // Track OS process IDs for mongodump and mongorestore to enable cleanup
         public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
         public static List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
@@ -94,6 +99,13 @@ namespace OnlineMongoMigrationProcessor.Context
                 return;
 
              _log?.WriteLine(message, LogType.Verbose);
+        }
+
+        // TEMP: emit an info-level log from anywhere that has access to MigrationJobContext;
+        // used to trace the manage-collections add/remove flow and PercentageUpdater behavior.
+        public static void AddTempLog(string message)
+        {
+            _log?.WriteLine(message, LogType.Info);
         }
 
         /// <summary>
@@ -390,6 +402,85 @@ namespace OnlineMongoMigrationProcessor.Context
             {
                 AddVerboseLog($"SaveMigrationUnit FAILED for {mu?.Id}: {ex.Message}");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Removes every trace of a migration unit so a later re-add (which deterministically
+        /// regenerates the same id from db+collection) starts from a clean slate. Clears:
+        ///   - persisted MU JSON file (migrationjobs\{jobId}\{muId}.json)
+        ///   - in-memory MigrationUnitsCache entry
+        ///   - per-MU mutate lock in _muMutateLocks
+        ///   - in-memory state inside the active MigrationProcessor / change-stream processors
+        /// Caller is responsible for removing the unit from job.MigrationUnitBasics and persisting
+        /// the job; this method does not mutate the job.
+        /// </summary>
+        public static void PurgeMigrationUnit(string jobId, string muId)
+        {
+            if (string.IsNullOrEmpty(jobId) || string.IsNullOrEmpty(muId))
+                return;
+
+            AddVerboseLog($"MigrationJobContext.PurgeMigrationUnit: jobId={jobId}, muId={muId}");
+
+            // TEMP: capture pre-purge state to detect what stale data we are actually clearing.
+            try
+            {
+                var existing = MigrationUnitsCache?.GetMigrationUnit(muId, jobId);
+                if (existing != null)
+                {
+                    int ec = existing.MigrationChunks?.Count ?? 0;
+                    int ed = existing.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? 0;
+                    int eu = existing.MigrationChunks?.Count(c => c.IsUploaded == true) ?? 0;
+                    AddTempLog($"[temp] PurgeMigrationUnit BEFORE jobId={jobId} muId={muId} DumpComplete={existing.DumpComplete} RestoreComplete={existing.RestoreComplete} DumpPercent={existing.DumpPercent:F2} RestorePercent={existing.RestorePercent:F2} chunks={ec} downloaded={ed} uploaded={eu}");
+                }
+                else
+                {
+                    AddTempLog($"[temp] PurgeMigrationUnit BEFORE jobId={jobId} muId={muId} not-in-cache");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddTempLog($"[temp] PurgeMigrationUnit BEFORE inspect failed for {muId}: {ex.Message}");
+            }
+
+            try
+            {
+                Store?.DeleteDocument($"migrationjobs\\{jobId}\\{muId}.json");
+            }
+            catch (Exception ex)
+            {
+                AddVerboseLog($"PurgeMigrationUnit: DeleteDocument failed for {jobId}/{muId}: {ex.Message}");
+            }
+
+            try
+            {
+                MigrationUnitsCache?.RemoveMigrationUnit(muId);
+            }
+            catch (Exception ex)
+            {
+                AddVerboseLog($"PurgeMigrationUnit: cache eviction failed for {muId}: {ex.Message}");
+            }
+
+            _muMutateLocks.TryRemove($"{jobId}::{muId}", out _);
+
+            try
+            {
+                ActiveMigrationProcessor?.RemoveMigrationUnit(muId);
+            }
+            catch (Exception ex)
+            {
+                AddVerboseLog($"PurgeMigrationUnit: processor cleanup failed for {muId}: {ex.Message}");
+            }
+
+            // TEMP: confirm post-purge state from storage.
+            try
+            {
+                var afterStorage = GetMigrationUnitFromStorage(jobId, muId);
+                AddTempLog($"[temp] PurgeMigrationUnit AFTER jobId={jobId} muId={muId} storageHasFile={(afterStorage != null)}");
+            }
+            catch (Exception ex)
+            {
+                AddTempLog($"[temp] PurgeMigrationUnit AFTER inspect failed for {muId}: {ex.Message}");
             }
         }
 

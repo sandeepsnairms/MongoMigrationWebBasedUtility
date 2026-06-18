@@ -48,29 +48,40 @@ namespace OnlineMongoMigrationProcessor
         /// </summary>
         private async void OnMigrationUnitCompleted(MigrationUnit mu)
         {
-            MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.OnMigrationUnitCompleted: mu={mu.DatabaseName}.{mu.CollectionName}");
-            _log.WriteLine($"Processing completion callback for migration unit {mu.DatabaseName}. {mu.CollectionName}", LogType.Debug);
-
-            if (MigrationJobContext.ControlledPauseRequested)
+            try
             {
-                _log.WriteLine("Controlled pause active - skipping post-processing",LogType.Debug);
-                return;
+                MigrationJobContext.AddVerboseLog($"DumpRestoreProcessor.OnMigrationUnitCompleted: mu={mu.DatabaseName}.{mu.CollectionName}");
+                _log.WriteLine($"Processing completion callback for migration unit {mu.DatabaseName}. {mu.CollectionName}", LogType.Debug);
+
+                if (MigrationJobContext.ControlledPauseRequested || _cts.Token.IsCancellationRequested || !ProcessRunning)
+                {
+                    _log.WriteLine("Pause/stop active - skipping post-processing callback", LogType.Debug);
+                    return;
+                }
+
+                // Build non-unique indexes after data copy completes
+                bool canProceedToChangeStream = await BuildNonUniqueIndexesAfterCopyAsync(mu);
+
+                // Start change stream processing (gated by blocking index completion)
+                if (canProceedToChangeStream)
+                    AddCollectionToChangeStreamQueue(mu);
+
+                PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
+                PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);
+
+                _log.WriteLine($"Offline dump/restore processing completed for {mu.DatabaseName}. {mu.CollectionName}",LogType.Debug);
+
+                // Handle post-completion logic -stop if offline, else invoke change streams
+                StopOfflineOrInvokeChangeStreams();
             }
-
-            // Build non-unique indexes after data copy completes
-            bool canProceedToChangeStream = await BuildNonUniqueIndexesAfterCopyAsync(mu);
-
-            // Start change stream processing (gated by blocking index completion)
-            if (canProceedToChangeStream)
-                AddCollectionToChangeStreamQueue(mu);
-
-            PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
-            PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);
-
-            _log.WriteLine($"Offline dump/restore processing completed for {mu.DatabaseName}. {mu.CollectionName}",LogType.Debug);
-
-            // Handle post-completion logic -stop if offline, else invoke change streams
-            StopOfflineOrInvokeChangeStreams();
+            catch (OperationCanceledException)
+            {
+                _log.WriteLine($"Post-processing canceled for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+            }
+            catch (Exception ex)
+            {
+                _log.WriteLine($"Post-processing callback failed for {mu.DatabaseName}.{mu.CollectionName}: {ex.Message}", LogType.Warning);
+            }
         }
 
         /// <summary>

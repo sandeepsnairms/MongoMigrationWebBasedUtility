@@ -670,7 +670,20 @@ namespace MongoMigrationWebApp.Components
                         unit.SyncBackOriginalResumeToken = null;
                         unit.SyncBackCSLastResumeTokenWithChange = null;
                         unit.SyncBackCSLastChangeUTCTime = null;
-                        unit.Remove();
+
+                        var jobIndex = MigrationJob.MigrationUnitBasics?.FindIndex(mu => mu.Id == id) ?? -1;
+                        if (jobIndex >= 0)
+                        {
+                            MigrationJob.MigrationUnitBasics!.RemoveAt(jobIndex);
+                        }
+
+                        // Centralized purge: deletes the persisted MU file, evicts the cache entry,
+                        // drops the per-MU mutate lock, and clears any in-memory state held by the
+                        // active change-stream processor so a re-add of the same namespace (which
+                        // regenerates the same MU id) starts from a clean slate.
+                        MigrationJobContext.PurgeMigrationUnit(MigrationJob.Id, id);
+
+                        _liveUnits.RemoveAll(u => u.Id == id);
                     }
                 }
 

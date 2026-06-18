@@ -69,6 +69,21 @@ namespace OnlineMongoMigrationProcessor
                 _syncBack ? null : _config.CACertContentsForSourceServer);
         }
 
+        public override void RemoveMigrationUnit(string migrationUnitId)
+        {
+            base.RemoveMigrationUnit(migrationUnitId);
+
+            if (string.IsNullOrEmpty(migrationUnitId))
+                return;
+
+            if (_flushLocks.TryRemove(migrationUnitId, out var sem))
+            {
+                try { sem.Dispose(); } catch { /* best-effort */ }
+            }
+
+            _lastPerMuPersistUtc.TryRemove(migrationUnitId, out _);
+        }
+
         protected override async Task ProcessChangeStreamsAsync(CancellationToken token)
         {
             MigrationJobContext.AddVerboseLog("CollectionLevelChangeStreamProcessor.ProcessChangeStreamsAsync: starting");

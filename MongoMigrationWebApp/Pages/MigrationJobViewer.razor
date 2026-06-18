@@ -336,10 +336,11 @@
                             </td>
                         }
                         <td>
+                            @{ var displayIndexCount = mu.IndexesMigrated > 0 ? mu.IndexesMigrated : mu.IndexesExpected; }
                             @(mu.SourceStatus == CollectionStatus.NotFound ? "N/A"
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "N/A"
-                                                : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? "Complete"
-                                                : mu.IndexPercent > 0 ? $"{mu.IndexPercent:F1}%"
+                                                : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (100%)"
+                                                : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%)"
                                                 : mu.DumpComplete && mu.RestoreComplete ? "Pending"
                                                 : "—")
                         </td>
@@ -1393,6 +1394,25 @@ else if (@_showLogBackupFile)
         if (!string.IsNullOrEmpty(targetConnectionString))
             MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id] = targetConnectionString;
 
+        // Validate that both connection strings are available before starting
+        var storedSourceConnStr = MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id];
+        var storedTargetConnStr = MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id];
+
+        if (string.IsNullOrWhiteSpace(storedSourceConnStr) || string.IsNullOrWhiteSpace(storedTargetConnStr))
+        {
+            _errorMessage = "Both source and target connection strings are required. Please provide them using 'Resume Job' → 'With Updated Connection Strings' and try again.";
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
+
+        // Validate that collections are configured
+        if (CurrentlyLoadedMigrationJob.MigrationUnitBasics == null || CurrentlyLoadedMigrationJob.MigrationUnitBasics.Count == 0)
+        {
+            _errorMessage = "No collections configured. Please add collections to start migrating.";
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
+
         // CurrentlyLoadedMigrationJob.CurrentlyActive = true;
         CurrentlyLoadedMigrationJob.IsCancelled = false;
 
@@ -1652,11 +1672,16 @@ else if (@_showLogBackupFile)
             //get ids that are no llonger present in newUnits
             var delList = CurrentlyLoadedMigrationJob.MigrationUnitBasics.FindAll(mu => !newIds.Contains(mu.Id));
 
+            MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated jobId={CurrentlyLoadedMigrationJob.Id} existingBasics={CurrentlyLoadedMigrationJob.MigrationUnitBasics.Count} incoming={migrationUnits.Count} toDelete={delList.Count}");
+
             foreach (var tobDel in delList)
             {
+                MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated removing {tobDel.DatabaseName}.{tobDel.CollectionName} id={tobDel.Id} DumpComplete={tobDel.DumpComplete} RestoreComplete={tobDel.RestoreComplete}");
                 tobDel.ParentJob = CurrentlyLoadedMigrationJob;
                 tobDel.Remove();
-                MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(tobDel.Id);//remove from cache
+                // Centralized purge clears cache, mutate lock, persisted file, and active
+                // change-stream processor state so a re-add of the same namespace starts clean.
+                MigrationJobContext.PurgeMigrationUnit(CurrentlyLoadedMigrationJob.Id, tobDel.Id);
             }
 
             foreach (var mu in migrationUnits)
@@ -1678,6 +1703,13 @@ else if (@_showLogBackupFile)
             {
                 _errorMessage = "Target namespace clash detected. Multiple source collections cannot map to the same target collection.";
                 return;
+            }
+
+            // TEMP: snapshot the final basics list so we can confirm DumpComplete/RestoreComplete
+            // were correctly cleared for any re-added collection.
+            foreach (var b in CurrentlyLoadedMigrationJob.MigrationUnitBasics)
+            {
+                MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated FINAL basic {b.DatabaseName}.{b.CollectionName} id={b.Id} DumpComplete={b.DumpComplete} RestoreComplete={b.RestoreComplete} DumpPercent={b.DumpPercent:F2} RestorePercent={b.RestorePercent:F2}");
             }
 
             CurrentlyLoadedMigrationJob.NameSpaces = Helper.BuildNamespaceConfigFromMigrationUnits(migrationUnits);
@@ -1753,14 +1785,30 @@ else if (@_showLogBackupFile)
     private async Task PauseJobImmediate()
     {
         _errorMessage = string.Empty;
-        // Start cooldown immediately so the UI shows "Resume in Xs" right away
-        StartPauseCooldown();
-        await InvokeAsync(StateHasChanged);
-        // Run StopMigration on a background thread so the Blazor circuit isn't blocked
-        // by the 10-second worker await in StopCoordinatedProcessing.
-        await Task.Run(() => JobManager.StopMigration());
-        MigrationJobContext.SaveMigrationJob(CurrentlyLoadedMigrationJob);
-        _refreshTimer = null;
+        try
+        {
+            // Start cooldown immediately so the UI shows "Resume in Xs" right away.
+            StartPauseCooldown();
+            await InvokeAsync(StateHasChanged);
+
+            // Run StopMigration on a background thread so the Blazor circuit isn't blocked
+            // by the 10-second worker await in StopCoordinatedProcessing.
+            await Task.Run(() => JobManager.StopMigration());
+
+            var job = CurrentlyLoadedMigrationJob;
+            if (job != null)
+            {
+                MigrationJobContext.SaveMigrationJob(job);
+            }
+
+            _refreshTimer?.Dispose();
+            _refreshTimer = null;
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = $"Pause failed: {ex.Message}";
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private void PauseJobControlled()
@@ -1863,7 +1911,9 @@ else if (@_showLogBackupFile)
     {
         
         if (IsResumeEnabled() && NoOtherActiveJobs() && CurrentlyLoadedMigrationJob != null && CurrentlyLoadedMigrationJob.IsStarted &&
-            (!string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id]) || !string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id])))
+            !string.IsNullOrEmpty(MigrationJobContext.SourceConnectionString[CurrentlyLoadedMigrationJob.Id]) && 
+            !string.IsNullOrEmpty(MigrationJobContext.TargetConnectionString[CurrentlyLoadedMigrationJob.Id]) &&
+            CurrentlyLoadedMigrationJob.MigrationUnitBasics != null && CurrentlyLoadedMigrationJob.MigrationUnitBasics.Count > 0)
         {
             return true;
         }

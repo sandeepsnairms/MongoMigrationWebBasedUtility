@@ -70,6 +70,13 @@
                         }
                     </div>
 
+                    @if (NewMode)
+                    {
+                        <div class="alert alert-info py-2 mb-3">
+                            You will be able to add collections once the job is created.
+                        </div>
+                    }
+
                     <div class="mb-3">
                         <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
                             Migration Mode

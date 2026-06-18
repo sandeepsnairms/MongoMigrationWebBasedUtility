@@ -1421,6 +1421,13 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
             catch (Exception ex)
             {
+                // Ignore error if collection is already on the target shard
+                if (ex.Message.Contains("cannot move shard to the same node", StringComparison.OrdinalIgnoreCase))
+                {
+                    log.WriteLine($"Collection {ns} is already on shard {toShard}, skipping move", LogType.Debug);
+                    return true;
+                }
+
                 log.WriteLine($"Error moving collection {ns} to shard {toShard}: {ex.Message}", LogType.Error);
                 return false;
             }
@@ -1430,7 +1437,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
         /// Builds non-unique indexes on the target collection after offline data copy.
         /// Returns the number of non-unique indexes created.
         /// </summary>
-        public static async Task<int> BuildNonUniqueIndexesAsync(Log log, MigrationUnit mu, string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection)
+        public static async Task<int> BuildNonUniqueIndexesAsync(Log log, MigrationUnit mu, string targetConnectionString, IMongoCollection<BsonDocument> sourceCollection, bool useBlockingBuilds = false)
         {
             var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, mu.GetEffectiveTargetDatabaseName(), mu.GetEffectiveTargetCollectionName());
             log.WriteLine($"Building non-unique indexes for: {namespaceForLog}");
@@ -1442,7 +1449,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 var targetCollectionName = mu.GetEffectiveTargetCollectionName();
 
                 IndexCopier indexCopier = new IndexCopier();
-                int count = await indexCopier.CopyNonUniqueIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log);
+                int count = await indexCopier.CopyNonUniqueIndexesAsync(sourceCollection, targetClient, targetDatabaseName, targetCollectionName, log, useBlockingBuilds);
                 mu.IndexesMigrated += count;
                 log.WriteLine($"{count} non-unique indexes created on {namespaceForLog}");
                 return count;
@@ -1456,79 +1463,94 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
         /// <summary>
         /// Checks active index builds on a target collection using the currentOp command.
-        /// Returns (activeCount, totalProgress) where totalProgress is 0-100.
+        /// Returns (activeBuilds, progressPercent) where progressPercent is based on how many
+        /// non-unique indexes are already READY on the target vs the expected total.
+        /// This avoids unreliable currentOp percentage parsing entirely.
         /// </summary>
-        public static async Task<(int ActiveBuilds, double ProgressPercent)> CheckIndexBuildProgressAsync(Log log, string targetConnectionString, string databaseName, string collectionName)
+        public static async Task<(int ActiveBuilds, double ProgressPercent)> CheckIndexBuildProgressAsync(Log log, string targetConnectionString, string databaseName, string collectionName, int expectedTotalBuilds = 0)
         {
             try
             {
                 var targetClient = MongoClientFactory.Create(log, targetConnectionString);
+
+                // Check currentOp only to determine whether builds are still in-flight.
                 var adminDb = targetClient.GetDatabase("admin");
-
-                var currentOpCommand = new BsonDocument
-                {
-                    { "currentOp", 1 },
-                    { "active", true },
-                    { "$all", true }
-                };
-
+                var currentOpCommand = new BsonDocument { { "currentOp", 1 }, { "$all", true } };
                 var result = await adminDb.RunCommandAsync<BsonDocument>(currentOpCommand);
 
-                if (!result.Contains("inprog"))
-                    return (0, 100);
-
-                var inprog = result["inprog"].AsBsonArray;
                 int activeBuilds = 0;
-                double totalProgress = 0;
-
-                foreach (var op in inprog)
+                if (result.Contains("inprog"))
                 {
-                    var opDoc = op.AsBsonDocument;
-                    
-                    // Look for index build operations on this specific collection
-                    if (opDoc.TryGetValue("command", out var command) && command.IsBsonDocument)
+                    var seenBuildIds = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var op in result["inprog"].AsBsonArray)
                     {
-                        var cmdDoc = command.AsBsonDocument;
-                        if (cmdDoc.Contains("createIndexes"))
+                        var opDoc = op.AsBsonDocument;
+                        bool matched = false;
+
+                        if (opDoc.TryGetValue("command", out var command) && command.IsBsonDocument)
                         {
-                            var ns = opDoc.GetValue("ns", "").AsString;
-                            if (ns == $"{databaseName}.{collectionName}" || 
-                                cmdDoc["createIndexes"].AsString == collectionName)
+                            try
                             {
-                                activeBuilds++;
-                                if (opDoc.TryGetValue("progress", out var progress) && progress.IsBsonDocument)
+                                var cmdDoc = command.AsBsonDocument;
+                                var nsValue = opDoc.GetValue("ns", "");
+                                var ns = nsValue.IsString ? nsValue.AsString : nsValue.ToString();
+                                var createIndexesElements = cmdDoc.Elements.Where(e => e.Name == "createIndexes").ToList();
+                                if (createIndexesElements.Count > 0)
                                 {
-                                    var done = progress.AsBsonDocument.GetValue("done", 0).ToDouble();
-                                    var total = progress.AsBsonDocument.GetValue("total", 1).ToDouble();
-                                    if (total > 0)
-                                        totalProgress += (done / total) * 100;
+                                    var cv = createIndexesElements[0].Value;
+                                    var coll = cv.IsString ? cv.AsString : cv.ToString();
+                                    if (ns == $"{databaseName}.{collectionName}" || coll == collectionName)
+                                    {
+                                        matched = true;
+                                        string idxName = "";
+                                        if (cmdDoc.TryGetValue("indexes", out var idxArr) && idxArr.IsBsonArray && idxArr.AsBsonArray.Count > 0 && idxArr.AsBsonArray[0].IsBsonDocument)
+                                            idxName = idxArr.AsBsonArray[0].AsBsonDocument.GetValue("name", "").ToString();
+                                        var key = $"{coll}|{idxName}|{opDoc.GetValue("opid", "").ToString()}";
+                                        if (seenBuildIds.Add(key)) activeBuilds++;
+                                    }
                                 }
                             }
+                            catch { /* skip malformed op */ }
                         }
-                    }
-                    
-                    // Also check via msg field for index build operations
-                    if (opDoc.TryGetValue("msg", out var msg) && msg.IsString && msg.AsString.Contains("Index Build"))
-                    {
-                        var ns = opDoc.GetValue("ns", "").AsString;
-                        if (ns == $"{databaseName}.{collectionName}")
+
+                        if (!matched && opDoc.TryGetValue("msg", out var msg) && msg.IsString)
                         {
-                            activeBuilds++;
-                            if (opDoc.TryGetValue("progress", out var progress) && progress.IsBsonDocument)
+                            var m = msg.AsString;
+                            if ((m.Contains("Index Build", StringComparison.OrdinalIgnoreCase)
+                                 || m.Contains("index build", StringComparison.OrdinalIgnoreCase)
+                                 || m.Contains("queued", StringComparison.OrdinalIgnoreCase))
+                                && opDoc.GetValue("ns", "").AsString == $"{databaseName}.{collectionName}")
                             {
-                                var done = progress.AsBsonDocument.GetValue("done", 0).ToDouble();
-                                var total = progress.AsBsonDocument.GetValue("total", 1).ToDouble();
-                                if (total > 0)
-                                    totalProgress += (done / total) * 100;
+                                var key = $"{collectionName}|msg|{opDoc.GetValue("opid", "").ToString()}";
+                                if (seenBuildIds.Add(key)) activeBuilds++;
                             }
                         }
                     }
                 }
 
                 if (activeBuilds == 0)
-                    return (0, 100);
+                {
+                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected={expectedTotalBuilds}, pendingRaw=0, pending=0, completed={expectedTotalBuilds}, progress=100 (no in-flight ops)", LogType.Info);
+                    return (0, 100); // No builds in-flight — treat as complete (caller may apply warm-up guard)
+                }
 
-                return (activeBuilds, totalProgress / activeBuilds);
+                // Simple deterministic math requested by user:
+                // completed = expected - pending(currentOp)
+                // progress  = completed / expected
+                double progress = 0;
+                if (expectedTotalBuilds > 0)
+                {
+                    var effectivePending = Math.Min(activeBuilds, expectedTotalBuilds);
+                    var completedCount = Math.Max(0, expectedTotalBuilds - effectivePending);
+                    progress = Math.Min(99, (completedCount * 100.0) / expectedTotalBuilds);
+                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected={expectedTotalBuilds}, pendingRaw={activeBuilds}, pending={effectivePending}, completed={completedCount}, progress={progress:F1}", LogType.Info);
+                }
+                else
+                {
+                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected=0, pendingRaw={activeBuilds}, pending={activeBuilds}, completed=0, progress=0", LogType.Info);
+                }
+
+                return (activeBuilds, progress);
             }
             catch (Exception ex)
             {

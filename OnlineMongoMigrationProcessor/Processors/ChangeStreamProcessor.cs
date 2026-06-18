@@ -504,6 +504,31 @@ namespace OnlineMongoMigrationProcessor
             }
         }
 
+        /// <summary>
+        /// Drops all in-memory state held for the given migration unit id so a later re-add
+        /// (which deterministically regenerates the same id from db+collection) does not
+        /// inherit stale counters, target-namespace mappings, or resume-token cache entries.
+        /// Subclasses override to also clear their own per-MU dictionaries.
+        /// </summary>
+        public virtual void RemoveMigrationUnit(string migrationUnitId)
+        {
+            if (string.IsNullOrEmpty(migrationUnitId))
+                return;
+
+            MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}ChangeStreamProcessor.RemoveMigrationUnit: migrationUnitId={migrationUnitId}");
+
+            _migrationUnitsToProcess.TryRemove(migrationUnitId, out _);
+            _resumeTokenCache.TryRemove(migrationUnitId, out _);
+
+            // _targetNamespaceToUnitId is keyed by "targetDb.targetCollection" with the muId as the value;
+            // scan values to evict any mapping that points at this MU.
+            foreach (var kvp in _targetNamespaceToUnitId)
+            {
+                if (string.Equals(kvp.Value, migrationUnitId, StringComparison.Ordinal))
+                    _targetNamespaceToUnitId.TryRemove(kvp.Key, out _);
+            }
+        }
+
         public async Task RunChangeStreamProcessorForAllCollections(CancellationTokenSource cts)
         {
 

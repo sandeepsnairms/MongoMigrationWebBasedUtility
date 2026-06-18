@@ -246,6 +246,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 {
                     _migrationProcessor.StopProcessing(true);
                     _migrationProcessor = null;
+                    MigrationJobContext.ActiveMigrationProcessor = null;
                 }
                 
                 ProcessRunning = false;
@@ -337,6 +338,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     // Stop the processor with full cleanup
                     _migrationProcessor.StopProcessing(true);
                     _migrationProcessor = null;
+                    MigrationJobContext.ActiveMigrationProcessor = null;
                     
                     // Give time for cleanup to complete
                     await Task.Delay(1000);
@@ -455,6 +457,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                     break;
             }
             _migrationProcessor.ProcessRunning = true;
+            MigrationJobContext.ActiveMigrationProcessor = _migrationProcessor;
             
 #if !LEGACY_MONGODB_DRIVER
             // Set the delegate to wait for resume token tasks before processing collections
@@ -785,17 +788,22 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 if (_migrationProcessor != null && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
                 {
-                    // For blocking mode, only add to change stream if index builds are complete
                     bool isBlocking = GetEffectiveBlockingIndexes(mu);
-                    if (isBlocking && !mu.IndexBuildComplete)
+                    bool indexesPending = !mu.IndexBuildComplete
+                        && mu.IndexingStrategy.HasValue
+                        && mu.IndexingStrategy.Value != IndexingStrategy.DontIndex;
+
+                    if (indexesPending)
                     {
-                        _log.WriteLine($"Blocking index builds not yet complete for {mu.DatabaseName}.{mu.CollectionName} - deferring change stream", LogType.Debug);
-                        // Trigger non-unique index build if not already done
+                        // Covers both first-run and resume (e.g. paused mid-build): always re-enter
+                        // the index-build flow so monitoring restarts and IndexBuildComplete is set
+                        // only after the target actually finishes the builds.
+                        _log.WriteLine($"Index builds not complete for {mu.DatabaseName}.{mu.CollectionName} (blocking={isBlocking}, IndexesMigrated={mu.IndexesMigrated}/{mu.IndexesExpected}) - {(isBlocking ? "deferring change stream" : "resuming monitor")}", LogType.Debug);
                         bool canProceed = await _migrationProcessor.BuildNonUniqueIndexesAfterCopyAsync(mu);
                         if (canProceed)
                         {
                             _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
-                            _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue after blocking index build", LogType.Debug);
+                            _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue after index build/resume", LogType.Debug);
                         }
                     }
                     else
@@ -1216,8 +1224,150 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (MigrationJobContext.CurrentlyActiveJob == null)
                 return TaskResult.FailedAfterRetries;
 
+            // RU jobs keep the original sequence: all partitions first, then copy.
+            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
+            {
+                return await MigrateJobCollectionsOriginalAsync(syncBack, ctsToken);
+            }
+
+            return await MigrateJobCollectionsWithAsyncPartitioningAsync(syncBack, ctsToken);
+        }
+
+        private async Task<TaskResult> MigrateJobCollectionsWithAsyncPartitioningAsync(bool syncBack, CancellationToken ctsToken)
+        {
+            if (MigrationJobContext.CurrentlyActiveJob == null)
+                return TaskResult.FailedAfterRetries;
+
             List<Task> resumeTokenTasks = new List<Task>();
-            _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics.Count} migration units", LogType.Debug);
+            var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
+            _log.WriteLine($"Processing {unitsForMigrate.Count} migration units (async partitioning pipeline)", LogType.Debug);
+
+            // Lightweight global prerequisites only (no upfront per-collection partitioning).
+            await ResolveAutoShardAssignmentsAsync(unitsForMigrate);
+
+            var serverCtx = new PartitionPrepContext
+            {
+                CheckedCS = false,
+                ServerLevelResumeTokenSet = false,
+                UseServerLevel = MigrationJobContext.CurrentlyActiveJob.ChangeStreamLevel == ChangeStreamLevel.Server
+                    && MigrationJobContext.CurrentlyActiveJob.JobType != JobType.RUOptimizedCopy,
+                SkipPartitioning = true
+            };
+
+            if (serverCtx.UseServerLevel && unitsForMigrate.Count > 0)
+            {
+                await SetupServerLevelResumeTokenAsync(unitsForMigrate[0], serverCtx, ctsToken, syncBack);
+            }
+
+            // Partition in the background and start migration as each collection becomes ready.
+            int maxPartitionConcurrency = Math.Max(1, Math.Min(8, MigrationJobContext.CurrentlyActiveJob.ParallelThreads > 0
+                ? MigrationJobContext.CurrentlyActiveJob.ParallelThreads
+                : Environment.ProcessorCount));
+            var partitionGate = new SemaphoreSlim(maxPartitionConcurrency, maxPartitionConcurrency);
+
+            var partitionTasks = unitsForMigrate.ToDictionary(
+                mu => mu.Id,
+                mu => Task.Run(async () =>
+                {
+                    await partitionGate.WaitAsync(ctsToken);
+                    try
+                    {
+                        if (_migrationCancelled || ctsToken.IsCancellationRequested)
+                            return TaskResult.Canceled;
+
+                        var (exists, isCollection) = await ValidateSourceCollectionAsync(mu);
+
+                        if (!isCollection)
+                        {
+                            mu.SourceStatus = CollectionStatus.IsView;
+                            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} is not a collection. Only collections are supported for migration.", LogType.Warning);
+                            return TaskResult.Success;
+                        }
+
+                        if (!exists)
+                        {
+                            _log.WriteLine($"{mu.DatabaseName}.{mu.CollectionName} does not exist on source. Marking skipped and continuing.", LogType.Warning);
+                            return await HandleMissingCollectionAsync(mu, ctsToken);
+                        }
+
+                        mu.SourceStatus = CollectionStatus.OK;
+                        await UpdateDocumentCountsAsync(mu, ctsToken);
+
+                        await ValidateTargetCollectionExistsAsync(mu);
+
+                        if (mu.MigrationChunks == null || mu.MigrationChunks.Count == 0)
+                        {
+                            // Keep behavior aligned with the previous prep path.
+                            var prepContext = new PartitionPrepContext
+                            {
+                                CheckedCS = false,
+                                ServerLevelResumeTokenSet = false,
+                                UseServerLevel = false,
+                                SkipPartitioning = false
+                            };
+
+                            var prepResult = await PrepareTargetCollectionAsync(mu, prepContext, ctsToken);
+                            if (prepResult != TaskResult.Success)
+                                return prepResult;
+
+                            var partResult = await CreatePartitionsAsync(mu, ctsToken);
+                            if (partResult != TaskResult.Success)
+                                return partResult;
+                        }
+
+                        MigrationJobContext.SaveMigrationUnit(mu, false);
+                        return TaskResult.Success;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return TaskResult.Canceled;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.WriteLine($"Async partitioning failed for {mu.DatabaseName}.{mu.CollectionName}. Details: {ex}", LogType.Error);
+                        return TaskResult.Retry;
+                    }
+                    finally
+                    {
+                        partitionGate.Release();
+                    }
+                }, ctsToken));
+
+            foreach (var migrationUnit in unitsForMigrate)
+            {
+                if (_migrationCancelled)
+                    return TaskResult.Canceled;
+
+                if (HandleControlPause())
+                    return TaskResult.Canceled;
+
+                var prepResult = await partitionTasks[migrationUnit.Id];
+                if (prepResult != TaskResult.Success)
+                    return prepResult;
+
+                MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
+
+                var result = await ProcessMigrationUnitAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
+                if (result != TaskResult.Success)
+                    return result;
+
+                MigrationJobContext.AddVerboseLog($"Before ShouldBreakMigrationLoop, last processed {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
+
+                if (ShouldBreakMigrationLoop())
+                {
+                    _log.WriteLine("Breaking loop: CS post-processing started and offline job completed", LogType.Debug);
+                    break;
+                }
+            }
+
+            MigrationJobContext.AddVerboseLog($"Before WaitForMigrationProcessorCompletionAsync");
+            return await WaitForMigrationProcessorCompletionAsync(ctsToken);
+        }
+
+        private async Task<TaskResult> MigrateJobCollectionsOriginalAsync(bool syncBack, CancellationToken ctsToken)
+        {
+            List<Task> resumeTokenTasks = new List<Task>();
+            _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob!.MigrationUnitBasics.Count} migration units", LogType.Debug);
 
             foreach (var mub in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
             {
@@ -1229,7 +1379,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                 MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {mub.DatabaseName}.{mub.CollectionName}");
 
-                var result = await ProcessMigrationUnitAsync(mub, syncBack, ctsToken, resumeTokenTasks);
+                var migrationUnit = MigrationJobContext.GetMigrationUnit(mub.Id);
+                var result = await ProcessMigrationUnitAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
 
@@ -1247,13 +1398,12 @@ namespace OnlineMongoMigrationProcessor.Workers
         }
 
         private async Task<TaskResult> ProcessMigrationUnitAsync(
-            MigrationUnitBasic mub,
+            MigrationUnit migrationUnit,
             bool syncBack,
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
-            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitAsync: mub.Id={mub.Id}");
-            var migrationUnit = MigrationJobContext.GetMigrationUnit(mub.Id);
+            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitAsync: mu.Id={migrationUnit.Id}");
             migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
             if (!Helper.IsMigrationUnitValid(migrationUnit))
@@ -1286,9 +1436,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (!exists)
             {
-                migrationUnit.SourceStatus = CollectionStatus.NotFound;
-                _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source. Created empty collection.", LogType.Warning);
-                return TaskResult.Abort;
+                _log.WriteLine($"{migrationUnit.DatabaseName}.{migrationUnit.CollectionName} does not exist on source. Marking skipped and continuing.", LogType.Warning);
+                return await HandleMissingCollectionAsync(migrationUnit, ctsToken);
             }
 
             await ValidateTargetCollectionExistsAsync(migrationUnit);
@@ -1723,8 +1872,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (HandleControlPause())
                     return;
 
-                if (!await ExecutePreparePartitionsAsync())
-                    return;
+                // RU jobs keep the original eager partitioning behavior.
+                if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
+                {
+                    if (!await ExecutePreparePartitionsAsync())
+                        return;
+
+                    if (HandleControlPause())
+                        return;
+                }
 
                 if (HandleControlPause())
                     return;
@@ -2002,6 +2158,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             var dummySourceClient = MongoClientFactory.Create(_log, MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
             _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!, this);
+            MigrationJobContext.ActiveMigrationProcessor = _migrationProcessor;
             _syncBack = true;
             _migrationProcessor.ProcessRunning = true;
             JobStarting = false;
@@ -2050,8 +2207,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _migrationProcessor.StopProcessing();
 
             _migrationProcessor = null;
+            MigrationJobContext.ActiveMigrationProcessor = null;
             var dummySourceClient = MongoClientFactory.Create(_log, sourceConnectionString);
             _migrationProcessor = new SyncBackProcessor(_log, dummySourceClient, _config!, this);
+            MigrationJobContext.ActiveMigrationProcessor = _migrationProcessor;
             _syncBack = true;
             _migrationProcessor.ProcessRunning = true;
             JobStarting = false;

@@ -320,11 +320,11 @@ namespace OnlineMongoMigrationProcessor
                 {
                     if (skipDataTypeFilter)
                     {
-                        log.WriteLine($"Encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex}");
+                        log.WriteLine($"{collection.CollectionNamespace} encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex}");
                     }
                     else
                     {
-                        log.WriteLine($"Encountered error in attempt {i} while sampling data where _id is {dataType}: {ex}");
+                        log.WriteLine($"{collection.CollectionNamespace} encountered error in attempt {i} while sampling data where _id is {dataType}: {ex}");
                     }
                 }
             }
@@ -335,11 +335,11 @@ namespace OnlineMongoMigrationProcessor
                 //docCountByType = 0;
                 if (skipDataTypeFilter)
                 {
-                    log.WriteLine($"No data found (DataType filtering bypassed)");
+                    log.WriteLine($"{collection.CollectionNamespace} No data found (DataType filtering bypassed)");
                 }
                 else
                 {
-                    log.WriteLine($"No data found where _id is {dataType}");
+                    log.WriteLine($"{collection.CollectionNamespace} No data found where _id is {dataType}");
                 }
                 return null;
             }
@@ -361,11 +361,11 @@ namespace OnlineMongoMigrationProcessor
 
             if (skipDataTypeFilter)
             {
-                log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} (DataType filtering bypassed)");
+                log.WriteLine($"{collection.CollectionNamespace} total chunks: {chunkBoundaries.Boundaries.Count} (DataType filtering bypassed)");
             }
             else
             {
-                log.WriteLine($"Total Chunks: {chunkBoundaries.Boundaries.Count} where _id is {dataType}");
+                log.WriteLine($"{collection.CollectionNamespace} total chunks: {chunkBoundaries.Boundaries.Count} where _id is {dataType}");
             }
             return chunkBoundaries;
         }
