@@ -2358,17 +2358,26 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var (documentCount, totalCollectionSizeBytes, collection) = await GetCollectionInfoAsync(databaseName, collectionName, cts);
                 _log.WriteLine($"Collection info retrieved - docCount: {documentCount}, sizeBytes: {totalCollectionSizeBytes}", LogType.Debug);
 
-                _log.WriteLine($"Calculating partitioning strategy for {databaseName}.{collectionName}", LogType.Debug);
-                var (totalChunks, minDocsInChunk, targetChunkSizeBytes) = CalculatePartitioningStrategy(
-                    documentCount, totalCollectionSizeBytes, databaseName, collectionName);
+                // Phase 1: probe which _id BSON types actually exist in the source. We need
+                // this BEFORE planning because a multi-type collection forces a $type $match
+                // ahead of $sample, which pushes $sample off MongoDB's fast random-cursor
+                // path -- the planner must treat that case the same as a user filter.
+                _log.WriteLine($"Probing _id data types for {databaseName}.{collectionName}", LogType.Debug);
+                var (dataTypes, forceSkipDataTypeFilter) = DetermineDataTypesForPartitioning(collection, migrationUnit, cts);
+                migrationUnit.SkipDataTypeFilterForId = forceSkipDataTypeFilter;
+                _log.WriteLine($"Data type probe complete - types: {dataTypes.Count}, forceSkipDataTypeFilter: {forceSkipDataTypeFilter}", LogType.Debug);
 
-                _log.WriteLine($"Partitioning strategy: totalChunks={totalChunks}, minDocsInChunk={minDocsInChunk}, chunkSizeBytes={targetChunkSizeBytes}", LogType.Debug);
+                _log.WriteLine($"Calculating partitioning strategy for {databaseName}.{collectionName}", LogType.Debug);
+                var (totalChunks, minDocsInChunk) = CalculatePartitioningStrategy(
+                    documentCount, databaseName, collectionName, migrationUnit, forceSkipDataTypeFilter);
+
+                _log.WriteLine($"Partitioning strategy: totalChunks={totalChunks}, minDocsInChunk={minDocsInChunk}", LogType.Debug);
 
                 List<MigrationChunk> migrationChunks;
                 if (totalChunks > 1)
                 {
                     _log.WriteLine($"Creating multiple chunks ({totalChunks}) for {databaseName}.{collectionName}", LogType.Debug);
-                    migrationChunks = CreateMultipleChunks(collection, totalChunks, minDocsInChunk, migrationUnit, cts, databaseName, collectionName);
+                    migrationChunks = CreateMultipleChunks(collection, totalChunks, minDocsInChunk, migrationUnit, cts, databaseName, collectionName, dataTypes, forceSkipDataTypeFilter);
                     _log.WriteLine($"CreateMultipleChunks completed - returned {(migrationChunks == null ? "null" : migrationChunks.Count.ToString())} chunks", LogType.Debug);
                 }
                 else
@@ -2423,42 +2432,98 @@ namespace OnlineMongoMigrationProcessor.Workers
             return (documentCount, totalCollectionSizeBytes, collection);
         }
 
-        private (int totalChunks, long minDocsInChunk, long targetChunkSizeBytes) CalculatePartitioningStrategy(
-            long documentCount, long totalCollectionSizeBytes, string databaseName, string collectionName)
+        private (int totalChunks, long minDocsInChunk) CalculatePartitioningStrategy(
+            long documentCount, string databaseName, string collectionName, MigrationUnit migrationUnit, bool forceSkipDataTypeFilter)
         {
-            MigrationJobContext.AddVerboseLog($"CalculatePartitioningStrategy: docCount={documentCount}, totalSizeBytes={totalCollectionSizeBytes}, db={databaseName}, coll={collectionName}");
+            MigrationJobContext.AddVerboseLog($"CalculatePartitioningStrategy: docCount={documentCount}, db={databaseName}, coll={collectionName}, forceSkipDataTypeFilter={forceSkipDataTypeFilter}");
 
-            // Small collections under 1M docs: skip partitioning, process as a single chunk
-            long targetChunkSizeBytes = _config!.ChunkSizeInMb * 1024 * 1024;
+            // Small collections under 1M docs: skip partitioning, process as a single chunk.
             if (documentCount < 1_000_000)
             {
                 _log.WriteLine($"{databaseName}.{collectionName} has {documentCount} docs (< 1M). Skipping partitioning.", LogType.Debug);
-                return (1, documentCount, targetChunkSizeBytes);
+                return (1, documentCount);
             }
 
-            var totalChunksBySize = (int)Math.Ceiling((double)totalCollectionSizeBytes / targetChunkSizeBytes);
+            var userFilterDoc = MongoHelper.GetFilterDoc(migrationUnit.UserFilter);
+            bool hasUserFilter = userFilterDoc != null && userFilterDoc.ElementCount > 0;
+            // A $type predicate on _id (added when more than one _id type is present)
+            // is prepended to the $sample pipeline by SamplePartitioner, which has the
+            // same fast-path cost as a user filter -- treat both the same for cap math.
+            bool hasMatchBeforeSample = hasUserFilter || !forceSkipDataTypeFilter;
+            bool useSampleCommand = _config!.ObjectIdPartitioner == PartitionerType.UseSampleCommand;
+            bool isMongoDriver = MigrationJobContext.CurrentlyActiveJob!.JobType != JobType.DumpAndRestore;
 
-            int totalChunks;
-            long minDocsInChunk;
-
-            if (MigrationJobContext.CurrentlyActiveJob!.JobType == JobType.DumpAndRestore)
+            // Step 1: total sub-range count for DumpAndRestore (segments = 1).
+            //   Sample command  -> capped sample size (3K if a $match precedes $sample, 300K otherwise).
+            //   Non-sample      -> doc-count-driven via GetMinDocsPerChunk (same chunk floor
+            //                      the sample path bottoms out at, so all four partitioners
+            //                      produce the same chunk count for a given docCount).
+            long dumpSubRanges;
+            if (useSampleCommand)
             {
-                totalChunks = totalChunksBySize;
-                minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
-                _log.WriteLine($"{databaseName}.{collectionName} storage size: {totalCollectionSizeBytes}", LogType.Debug);
+                dumpSubRanges = SamplePartitioner.GetMaxSamples(hasMatchBeforeSample);
             }
             else
             {
-                _log.WriteLine($"{databaseName}.{collectionName} estimated document count: {documentCount}", LogType.Debug);
-                totalChunks = (int)Math.Min(SamplePartitioner.GetMaxSamples() / SamplePartitioner.GetMaxSegments(),
-                    documentCount / (SamplePartitioner.GetMaxSamples() == 0 ? 1 : SamplePartitioner.GetMaxSamples()));
-                totalChunks = Math.Max(1, totalChunks);
-                totalChunks = Math.Max(totalChunks, totalChunksBySize);
-                totalChunks = Math.Min(totalChunks, SamplePartitioner.GetMaxSamples());
-                minDocsInChunk = documentCount / (totalChunks == 0 ? 1 : totalChunks);
+                dumpSubRanges = Math.Max(1L, documentCount / SamplePartitioner.GetMinDocsPerChunk(documentCount));
             }
 
-            return (totalChunks, minDocsInChunk, targetChunkSizeBytes);
+            // Step 2: derive driver/dump sub-ranges per job type.
+            //   DumpAndRestore -> chunks == dumpSubRanges (segments = 1 downstream).
+            //   MongoDriver    -> 10x sub-ranges, grouped into chunks of MaxSegments segments.
+            //   Exception: useSampleCommand + ($match before $sample) caps $sample size at
+            //              MaxSamples(withFilter) = 3,000 (top-k sort bound). We can't get more
+            //              usable boundaries than that, so drop the driver multiplier when both
+            //              are true.
+            const int DriverSubRangeMultiplier = 10;
+            bool capSampleAbsolute = useSampleCommand && hasMatchBeforeSample;
+            long desiredSubRanges = (isMongoDriver && !capSampleAbsolute)
+                ? dumpSubRanges * DriverSubRangeMultiplier
+                : dumpSubRanges;
+
+            // Step 3: cap $sample size to 5% of estimated doc count (random-cursor fast path).
+            // With 10x oversampling, sampleSize = subRanges * 10, so subRanges <= docCount / 200.
+            // Only applies when the partitioner actually issues a $sample.
+            long subRangesActual = desiredSubRanges;
+            if (useSampleCommand)
+            {
+                long sampleSizeCap = Math.Max(1L, documentCount / 20);          // 5% of doc count
+                long subRangeCap = Math.Max(1L, sampleSizeCap / SamplePartitioner.SampleOversampleFactor); // /10x oversample
+                subRangesActual = Math.Min(desiredSubRanges, subRangeCap);
+            }
+
+            int totalChunks;
+            if (isMongoDriver)
+            {
+                int maxSegments = SamplePartitioner.GetMaxSegments();
+                totalChunks = (int)Math.Max(1, Math.Ceiling((double)subRangesActual / maxSegments));
+            }
+            else
+            {
+                totalChunks = (int)Math.Max(1, subRangesActual);
+            }
+
+            // Universal chunk floor: docs/chunk >= MinDocsPerChunk (tiered).
+            long perChunkFloor = SamplePartitioner.GetMinDocsPerChunk(documentCount);
+
+            // MongoDriver: never drop segment count below MaxSegments just because chunks
+            // are too small to hold MaxSegments segments. Instead, raise the per-chunk
+            // floor so every chunk can saturate MaxSegments parallel segments at the
+            // tier's MinDocsPerSegment minimum. Equivalent to:
+            //     docs/chunk >= MaxSegments * MinDocsPerSegment(docCount).
+            // DumpAndRestore keeps segments=1 by design, so this constraint doesn't apply.
+            if (isMongoDriver)
+            {
+                long perChunkFloorForFullSegments =
+                    (long)SamplePartitioner.GetMaxSegments() * SamplePartitioner.GetMinDocsPerSegment(documentCount);
+                perChunkFloor = Math.Max(perChunkFloor, perChunkFloorForFullSegments);
+            }
+
+            long maxChunksByMinDocs = Math.Max(1L, documentCount / perChunkFloor);
+            totalChunks = (int)Math.Min(totalChunks, maxChunksByMinDocs);
+
+            long minDocsInChunk = documentCount / Math.Max(1, totalChunks);
+            return (totalChunks, minDocsInChunk);
         }
 
         private List<MigrationChunk> CreateSingleChunk(string databaseName, string collectionName)
@@ -2485,35 +2550,15 @@ namespace OnlineMongoMigrationProcessor.Workers
             MigrationUnit migrationUnit,
             CancellationToken cts,
             string databaseName,
-            string collectionName)
+            string collectionName,
+            List<DataType> dataTypes,
+            bool forceSkipDataTypeFilter)
         {
             
             MigrationJobContext.AddVerboseLog($"Chunking {databaseName}.{collectionName}");
-            _log.WriteLine($"CreateMultipleChunks started for {databaseName}.{collectionName} - totalChunks: {totalChunks}, minDocsInChunk: {minDocsInChunk}", LogType.Debug);
+            _log.WriteLine($"CreateMultipleChunks started for {databaseName}.{collectionName} - totalChunks: {totalChunks}, minDocsInChunk: {minDocsInChunk}, dataTypes: {dataTypes.Count}, forceSkipDataTypeFilter: {forceSkipDataTypeFilter}", LogType.Debug);
 
-            List<DataType> dataTypes;
-            if (migrationUnit.DataTypeForId.HasValue)
-            {
-                // User pinned the _id type; skip probing and use it directly.
-                dataTypes = new List<DataType> { migrationUnit.DataTypeForId.Value };
-                _log.WriteLine($"User-pinned _id data type {migrationUnit.DataTypeForId.Value} for {databaseName}.{collectionName}", LogType.Debug);
-            }
-            else
-            {
-                _log.WriteLine($"Determining data types for {databaseName}.{collectionName}", LogType.Debug);
-                dataTypes = DetermineDataTypes();
-                _log.WriteLine($"Data types determined - count: {dataTypes.Count}", LogType.Debug);
-
-                // Probe the source so we only spend partitioning effort on _id types that actually exist.
-                _log.ShowInMonitor($"Detecting _id data type(s) in use for {databaseName}.{collectionName}");
-                dataTypes = MongoHelper.PruneAbsentIdDataTypes(_log, collection, dataTypes, MongoHelper.GetFilterDoc(migrationUnit.UserFilter), cts);
-            }
-
-            // If exactly one _id type survives, downstream queries can skip the $type predicate entirely,
-            // and an ObjectId-only collection also unlocks ObjectId-specific partitioning optimizations.
-            bool forceSkipDataTypeFilter = dataTypes.Count == 1;
             bool optimizeForObjectId = forceSkipDataTypeFilter && dataTypes[0] == DataType.ObjectId;
-            migrationUnit.SkipDataTypeFilterForId = forceSkipDataTypeFilter;
             if (optimizeForObjectId)
             {
                 _log.WriteLine("ObjectId optimization enabled", LogType.Debug);
@@ -2561,6 +2606,37 @@ namespace OnlineMongoMigrationProcessor.Workers
             };
             _log.WriteLine($"Using all DataTypes for partitioning ({dataTypes.Count} types)", LogType.Debug);
             return dataTypes;
+        }
+
+        // Resolves the per-collection _id type list (user-pinned override or live probe)
+        // and the "skip $type filter" flag, returning both for downstream planning and
+        // partitioning. Runs once per collection, before CalculatePartitioningStrategy,
+        // so the planner can correctly treat a multi-type collection as "has $match
+        // before $sample" for cap purposes.
+        private (List<DataType> dataTypes, bool forceSkipDataTypeFilter) DetermineDataTypesForPartitioning(
+            IMongoCollection<BsonDocument> collection, MigrationUnit migrationUnit, CancellationToken cts)
+        {
+            List<DataType> dataTypes;
+            if (migrationUnit.DataTypeForId.HasValue)
+            {
+                // User pinned the _id type; skip probing and use it directly.
+                dataTypes = new List<DataType> { migrationUnit.DataTypeForId.Value };
+                _log.WriteLine($"User-pinned _id data type {migrationUnit.DataTypeForId.Value} for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
+            }
+            else
+            {
+                _log.WriteLine($"Determining data types for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}", LogType.Debug);
+                dataTypes = DetermineDataTypes();
+                _log.WriteLine($"Data types determined - count: {dataTypes.Count}", LogType.Debug);
+
+                // Probe the source so we only spend partitioning effort on _id types that actually exist.
+                _log.ShowInMonitor($"Detecting _id data type(s) in use for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
+                dataTypes = MongoHelper.PruneAbsentIdDataTypes(_log, collection, dataTypes, MongoHelper.GetFilterDoc(migrationUnit.UserFilter), cts);
+            }
+
+            // If exactly one _id type survives, downstream queries can skip the $type predicate entirely.
+            bool forceSkipDataTypeFilter = dataTypes.Count == 1;
+            return (dataTypes, forceSkipDataTypeFilter);
         }
 
         private void ProcessDataTypePartitions(

@@ -1250,16 +1250,15 @@ namespace OnlineMongoMigrationProcessor
                 }
 
                 string folder = Helper.GetWorkingFolder();
-                MigrationSettings config = new MigrationSettings();
-                config.Load();
-               
 
                 //checking if there are too many downloads or disk full. Caused by limited uploads.
+                // Pause downloads when free disk drops below 1 GB headroom for the next mongodump.
+                const long MinFreeDiskMb = 1024;
                 bool continueDownlods;
                 double pendingUploadsGB = 0;
                 double freeSpaceGB = 0;
-                
-                continueDownlods = Helper.CanProceedWithDownloads(folder, config.ChunkSizeInMb * 2, out pendingUploadsGB, out freeSpaceGB);
+
+                continueDownlods = Helper.CanProceedWithDownloads(folder, MinFreeDiskMb, out pendingUploadsGB, out freeSpaceGB);
                 _lastDiskSpaceCheckResult = continueDownlods;
                 _lastDiskSpaceCheckedAtUtc = DateTime.UtcNow;
 
