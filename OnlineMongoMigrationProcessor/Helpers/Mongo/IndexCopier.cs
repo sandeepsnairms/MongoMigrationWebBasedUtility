@@ -324,9 +324,12 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
 
                     var indexModel = new CreateIndexModel<BsonDocument>(keys, options);
 
-                    if (useBlockingBuilds && filter == IndexFilter.NonUniqueOnly)
+                    if (filter == IndexFilter.NonUniqueOnly)
                     {
-                        bool submitted = await SubmitBlockingIndexBuildAsync(_targetClient, databaseName, collectionName, keys, options, log);
+                        // One createIndexes command per index. We never wait for the build to
+                        // complete here — server-side build progress is monitored separately.
+                        // The `blocking` field is forwarded from the configured indexing strategy.
+                        bool submitted = await SubmitNonUniqueIndexBuildAsync(_targetClient, databaseName, collectionName, keys, options, useBlockingBuilds, log);
                         if (submitted)
                             counter++;
                     }
@@ -346,12 +349,13 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             return counter;
         }
 
-        private static async Task<bool> SubmitBlockingIndexBuildAsync(
+        private static async Task<bool> SubmitNonUniqueIndexBuildAsync(
             MongoClient targetClient,
             string databaseName,
             string collectionName,
             BsonDocument keys,
             CreateIndexOptions<BsonDocument> options,
+            bool blocking,
             Log log)
         {
             var targetDb = targetClient.GetDatabase(databaseName);
@@ -378,7 +382,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             {
                 { "createIndexes", collectionName },
                 { "indexes", new BsonArray { indexDoc } },
-                { "blocking", true },
+                { "blocking", blocking },
                 { "maxTimeMS", 5000 }
             };
 
@@ -389,17 +393,17 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
             catch (MongoCommandException ex) when (IsExpectedBlockingTimeout(ex))
             {
-                // Timeout is expected for blocking mode; server-side index build continues and queues.
+                // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
             catch (MongoExecutionTimeoutException ex) when (IsExpectedBlockingTimeout(ex))
             {
-                // Timeout is expected for blocking mode; server-side index build continues and queues.
+                // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
             catch (TimeoutException ex) when (IsExpectedBlockingTimeout(ex))
             {
-                // Timeout is expected for blocking mode; server-side index build continues and queues.
+                // Timeout is expected; server-side index build continues and queues.
                 return true;
             }
             catch (Exception ex)
@@ -408,7 +412,7 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     return true;
 
                 var indexName = options.Name ?? "unnamed";
-                log.WriteLine($"Failed to submit blocking index build '{indexName}' on {databaseName}.{collectionName}. Details: {ex.Message}", LogType.Error);
+                log.WriteLine($"Failed to submit non-unique index build '{indexName}' on {databaseName}.{collectionName}. Details: {ex.Message}", LogType.Error);
                 return false;
             }
         }

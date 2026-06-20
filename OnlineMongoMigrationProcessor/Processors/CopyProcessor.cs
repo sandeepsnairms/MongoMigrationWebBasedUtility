@@ -214,8 +214,6 @@ namespace OnlineMongoMigrationProcessor
                         AddCollectionToChangeStreamQueue(mu);
 
                     MigrationJobContext.SaveMigrationUnit(mu,true);
-
-                    MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(mu.Id);
                 }
                 else
                 {

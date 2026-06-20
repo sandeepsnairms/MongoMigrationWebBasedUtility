@@ -100,15 +100,8 @@ namespace OnlineMongoMigrationProcessor.Helpers
             if (mu == null)
             {
                 MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitProgress exited as MigrationUnit not found");
-                _log?.WriteLine($"[temp] ProcessMigrationUnitProgress mu={id} IsRestore={isRestore} -> NOT FOUND", LogType.Info);
                 return false; // Migration unit not found
             }
-
-            int chunkCount = mu.MigrationChunks?.Count ?? 0;
-            int downloadedCount = mu.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? 0;
-            int uploadedCount = mu.MigrationChunks?.Count(c => c.IsUploaded == true) ?? 0;
-            long muTotalDocs = Helper.GetMigrationUnitDocCount(mu);
-            _log?.WriteLine($"[temp] Enter ProcessMigrationUnitProgress {mu.DatabaseName}.{mu.CollectionName} IsRestore={isRestore} DumpComplete={mu.DumpComplete} RestoreComplete={mu.RestoreComplete} DumpPercent={mu.DumpPercent:F2} RestorePercent={mu.RestorePercent:F2} chunks={chunkCount} downloaded={downloadedCount} uploaded={uploadedCount} unitDocs={muTotalDocs} actual={mu.ActualDocCount} est={mu.EstimatedDocCount}", LogType.Info);
 
             bool hasActiveChunks = false;
             bool stateCorrected = false;
@@ -119,14 +112,12 @@ namespace OnlineMongoMigrationProcessor.Helpers
             // Self-heal stale flags from older runs where percent reached 100 before all chunks finished.
             if (mu.DumpComplete && !allDumpChunksDownloaded)
             {
-                _log?.WriteLine($"[temp] SelfHeal cleared DumpComplete for {mu.DatabaseName}.{mu.CollectionName} (chunks={chunkCount} downloaded={downloadedCount})", LogType.Info);
                 mu.DumpComplete = false;
                 stateCorrected = true;
             }
 
             if (mu.RestoreComplete && !allRestoreChunksUploaded)
             {
-                _log?.WriteLine($"[temp] SelfHeal cleared RestoreComplete for {mu.DatabaseName}.{mu.CollectionName} (chunks={chunkCount} uploaded={uploadedCount})", LogType.Info);
                 mu.RestoreComplete = false;
                 stateCorrected = true;
             }
@@ -139,7 +130,6 @@ namespace OnlineMongoMigrationProcessor.Helpers
 
             if (isRestore && mu.RestoreComplete)
             {
-                _log?.WriteLine($"[temp] EarlyExit isRestore && RestoreComplete=true for {mu.DatabaseName}.{mu.CollectionName}", LogType.Info);
                 return true;
             }
 
@@ -157,7 +147,6 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         break;
                     }
                 }
-                _log?.WriteLine($"[temp] Restore branch {mu.DatabaseName}.{mu.CollectionName} hasActiveChunks={hasActiveChunks} chunks={chunkCount} uploaded={uploadedCount} downloaded={downloadedCount}", LogType.Info);
                 if (hasActiveChunks)
                 {
                     // Recalculate overall restore percent atomically on persisted MU so concurrent
@@ -165,21 +154,10 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     bool reachedComplete = false;
                     MigrationJobContext.MutateMigrationUnit(id, m =>
                     {
-                        int mChunks = m.MigrationChunks?.Count ?? 0;
-                        int mUploaded = m.MigrationChunks?.Count(c => c.IsUploaded == true) ?? 0;
-                        long mDocs = m.MigrationChunks?.Sum(c =>
-                        {
-                            long eff = c.DumpQueryDocCount;
-                            if (eff == 0) eff = Math.Max(c.RestoredSuccessDocCount, c.DumpResultDocCount);
-                            return eff;
-                        }) ?? 0;
-                        long mUnitDocs = Helper.GetMigrationUnitDocCount(m);
                         m.RestorePercent = CalculateOverallPercentFromAllChunks(m, isRestore: true, log: _log);
                         bool allUploaded = m.MigrationChunks.All(c => c.IsUploaded == true);
-                        _log?.WriteLine($"[temp] Restore mutate {m.DatabaseName}.{m.CollectionName} computed RestorePercent={m.RestorePercent:F2} chunks={mChunks} uploaded={mUploaded} chunkDocsSum={mDocs} unitDocs={mUnitDocs} allUploaded={allUploaded}", LogType.Info);
                         if (m.RestorePercent >= 99.99 && allUploaded)
                         {
-                            _log?.WriteLine($"[temp] Restore FLIP RestoreComplete=true for {m.DatabaseName}.{m.CollectionName} (chunks={mChunks} uploaded={mUploaded} chunkDocsSum={mDocs} unitDocs={mUnitDocs})", LogType.Info);
                             m.RestoreComplete = true;
                             reachedComplete = true;
                         }
@@ -194,7 +172,6 @@ namespace OnlineMongoMigrationProcessor.Helpers
             {
                 if (mu.DumpComplete)
                 {
-                    _log?.WriteLine($"[temp] EarlyExit DumpComplete=true for {mu.DatabaseName}.{mu.CollectionName}", LogType.Info);
                     return true;
                 }
 
@@ -207,7 +184,6 @@ namespace OnlineMongoMigrationProcessor.Helpers
                         break;
                     }
                 }
-                _log?.WriteLine($"[temp] Dump branch {mu.DatabaseName}.{mu.CollectionName} hasActiveChunks={hasActiveChunks} chunks={chunkCount} downloaded={downloadedCount}", LogType.Info);
                 if (hasActiveChunks)
                 {
                     // Recalculate overall dump percent atomically on persisted MU so concurrent
@@ -215,21 +191,10 @@ namespace OnlineMongoMigrationProcessor.Helpers
                     bool reachedComplete = false;
                     MigrationJobContext.MutateMigrationUnit(id, m =>
                     {
-                        int mChunks = m.MigrationChunks?.Count ?? 0;
-                        int mDownloaded = m.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? 0;
-                        long mDocs = m.MigrationChunks?.Sum(c =>
-                        {
-                            long eff = c.DumpQueryDocCount;
-                            if (eff == 0) eff = Math.Max(c.RestoredSuccessDocCount, c.DumpResultDocCount);
-                            return eff;
-                        }) ?? 0;
-                        long mUnitDocs = Helper.GetMigrationUnitDocCount(m);
                         m.DumpPercent = CalculateOverallPercentFromAllChunks(m, isRestore: false, log: _log);
                         bool allDownloaded = m.MigrationChunks.All(c => c.IsDownloaded == true);
-                        _log?.WriteLine($"[temp] Dump mutate {m.DatabaseName}.{m.CollectionName} computed DumpPercent={m.DumpPercent:F2} chunks={mChunks} downloaded={mDownloaded} chunkDocsSum={mDocs} unitDocs={mUnitDocs} allDownloaded={allDownloaded}", LogType.Info);
                         if (m.DumpPercent >= 99.99 && allDownloaded)
                         {
-                            _log?.WriteLine($"[temp] Dump FLIP DumpComplete=true for {m.DatabaseName}.{m.CollectionName} (chunks={mChunks} downloaded={mDownloaded} chunkDocsSum={mDocs} unitDocs={mUnitDocs})", LogType.Info);
                             m.DumpComplete = true;
                             reachedComplete = true;
                         }

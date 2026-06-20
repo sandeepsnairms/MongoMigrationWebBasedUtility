@@ -256,7 +256,7 @@
                     </th>
                 }
                 <th class="sortable-header @GetSortClass("IndexStatus")" @onclick='() => SortBy("IndexStatus")' style="cursor: pointer; min-width: 5em;">
-                    Index<br/>Status
+                    Non-Unique<br/>Index Status
                     <i class="bi @GetSortIcon("IndexStatus") ms-1"></i>
                 </th>
                 @if (CurrentlyLoadedMigrationJob != null && Helper.IsOnline(CurrentlyLoadedMigrationJob) && !CurrentlyLoadedMigrationJob.ProcessingSyncBack)
@@ -337,10 +337,12 @@
                         }
                         <td>
                             @{ var displayIndexCount = mu.IndexesMigrated > 0 ? mu.IndexesMigrated : mu.IndexesExpected; }
+                            @{ var failedSuffix = mu.IndexesFailed > 0 ? $", {mu.IndexesFailed} failed" : string.Empty; }
                             @(mu.SourceStatus == CollectionStatus.NotFound ? "N/A"
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "N/A"
+                                                : mu.IndexBuildComplete && mu.IndexesFailed > 0 ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
                                                 : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (100%)"
-                                                : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%)"
+                                                : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
                                                 : mu.DumpComplete && mu.RestoreComplete ? "Pending"
                                                 : "—")
                         </td>
@@ -664,6 +666,21 @@ else if (@_showLogBackupFile)
                                                     : mu.SkippedDueToMaxRetries ? "Skipped (Max Retries)"
                                                     : (mu.RestoreComplete || mu.RestorePercent == 100 ? "Success" : $"{mu.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            // Non-Unique Index Status (mirrors the cell rendering in the table)
+            {
+                var displayIndexCount = mu.IndexesMigrated > 0 ? mu.IndexesMigrated : mu.IndexesExpected;
+                var failedSuffix = mu.IndexesFailed > 0 ? $", {mu.IndexesFailed} failed" : string.Empty;
+                var indexStatus = mu.SourceStatus == CollectionStatus.NotFound ? "N/A"
+                                                    : mu.SourceStatus == CollectionStatus.IsView ? "N/A"
+                                                    : mu.IndexBuildComplete && mu.IndexesFailed > 0 ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
+                                                    : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (100%)"
+                                                    : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
+                                                    : mu.DumpComplete && mu.RestoreComplete ? "Pending"
+                                                    : "—";
+                if (indexStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
             }
 
@@ -1672,11 +1689,8 @@ else if (@_showLogBackupFile)
             //get ids that are no llonger present in newUnits
             var delList = CurrentlyLoadedMigrationJob.MigrationUnitBasics.FindAll(mu => !newIds.Contains(mu.Id));
 
-            MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated jobId={CurrentlyLoadedMigrationJob.Id} existingBasics={CurrentlyLoadedMigrationJob.MigrationUnitBasics.Count} incoming={migrationUnits.Count} toDelete={delList.Count}");
-
             foreach (var tobDel in delList)
             {
-                MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated removing {tobDel.DatabaseName}.{tobDel.CollectionName} id={tobDel.Id} DumpComplete={tobDel.DumpComplete} RestoreComplete={tobDel.RestoreComplete}");
                 tobDel.ParentJob = CurrentlyLoadedMigrationJob;
                 tobDel.Remove();
                 // Centralized purge clears cache, mutate lock, persisted file, and active
@@ -1705,16 +1719,16 @@ else if (@_showLogBackupFile)
                 return;
             }
 
-            // TEMP: snapshot the final basics list so we can confirm DumpComplete/RestoreComplete
-            // were correctly cleared for any re-added collection.
-            foreach (var b in CurrentlyLoadedMigrationJob.MigrationUnitBasics)
-            {
-                MigrationJobContext.AddTempLog($"[temp] OnCollectionsUpdated FINAL basic {b.DatabaseName}.{b.CollectionName} id={b.Id} DumpComplete={b.DumpComplete} RestoreComplete={b.RestoreComplete} DumpPercent={b.DumpPercent:F2} RestorePercent={b.RestorePercent:F2}");
-            }
-
             CurrentlyLoadedMigrationJob.NameSpaces = Helper.BuildNamespaceConfigFromMigrationUnits(migrationUnits);
 
             MigrationJobContext.SaveMigrationJob(CurrentlyLoadedMigrationJob);
+
+            // Pagination cache invalidates only on count changes; a re-add (remove+add of the
+            // same Id) keeps count identical, so the cache would otherwise keep the orphan basic
+            // reference with its prior 100% state until the next timer tick. Drop it synchronously
+            // so the immediate post-modal render reflects the fresh basics.
+            _cachedFilteredAndPagedUnits = null;
+            _lastMigrationUnitsCount = -1;
 
             Refresh(null);
         }

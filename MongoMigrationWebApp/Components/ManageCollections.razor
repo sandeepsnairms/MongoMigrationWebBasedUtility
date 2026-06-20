@@ -26,18 +26,26 @@
                         <div class="alert alert-danger">@_error</div>
                     }
 
-                    @* Search box and Add button *@
+                    @* Search box, type filter, and Add button *@
                     <div class="d-flex justify-content-between align-items-center mb-3">
-                        <div class="input-group w-50">
-                            <span class="input-group-text"><i class="bi bi-search"></i></span>
-                            <input type="text" class="form-control" placeholder="Search collections by namespace..."
-                                   @bind="_paginationHelper.FilterText" @bind:event="oninput" @onkeyup="OnFilterChanged" />
-                            @if (!string.IsNullOrWhiteSpace(_paginationHelper.FilterText))
-                            {
-                                <button class="btn btn-outline-secondary" type="button" @onclick="ClearFilter" title="Clear filter">
-                                    <i class="bi bi-x"></i>
-                                </button>
-                            }
+                        <div class="d-flex align-items-center gap-2 w-75">
+                            <div class="input-group flex-grow-1">
+                                <span class="input-group-text"><i class="bi bi-search"></i></span>
+                                <input type="text" class="form-control" placeholder="Search collections by namespace..."
+                                       @bind="_paginationHelper.FilterText" @bind:event="oninput" @onkeyup="OnFilterChanged" />
+                                @if (!string.IsNullOrWhiteSpace(_paginationHelper.FilterText))
+                                {
+                                    <button class="btn btn-outline-secondary" type="button" @onclick="ClearFilter" title="Clear filter">
+                                        <i class="bi bi-x"></i>
+                                    </button>
+                                }
+                            </div>
+                            <select class="form-select w-auto" value="@_typeFilter" @onchange="OnTypeFilterChanged" title="Filter rows by type">
+                                <option value="all">All</option>
+                                <option value="existing">Existing</option>
+                                <option value="new">New (drafts)</option>
+                                <option value="remove">Pending removal</option>
+                            </select>
                         </div>
 
                         <div>
@@ -309,14 +317,7 @@
     </div>
 </div>
 
-@* Confirmation dialog for Cancel with pending changes *@
-@if (_showCancelConfirmation)
-{
-    <YesNoDialog Caption="Discard Changes?" 
-                 Message="You have unsaved changes. Are you sure you want to cancel?" 
-                 Type="MongoMigrationWebApp.Components.YesNoDialog.Category.DeleteNot" 
-                 OnClose="@HandleCancelConfirmationResult" />
-}
+@* Confirmation handled via browser confirm() in Cancel(); no in-modal dialog (stacking conflict with parent modal). *@
 
 @code {
     // === RENDER METHODS ===
@@ -381,7 +382,7 @@
             }
             builder.CloseElement();
 
-            // Actions — only Undo on pending-removal rows; otherwise blank (delete via checkbox + bulk toolbar)
+            // Actions — Delete on existing rows, Undo on pending-removal rows
             builder.OpenElement(16, "td");
             builder.AddAttribute(17, "class", "text-end");
             if (isPendingRemoval)
@@ -391,6 +392,15 @@
                 builder.AddAttribute(20, "title", "Undo removal");
                 builder.AddAttribute(21, "onclick", EventCallback.Factory.Create(this, () => UndoRemoval(unit.Id)));
                 builder.AddMarkupContent(22, "<i class=\"bi bi-arrow-counterclockwise\"></i>");
+                builder.CloseElement();
+            }
+            else
+            {
+                builder.OpenElement(18, "button");
+                builder.AddAttribute(19, "class", "btn btn-sm btn-outline-danger");
+                builder.AddAttribute(20, "title", "Remove this collection from the job");
+                builder.AddAttribute(21, "onclick", EventCallback.Factory.Create(this, () => QueueForRemoval(unit.Id)));
+                builder.AddMarkupContent(22, "<i class=\"bi bi-trash\"></i>");
                 builder.CloseElement();
             }
             builder.CloseElement();
@@ -597,10 +607,10 @@
         builder.OpenElement(49, "select");
         builder.AddAttribute(50, "class", "form-select form-select-sm");
         builder.AddAttribute(51, "disabled", isShardingLocked || simulated);
-        builder.AddAttribute(52, "value", _formSharding?.ToString() ?? "SameAsSource");
+        builder.AddAttribute(52, "value", _formSharding?.ToString() ?? "DontShard");
         builder.AddAttribute(53, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, async e =>
         {
-            _formSharding = Enum.Parse<ShardingStrategy>(e.Value?.ToString() ?? "SameAsSource");
+            _formSharding = Enum.Parse<ShardingStrategy>(e.Value?.ToString() ?? "DontShard");
             if (_formSharding == ShardingStrategy.DontShard)
             {
                 await EnsureClusterNodesLoaded();
@@ -649,7 +659,7 @@
         builder.OpenElement(73, "textarea");
         builder.AddAttribute(74, "class", "form-control");
         builder.AddAttribute(75, "rows", "2");
-        builder.AddAttribute(76, "placeholder", "Optional. e.g. { \"status\": \"active\" }");
+        builder.AddAttribute(76, "placeholder", "Optional. e.g. { \"status\": \"active\" } or { \"createdDateTime\": { \"$gte\": { \"$date\": \"2025-01-01T00:00:00Z\" } } } ");
         builder.AddAttribute(77, "value", _formFilter);
         builder.AddAttribute(78, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => _formFilter = e.Value?.ToString()));
         builder.CloseElement();

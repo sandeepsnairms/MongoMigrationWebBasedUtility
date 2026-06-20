@@ -66,14 +66,13 @@ namespace MongoMigrationWebApp.Components
         private bool _showAddPanel;
         private bool _showSummary;
         private bool _isApplying;
-        private bool _showCancelConfirmation;
 
         // For Add/Edit form state
         private string _formNamespaces = string.Empty;
         private bool? _formOverwrite = false;
         private IndexingStrategy? _formIndexing = IndexingStrategy.SameAsSource;
-        private ShardingStrategy? _formSharding = ShardingStrategy.SameAsSource;
-        private string? _formMoveToShard = null;
+        private ShardingStrategy? _formSharding = ShardingStrategy.DontShard;
+        private string? _formMoveToShard = "Auto";
         private string? _formFilter = null;
         // null = "Unknown / Multiple" (let partitioner detect).
         private DataType? _formDataTypeForId = null;
@@ -87,11 +86,16 @@ namespace MongoMigrationWebApp.Components
         // Pagination
         private PaginationHelper<object> _paginationHelper = null!;
 
+        // Type filter for the list ("all", "existing", "new", "remove")
+        private string _typeFilter = "all";
+
         protected override void OnInitialized()
         {
             _liveUnits = MigrationUnits.ToList();
 
-            // Initialize pagination with merged list (live units + drafts + pending removals)
+            // Initialize pagination with merged list (live units + drafts + pending removals).
+            // Type filter is applied at the source level via GetAllRowItems() so it works even
+            // when the search box is empty (PaginationHelper short-circuits the predicate then).
             _paginationHelper = new PaginationHelper<object>(
                 GetAllRowItems(),
                 pageSize: 25,
@@ -104,12 +108,29 @@ namespace MongoMigrationWebApp.Components
             );
         }
 
+        private bool MatchesTypeFilter(object item)
+        {
+            return _typeFilter switch
+            {
+                "existing" => item is MigrationUnit u && !_toRemoveIds.Contains(u.Id),
+                "new" => item is PendingAddition,
+                "remove" => item is MigrationUnit ur && _toRemoveIds.Contains(ur.Id),
+                _ => true
+            };
+        }
+
+        private void OnTypeFilterChanged(ChangeEventArgs e)
+        {
+            _typeFilter = e.Value?.ToString() ?? "all";
+            RefreshPagination();
+        }
+
         private List<object> GetAllRowItems()
         {
             var items = new List<object>();
             items.AddRange(_liveUnits.Cast<object>());
             items.AddRange(_drafts.Cast<object>());
-            return items;
+            return items.Where(MatchesTypeFilter).ToList();
         }
 
         private string GetNamespace(object item)
@@ -130,13 +151,15 @@ namespace MongoMigrationWebApp.Components
 
         // === LIST VIEW METHODS ===
 
-        private void ToggleAddPanel()
+        private async Task ToggleAddPanel()
         {
             _showAddPanel = !_showAddPanel;
             if (_showAddPanel)
             {
                 ResetAddForm();
                 _expandedDraftId = null; // Close any open edit panel
+                // Default sharding is DontShard, so the Move-to dropdown is visible immediately; preload nodes.
+                await EnsureClusterNodesLoaded();
             }
         }
 
@@ -145,8 +168,8 @@ namespace MongoMigrationWebApp.Components
             _formNamespaces = string.Empty;
             _formOverwrite = false;
             _formIndexing = IndexingStrategy.SameAsSource;
-            _formSharding = ShardingStrategy.SameAsSource;
-            _formMoveToShard = null;
+            _formSharding = ShardingStrategy.DontShard;
+            _formMoveToShard = "Auto";
             _formFilter = null;
             _formDataTypeForId = null;
         }
@@ -406,22 +429,40 @@ namespace MongoMigrationWebApp.Components
         private void ToggleSelectAll(ChangeEventArgs e)
         {
             var isChecked = (bool)(e.Value ?? false);
+            var filtered = _paginationHelper.GetFilteredItems();
+            var filteredLiveIds = filtered.OfType<MigrationUnit>()
+                .Where(u => !_toRemoveIds.Contains(u.Id))
+                .Select(u => u.Id)
+                .ToList();
+            var filteredDraftIds = filtered.OfType<PendingAddition>()
+                .Select(d => d.Id)
+                .ToList();
+
             if (isChecked)
             {
-                _selectedLiveIds = _liveUnits.Where(u => !_toRemoveIds.Contains(u.Id)).Select(u => u.Id).ToHashSet();
-                _selectedDraftIds = _drafts.Select(d => d.Id).ToHashSet();
+                foreach (var id in filteredLiveIds) _selectedLiveIds.Add(id);
+                foreach (var id in filteredDraftIds) _selectedDraftIds.Add(id);
             }
             else
             {
-                _selectedLiveIds.Clear();
-                _selectedDraftIds.Clear();
+                foreach (var id in filteredLiveIds) _selectedLiveIds.Remove(id);
+                foreach (var id in filteredDraftIds) _selectedDraftIds.Remove(id);
             }
         }
 
         private bool IsAllSelected()
         {
-            var liveCount = _liveUnits.Count(u => !_toRemoveIds.Contains(u.Id));
-            return liveCount > 0 && _selectedLiveIds.Count == liveCount && _selectedDraftIds.Count == _drafts.Count;
+            var filtered = _paginationHelper.GetFilteredItems();
+            var liveIds = filtered.OfType<MigrationUnit>()
+                .Where(u => !_toRemoveIds.Contains(u.Id))
+                .Select(u => u.Id)
+                .ToList();
+            var draftIds = filtered.OfType<PendingAddition>()
+                .Select(d => d.Id)
+                .ToList();
+
+            if (liveIds.Count + draftIds.Count == 0) return false;
+            return liveIds.All(_selectedLiveIds.Contains) && draftIds.All(_selectedDraftIds.Contains);
         }
 
         // === BULK ACTIONS ===
@@ -590,41 +631,9 @@ namespace MongoMigrationWebApp.Components
             _showSummary = false;
         }
 
-        private void Cancel()
+        private async Task Cancel()
         {
-            if (GetPendingAddCount() > 0 || GetPendingRemoveCount() > 0)
-            {
-                _showCancelConfirmation = true;
-            }
-            else
-            {
-                ConfirmCancel();
-            }
-        }
-
-        private async void ConfirmCancel()
-        {
-            _showCancelConfirmation = false;
             await OnCancelled.InvokeAsync();
-            await InvokeAsync(StateHasChanged);
-        }
-
-        private void CancelCancelConfirmation()
-        {
-            _showCancelConfirmation = false;
-            StateHasChanged();
-        }
-
-        private async void HandleCancelConfirmationResult(YesNoDialog.YesNoDialogResult result)
-        {
-            if (result.IsConfirmed)
-            {
-                ConfirmCancel();
-            }
-            else
-            {
-                CancelCancelConfirmation();
-            }
         }
 
         // === SUMMARY VIEW ===
@@ -707,7 +716,8 @@ namespace MongoMigrationWebApp.Components
                     effectiveDraft.ApplyToMigrationUnit(unit);
 
                     MigrationJob.MigrationUnitBasics ??= new List<MigrationUnitBasic>();
-                    MigrationJob.MigrationUnitBasics.Add(unit.GetBasic());
+                    var addedBasic = unit.GetBasic();
+                    MigrationJob.MigrationUnitBasics.Add(addedBasic);
 
                     unit.Persist();
                 }

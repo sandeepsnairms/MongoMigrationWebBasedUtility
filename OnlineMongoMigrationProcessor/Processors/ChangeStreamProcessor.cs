@@ -100,6 +100,46 @@ namespace OnlineMongoMigrationProcessor
 
         protected bool StopProcessing = false;
 
+        /// <summary>
+        /// True when the job is no longer active (paused, cancelled, or this processor told to stop).
+        /// All change-stream save sites must short-circuit on this so in-flight cursors and
+        /// post-pause cycles cannot resurrect just-purged per-MU files or overwrite fresh state.
+        /// </summary>
+        protected bool IsJobInactive =>
+            StopProcessing
+            || ExecutionCancelled
+            || MigrationJobContext.ControlledPauseRequested
+            || MigrationJobContext.CurrentlyActiveJob == null;
+
+        /// <summary>
+        /// Gated SaveMigrationUnit for use inside CS processors. Returns false (without writing)
+        /// when the job is inactive, so paused or post-purge background work cannot persist.
+        /// </summary>
+        protected bool TrySaveMigrationUnit(MigrationUnit mu, bool updateParent)
+        {
+            if (mu == null) return false;
+            if (IsJobInactive)
+            {
+                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Suppressing SaveMigrationUnit (job inactive) for {mu.DatabaseName}.{mu.CollectionName}");
+                return false;
+            }
+            return MigrationJobContext.SaveMigrationUnit(mu, updateParent);
+        }
+
+        /// <summary>
+        /// Gated SaveMigrationJob equivalent for CS-processor job-level writes.
+        /// </summary>
+        protected bool TrySaveMigrationJob(MigrationJob job)
+        {
+            if (job == null) return false;
+            if (IsJobInactive)
+            {
+                MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Suppressing SaveMigrationJob (job inactive) for {job.Id}");
+                return false;
+            }
+            return MigrationJobContext.SaveMigrationJob(job);
+        }
+
         private bool _disposed = false;
         protected DateTime _lastGlobalUIUpdate = DateTime.MinValue; // Track last global UI update time for 500ms throttling
 

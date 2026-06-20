@@ -28,6 +28,7 @@ namespace OnlineMongoMigrationProcessor
 
         public string Id { get; set; }
         public string JobId { get; set; }
+
         public string DatabaseName { get; set; }
         public string CollectionName { get; set; }
         public string? TargetDatabaseName { get; set; }
@@ -72,6 +73,12 @@ namespace OnlineMongoMigrationProcessor
         /// Used for in-progress UI display while server-side blocking builds are queued/running.
         /// </summary>
         public int IndexesExpected { get; set; }
+        /// <summary>
+        /// Number of non-unique indexes the server failed to build (or that never appeared on the
+        /// target) after the build phase was unblocked due to a stall. Surfaced in the UI alongside
+        /// the partial IndexPercent so the discrepancy is visible to the user.
+        /// </summary>
+        public int IndexesFailed { get; set; }
 
         public CollectionStatus SourceStatus { get; set; }
         public bool ResetChangeStream { get; set; }
@@ -103,22 +110,17 @@ namespace OnlineMongoMigrationProcessor
                 var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
                 if (index == -1) return false; // not found
 
-                // TEMP: capture the basic's state before removal to confirm what stale fields existed.
-                MigrationJobContext.AddTempLog($"[temp] MigrationUnitBasic.Remove {this.DatabaseName}.{this.CollectionName} id={this.Id} jobId={this.JobId} DumpComplete={this.DumpComplete} RestoreComplete={this.RestoreComplete} DumpPercent={this.DumpPercent:F2} RestorePercent={this.RestorePercent:F2}");
-
                 ParentJob.MigrationUnitBasics.RemoveAt(index);
 
                 var filePath = $"migrationjobs\\{this.JobId}\\{this.Id}.json";
                 MigrationJobContext.Store.DeleteDocument(filePath);
 
                 bool saved = MigrationJobContext.SaveMigrationJob(ParentJob);
-                MigrationJobContext.AddTempLog($"[temp] MigrationUnitBasic.Remove DONE id={this.Id} fileDeleted=true jobSaved={saved} remainingBasics={ParentJob.MigrationUnitBasics.Count}");
                 return saved;
 
             }
-            catch (Exception ex)
+            catch
             {
-                MigrationJobContext.AddTempLog($"[temp] MigrationUnitBasic.Remove FAILED id={this.Id}: {ex.Message}");
                 return false;
             }
             
@@ -372,7 +374,7 @@ namespace OnlineMongoMigrationProcessor
 
         public MigrationUnit(MigrationJob job, string databaseName, string collectionName, List<MigrationChunk> migrationChunks)
         {
-            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);            
+            this.Id = Helper.GenerateMigrationUnitId(databaseName, collectionName);
             this.DatabaseName = databaseName;
             this.CollectionName = collectionName;
             this.TargetDatabaseName = databaseName;
@@ -393,9 +395,14 @@ namespace OnlineMongoMigrationProcessor
             try
             {
                 var index = ParentJob.MigrationUnitBasics.FindIndex(mu => mu.Id == this.Id);
-                if (index == -1) return false; // not found
+                if (index == -1)
+                {
+                    return false;
+                }
 
-                GetBasic(ParentJob.MigrationUnitBasics[index]);
+                var basic = ParentJob.MigrationUnitBasics[index];
+
+                GetBasic(basic);
 
                 return true;
             }
@@ -430,6 +437,7 @@ namespace OnlineMongoMigrationProcessor
             mub.IndexBuildComplete = this.IndexBuildComplete;
             mub.IndexesMigrated = this.IndexesMigrated;
             mub.IndexesExpected = this.IndexesExpected;
+            mub.IndexesFailed = this.IndexesFailed;
             mub.SourceStatus = this.SourceStatus;
             mub.ResetChangeStream = this.ResetChangeStream;
             mub.SkipDataTypeFilterForId = this.SkipDataTypeFilterForId;

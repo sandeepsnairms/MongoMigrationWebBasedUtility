@@ -1472,82 +1472,81 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             try
             {
                 var targetClient = MongoClientFactory.Create(log, targetConnectionString);
-
-                // Check currentOp only to determine whether builds are still in-flight.
                 var adminDb = targetClient.GetDatabase("admin");
-                var currentOpCommand = new BsonDocument { { "currentOp", 1 }, { "$all", true } };
-                var result = await adminDb.RunCommandAsync<BsonDocument>(currentOpCommand);
 
+                // Some servers (e.g. Azure DocumentDB) emit currentOp
+                // responses that contain duplicate field names (most commonly `createIndexes`
+                // on parent worker ops). The driver's default BsonDocument serializer rejects
+                // any such response with "Duplicate element name", so we use a permissive
+                // serializer that walks the BSON tree manually and allows duplicates.
+                var currentOpCommand = new BsonDocument { { "currentOp", 1 }, { "$all", true } };
+                var command = new BsonDocumentCommand<BsonDocument>(currentOpCommand, DuplicateTolerantBsonDocumentSerializer.Instance);
+                var result = await adminDb.RunCommandAsync(command);
+
+                var targetNs = $"{databaseName}.{collectionName}";
                 int activeBuilds = 0;
-                if (result.Contains("inprog"))
+                double partialFromActive = 0;
+                var seenBuildIds = new HashSet<string>(StringComparer.Ordinal);
+
+                if (result.Contains("inprog") && result["inprog"].IsBsonArray)
                 {
-                    var seenBuildIds = new HashSet<string>(StringComparer.Ordinal);
                     foreach (var op in result["inprog"].AsBsonArray)
                     {
+                        if (!op.IsBsonDocument) continue;
                         var opDoc = op.AsBsonDocument;
-                        bool matched = false;
 
-                        if (opDoc.TryGetValue("command", out var command) && command.IsBsonDocument)
+                        var nsValue = opDoc.GetValue("ns", "");
+                        var ns = nsValue.IsString ? nsValue.AsString : nsValue.ToString();
+                        if (ns != targetNs) continue;
+
+                        bool isCreateIndexes = false;
+                        string idxName = "";
+                        if (opDoc.TryGetValue("command", out var cmdVal) && cmdVal.IsBsonDocument)
                         {
-                            try
+                            var cmdDoc = cmdVal.AsBsonDocument;
+                            if (cmdDoc.Contains("createIndexes"))
                             {
-                                var cmdDoc = command.AsBsonDocument;
-                                var nsValue = opDoc.GetValue("ns", "");
-                                var ns = nsValue.IsString ? nsValue.AsString : nsValue.ToString();
-                                var createIndexesElements = cmdDoc.Elements.Where(e => e.Name == "createIndexes").ToList();
-                                if (createIndexesElements.Count > 0)
-                                {
-                                    var cv = createIndexesElements[0].Value;
-                                    var coll = cv.IsString ? cv.AsString : cv.ToString();
-                                    if (ns == $"{databaseName}.{collectionName}" || coll == collectionName)
-                                    {
-                                        matched = true;
-                                        string idxName = "";
-                                        if (cmdDoc.TryGetValue("indexes", out var idxArr) && idxArr.IsBsonArray && idxArr.AsBsonArray.Count > 0 && idxArr.AsBsonArray[0].IsBsonDocument)
-                                            idxName = idxArr.AsBsonArray[0].AsBsonDocument.GetValue("name", "").ToString();
-                                        var key = $"{coll}|{idxName}|{opDoc.GetValue("opid", "").ToString()}";
-                                        if (seenBuildIds.Add(key)) activeBuilds++;
-                                    }
-                                }
+                                isCreateIndexes = true;
+                                if (cmdDoc.TryGetValue("indexes", out var idxArr) && idxArr.IsBsonArray && idxArr.AsBsonArray.Count > 0 && idxArr.AsBsonArray[0].IsBsonDocument)
+                                    idxName = idxArr.AsBsonArray[0].AsBsonDocument.GetValue("name", "").ToString();
                             }
-                            catch { /* skip malformed op */ }
                         }
 
-                        if (!matched && opDoc.TryGetValue("msg", out var msg) && msg.IsString)
+                        if (!isCreateIndexes && opDoc.TryGetValue("msg", out var msgVal) && msgVal.IsString)
                         {
-                            var m = msg.AsString;
-                            if ((m.Contains("Index Build", StringComparison.OrdinalIgnoreCase)
-                                 || m.Contains("index build", StringComparison.OrdinalIgnoreCase)
-                                 || m.Contains("queued", StringComparison.OrdinalIgnoreCase))
-                                && opDoc.GetValue("ns", "").AsString == $"{databaseName}.{collectionName}")
-                            {
-                                var key = $"{collectionName}|msg|{opDoc.GetValue("opid", "").ToString()}";
-                                if (seenBuildIds.Add(key)) activeBuilds++;
-                            }
+                            var m = msgVal.AsString;
+                            if (m.Contains("index build", StringComparison.OrdinalIgnoreCase) || m.Contains("queued", StringComparison.OrdinalIgnoreCase))
+                                isCreateIndexes = true;
+                        }
+
+                        if (!isCreateIndexes) continue;
+
+                        var opid = opDoc.GetValue("opid", "").ToString();
+                        var key = string.IsNullOrEmpty(opid) ? $"queued|{idxName}" : $"{idxName}|{opid}";
+                        if (seenBuildIds.Add(key))
+                        {
+                            activeBuilds++;
+                            partialFromActive += TryGetOpBuildFraction(opDoc);
                         }
                     }
                 }
 
                 if (activeBuilds == 0)
                 {
-                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected={expectedTotalBuilds}, pendingRaw=0, pending=0, completed={expectedTotalBuilds}, progress=100 (no in-flight ops)", LogType.Info);
                     return (0, 100); // No builds in-flight — treat as complete (caller may apply warm-up guard)
                 }
 
-                // Simple deterministic math requested by user:
-                // completed = expected - pending(currentOp)
-                // progress  = completed / expected
+                // completed (whole) = expected - pending(currentOp)
+                // plus partial credit from active op's progress.builds[].terms_progress (each op contributes 0..1)
                 double progress = 0;
                 if (expectedTotalBuilds > 0)
                 {
                     var effectivePending = Math.Min(activeBuilds, expectedTotalBuilds);
                     var completedCount = Math.Max(0, expectedTotalBuilds - effectivePending);
-                    progress = Math.Min(99, (completedCount * 100.0) / expectedTotalBuilds);
-                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected={expectedTotalBuilds}, pendingRaw={activeBuilds}, pending={effectivePending}, completed={completedCount}, progress={progress:F1}", LogType.Info);
-                }
-                else
-                {
-                    log.WriteLine($"[temp] IndexProgress {databaseName}.{collectionName}: expected=0, pendingRaw={activeBuilds}, pending={activeBuilds}, completed=0, progress=0", LogType.Info);
+                    // Cap partial credit to the number of pending builds so we never exceed expected.
+                    var partialCapped = Math.Min(effectivePending, partialFromActive);
+                    var doneEquivalent = completedCount + partialCapped;
+                    progress = Math.Min(99, (doneEquivalent * 100.0) / expectedTotalBuilds);
                 }
 
                 return (activeBuilds, progress);
@@ -1555,8 +1554,54 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             catch (Exception ex)
             {
                 log.WriteLine($"Error checking index build progress for {databaseName}.{collectionName}: {ex.Message}", LogType.Warning);
-                return (0, 100); // Assume complete on error to avoid blocking
+                return (-1, 0); // Signal error: callers must not treat this as completion.
             }
+        }
+
+        /// <summary>
+        /// Extracts a 0..1 progress fraction for a single index-build op from currentOp output.
+        /// Reads progress.builds[0].terms_progress when present, otherwise falls back to
+        /// terms_done/terms_total. Returns 0 for queued ops or when no usable field is found.
+        /// </summary>
+        private static double TryGetOpBuildFraction(BsonDocument opDoc)
+        {
+            try
+            {
+                if (!opDoc.TryGetValue("progress", out var progVal) || !progVal.IsBsonDocument)
+                    return 0;
+                var progDoc = progVal.AsBsonDocument;
+                if (!progDoc.TryGetValue("builds", out var buildsVal) || !buildsVal.IsBsonArray)
+                    return 0;
+                var buildsArr = buildsVal.AsBsonArray;
+                if (buildsArr.Count == 0 || !buildsArr[0].IsBsonDocument)
+                    return 0;
+                var b = buildsArr[0].AsBsonDocument;
+
+                if (b.TryGetValue("terms_progress", out var tp))
+                {
+                    try
+                    {
+                        var v = tp.ToDouble();
+                        if (v > 0)
+                            return Math.Min(1.0, v / 100.0);
+                    }
+                    catch { }
+                }
+
+                if (b.TryGetValue("terms_done", out var td) && b.TryGetValue("terms_total", out var tt))
+                {
+                    try
+                    {
+                        var done = td.ToDouble();
+                        var total = tt.ToDouble();
+                        if (total > 0)
+                            return Math.Min(1.0, done / total);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return 0;
         }
 
         private static FilterDefinition<BsonDocument> BuildFilterLt(string fieldName, BsonValue? value, DataType dataType)

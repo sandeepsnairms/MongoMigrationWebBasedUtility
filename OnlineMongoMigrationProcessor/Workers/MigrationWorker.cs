@@ -12,6 +12,7 @@ using OnlineMongoMigrationProcessor.Processors;
 using OnlineMongoMigrationProcessor.Workers;
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
@@ -58,6 +59,17 @@ namespace OnlineMongoMigrationProcessor.Workers
         
         // Track resume token setup tasks per collection to enable per-collection waiting
         private Dictionary<string, Task> _resumeTokenTasksByCollection = new Dictionary<string, Task>();
+
+        // Pending post-copy index-build tasks per migration unit. Lets blocking index builds run
+        // in the background so the main migration loop is not held up while waiting for one
+        // collection's indexes to finish. Entry is removed once the task completes.
+        private readonly ConcurrentDictionary<string, Task> _pendingIndexBuildTasksByUnit = new ConcurrentDictionary<string, Task>();
+
+        // Pending moveCollection requests captured during prep. Drained per-unit just before data
+        // copy starts so we (a) create all collections first and (b) leave a gap between create
+        // and moveCollection (the server returns a transient internal error if moveCollection is
+        // called immediately after collection creation).
+        private readonly ConcurrentDictionary<string, (string Shard, DateTime EnqueuedAtUtc)> _pendingMovesByUnitId = new ConcurrentDictionary<string, (string, DateTime)>();
         
         public MigrationWorker()
         {            
@@ -730,10 +742,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                         return TaskResult.Canceled;
                     }
 
-                    var result = await ProcessMigrationUnitAsync(mu, prepContext, _cts);
+                    var result = await PrepareUnitForCopyAsync(mu, prepContext, _cts);
                     if (result != TaskResult.Success)
                     {
-                        _log.WriteLine($"ProcessMigrationUnitAsync returned {result} for {mu.DatabaseName}.{mu.CollectionName}", LogType.Error);
+                        _log.WriteLine($"PrepareUnitForCopyAsync returned {result} for {mu.DatabaseName}.{mu.CollectionName}", LogType.Error);
                         return result;
                     }
                     
@@ -769,10 +781,85 @@ namespace OnlineMongoMigrationProcessor.Workers
             return (true, useServerLevel);
         }
 
-        private async Task<TaskResult> ProcessMigrationUnitAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+        /// <summary>
+        /// Shared fast-path for migration units whose offline copy is already complete.
+        /// Ensures any pending blocking index builds finish (or non-blocking monitoring restarts)
+        /// before the collection is added to the change-stream queue. Returns true if the caller
+        /// can short-circuit and skip the normal validation/partition path.
+        /// </summary>
+        private Task<bool> TryQueueCompletedUnitForChangeStreamAsync(MigrationUnit mu, string logCallerTag)
         {
-            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitAsync: mu={mu.DatabaseName}.{mu.CollectionName}");
-            _log.WriteLine($"Starting ProcessMigrationUnitAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+            bool offlineCompleted = (mu.DumpComplete && mu.RestoreComplete)
+                || (mu.MigrationChunks != null
+                    && mu.MigrationChunks.Count > 0
+                    && mu.MigrationChunks.TrueForAll(c => c.IsDownloaded == true && c.IsUploaded == true));
+
+            if (!offlineCompleted)
+                return Task.FromResult(false);
+
+            if (_migrationProcessor == null || !Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+                return Task.FromResult(true);
+
+            bool indexesPending = !mu.IndexBuildComplete
+                && mu.IndexingStrategy.HasValue
+                && mu.IndexingStrategy.Value != IndexingStrategy.DontIndex;
+
+            if (indexesPending)
+            {
+                // Covers both first-run and resume (e.g. paused mid-build): re-enter the index-build
+                // flow so monitoring restarts. The build (and the eventual change-stream queue
+                // submission for this collection) runs in the background so it cannot block the
+                // outer migration loop from advancing to other collections. Change stream for
+                // *this* collection still waits until its own builds finish.
+                bool isBlocking = GetEffectiveBlockingIndexes(mu);
+                _log.WriteLine($"Index builds not complete for {mu.DatabaseName}.{mu.CollectionName} (blocking={isBlocking}, IndexesMigrated={mu.IndexesMigrated}/{mu.IndexesExpected}) - {(isBlocking ? "deferring change stream" : "resuming monitor")} [{logCallerTag}]", LogType.Debug);
+                StartBackgroundIndexBuildAndQueue(mu);
+            }
+            else
+            {
+                _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
+            }
+
+            return Task.FromResult(true);
+        }
+
+        /// <summary>
+        /// Kicks off the post-copy index build (and change-stream enqueue on success) for a single
+        /// migration unit on a background task. Idempotent per unit: while a task is in flight, a
+        /// subsequent caller for the same unit will no-op. This decouples one collection's blocking
+        /// index build from the main migration loop so other collections can keep progressing.
+        /// </summary>
+        private void StartBackgroundIndexBuildAndQueue(MigrationUnit mu)
+        {
+            if (_migrationProcessor == null)
+                return;
+
+            _pendingIndexBuildTasksByUnit.GetOrAdd(mu.Id, _ => Task.Run(async () =>
+            {
+                try
+                {
+                    var processor = _migrationProcessor;
+                    if (processor == null)
+                        return;
+                    bool canProceed = await processor.BuildNonUniqueIndexesAfterCopyAsync(mu);
+                    if (canProceed)
+                        processor.AddCollectionToChangeStreamQueue(mu);
+                }
+                catch (Exception ex)
+                {
+                    _log.WriteLine($"Background index build for {mu.DatabaseName}.{mu.CollectionName} failed: {ex.Message}", LogType.Error);
+                }
+                finally
+                {
+                    _pendingIndexBuildTasksByUnit.TryRemove(mu.Id, out Task? _);
+                }
+            }));
+        }
+
+        private async Task<TaskResult> PrepareUnitForCopyAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
+        {
+            MigrationJobContext.AddVerboseLog($"PrepareUnitForCopyAsync: mu={mu.DatabaseName}.{mu.CollectionName}");
+            _log.WriteLine($"Starting PrepareUnitForCopyAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
 
             if (mu.SourceStatus == CollectionStatus.IsView)
             {
@@ -782,37 +869,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             // Fast-path for collections that are already fully processed.
             // Avoid expensive source metadata checks for large jobs and queue directly for change stream monitoring.
-            if (mu.DumpComplete && mu.RestoreComplete)
+            if (await TryQueueCompletedUnitForChangeStreamAsync(mu, "prepare-partition"))
             {
-                _log.WriteLine($"Bypassing collection validation for completed unit {mu.DatabaseName}.{mu.CollectionName} (DumpComplete=true, RestoreComplete=true)", LogType.Debug);
-
-                if (_migrationProcessor != null && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
-                {
-                    bool isBlocking = GetEffectiveBlockingIndexes(mu);
-                    bool indexesPending = !mu.IndexBuildComplete
-                        && mu.IndexingStrategy.HasValue
-                        && mu.IndexingStrategy.Value != IndexingStrategy.DontIndex;
-
-                    if (indexesPending)
-                    {
-                        // Covers both first-run and resume (e.g. paused mid-build): always re-enter
-                        // the index-build flow so monitoring restarts and IndexBuildComplete is set
-                        // only after the target actually finishes the builds.
-                        _log.WriteLine($"Index builds not complete for {mu.DatabaseName}.{mu.CollectionName} (blocking={isBlocking}, IndexesMigrated={mu.IndexesMigrated}/{mu.IndexesExpected}) - {(isBlocking ? "deferring change stream" : "resuming monitor")}", LogType.Debug);
-                        bool canProceed = await _migrationProcessor.BuildNonUniqueIndexesAfterCopyAsync(mu);
-                        if (canProceed)
-                        {
-                            _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
-                            _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue after index build/resume", LogType.Debug);
-                        }
-                    }
-                    else
-                    {
-                        _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
-                        _log.WriteLine($"Added {mu.DatabaseName}.{mu.CollectionName} to change stream queue via fast-path", LogType.Debug);
-                    }
-                }
-
+                _log.WriteLine($"Bypassing collection validation for completed unit {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                 return TaskResult.Success;
             }
 
@@ -869,7 +928,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
 
             MigrationJobContext.SaveMigrationUnit(mu, false);
-            _log.WriteLine($"Completed ProcessMigrationUnitAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
+            _log.WriteLine($"Completed PrepareUnitForCopyAsync for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
             return TaskResult.Success;
         }
 
@@ -1087,12 +1146,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var moveToShard = GetEffectiveMoveToShard(mu);
                 if (!string.IsNullOrWhiteSpace(moveToShard))
                 {
-                    _log.WriteLine($"Moving collection {namespaceForLog} to shard: {moveToShard}");
-                    var moveResult = await MongoHelper.MoveCollectionAsync(_log, targetClient, targetDatabaseName, targetCollectionName, moveToShard);
-                    if (!moveResult)
-                    {
-                        _log.WriteLine($"Failed to move collection {namespaceForLog} to shard {moveToShard}, continuing", LogType.Warning);
-                    }
+                    // Defer the moveCollection call. Calling it immediately after collection
+                    // creation can fail with a transient internal error on the server, so we
+                    // queue it here and apply it (with a min gap and retries) right before the
+                    // unit's data copy starts.
+                    _pendingMovesByUnitId[mu.Id] = (moveToShard, DateTime.UtcNow);
+                    _log.WriteLine($"Queued moveCollection for {namespaceForLog} -> {moveToShard} (will run before data copy starts)", LogType.Debug);
                 }
             }
 
@@ -1100,6 +1159,56 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return TaskResult.Canceled;
 
             return TaskResult.Success;
+        }
+
+        /// <summary>
+        /// Applies any pending moveCollection request enqueued by <see cref="ApplyShardingStrategyAsync"/>
+        /// for the given unit. Enforces a minimum gap since enqueue and retries on transient failures so the
+        /// move is given time to succeed before data copy begins.
+        /// </summary>
+        private async Task EnsurePendingMoveAppliedAsync(MigrationUnit mu, CancellationToken ct)
+        {
+            if (!_pendingMovesByUnitId.TryGetValue(mu.Id, out var pending))
+                return;
+
+            const int minGapMs = 10000;
+            int[] retryDelaysMs = { 0, 5000, 15000, 30000 };
+
+            var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id];
+            var targetClient = MongoClientFactory.Create(_log, targetConnStr);
+            var targetDatabaseName = mu.GetEffectiveTargetDatabaseName();
+            var targetCollectionName = mu.GetEffectiveTargetCollectionName();
+            var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, targetDatabaseName, targetCollectionName);
+
+            var elapsedMs = (int)Math.Max(0, (DateTime.UtcNow - pending.EnqueuedAtUtc).TotalMilliseconds);
+            if (elapsedMs < minGapMs)
+            {
+                var waitMs = minGapMs - elapsedMs;
+                _log.WriteLine($"Waiting {waitMs} ms before moving {namespaceForLog} -> {pending.Shard} (post-create cool-down)", LogType.Debug);
+                try { await Task.Delay(waitMs, ct); } catch (OperationCanceledException) { return; }
+            }
+
+            for (int attempt = 0; attempt < retryDelaysMs.Length; attempt++)
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+
+                if (retryDelaysMs[attempt] > 0)
+                {
+                    _log.WriteLine($"Retrying moveCollection for {namespaceForLog} -> {pending.Shard} in {retryDelaysMs[attempt]} ms (attempt {attempt + 1}/{retryDelaysMs.Length})", LogType.Debug);
+                    try { await Task.Delay(retryDelaysMs[attempt], ct); } catch (OperationCanceledException) { return; }
+                }
+
+                var moveResult = await MongoHelper.MoveCollectionAsync(_log, targetClient, targetDatabaseName, targetCollectionName, pending.Shard);
+                if (moveResult)
+                {
+                    _pendingMovesByUnitId.TryRemove(mu.Id, out _);
+                    return;
+                }
+            }
+
+            _log.WriteLine($"moveCollection for {namespaceForLog} -> {pending.Shard} did not succeed after {retryDelaysMs.Length} attempts; continuing without move", LogType.Warning);
+            _pendingMovesByUnitId.TryRemove(mu.Id, out _);
         }
 
         /// <summary>
@@ -1224,10 +1333,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (MigrationJobContext.CurrentlyActiveJob == null)
                 return TaskResult.FailedAfterRetries;
 
-            // RU jobs keep the original sequence: all partitions first, then copy.
+            // RU jobs use the sequential pipeline: all partitions first, then copy (no background partitioning).
             if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
             {
-                return await MigrateJobCollectionsOriginalAsync(syncBack, ctsToken);
+                return await MigrateRUOptimizedJobCollectionsAsync(syncBack, ctsToken);
             }
 
             return await MigrateJobCollectionsWithAsyncPartitioningAsync(syncBack, ctsToken);
@@ -1345,9 +1454,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (prepResult != TaskResult.Success)
                     return prepResult;
 
-                MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
+                MigrationJobContext.AddVerboseLog($"Before MigrateUnitEndToEndAsync for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
 
-                var result = await ProcessMigrationUnitAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
+                var result = await MigrateUnitEndToEndAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
 
@@ -1364,7 +1473,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             return await WaitForMigrationProcessorCompletionAsync(ctsToken);
         }
 
-        private async Task<TaskResult> MigrateJobCollectionsOriginalAsync(bool syncBack, CancellationToken ctsToken)
+        private async Task<TaskResult> MigrateRUOptimizedJobCollectionsAsync(bool syncBack, CancellationToken ctsToken)
         {
             List<Task> resumeTokenTasks = new List<Task>();
             _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob!.MigrationUnitBasics.Count} migration units", LogType.Debug);
@@ -1377,10 +1486,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 if (HandleControlPause())
                     return TaskResult.Canceled;
 
-                MigrationJobContext.AddVerboseLog($"Before ProcessMigrationUnitAsync for {mub.DatabaseName}.{mub.CollectionName}");
+                MigrationJobContext.AddVerboseLog($"Before MigrateUnitEndToEndAsync for {mub.DatabaseName}.{mub.CollectionName}");
 
                 var migrationUnit = MigrationJobContext.GetMigrationUnit(mub.Id);
-                var result = await ProcessMigrationUnitAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
+                var result = await MigrateUnitEndToEndAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
 
@@ -1397,13 +1506,13 @@ namespace OnlineMongoMigrationProcessor.Workers
             return await WaitForMigrationProcessorCompletionAsync(ctsToken);
         }
 
-        private async Task<TaskResult> ProcessMigrationUnitAsync(
+        private async Task<TaskResult> MigrateUnitEndToEndAsync(
             MigrationUnit migrationUnit,
             bool syncBack,
             CancellationToken ctsToken,
             List<Task> resumeTokenTasks)
         {
-            MigrationJobContext.AddVerboseLog($"ProcessMigrationUnitAsync: mu.Id={migrationUnit.Id}");
+            MigrationJobContext.AddVerboseLog($"MigrateUnitEndToEndAsync: mu.Id={migrationUnit.Id}");
             migrationUnit.ParentJob = MigrationJobContext.CurrentlyActiveJob;
 
             if (!Helper.IsMigrationUnitValid(migrationUnit))
@@ -1414,16 +1523,8 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             // Fast-path: if offline migration already completed for this unit,
             // skip source/target existence validation and queue directly for online processing.
-            bool offlineCompleted = (migrationUnit.DumpComplete && migrationUnit.RestoreComplete)
-                || (migrationUnit.MigrationChunks != null
-                    && migrationUnit.MigrationChunks.Count > 0
-                    && migrationUnit.MigrationChunks.TrueForAll(c => c.IsDownloaded == true && c.IsUploaded == true));
-
-            if (offlineCompleted && Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
-            {
-                _migrationProcessor?.AddCollectionToChangeStreamQueue(migrationUnit);
+            if (await TryQueueCompletedUnitForChangeStreamAsync(migrationUnit, "migrate-end-to-end"))
                 return TaskResult.Success;
-            }
 
             var (exists, isCollection) = await ValidateSourceCollectionAsync(migrationUnit);
 
@@ -1535,6 +1636,9 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             if (HandleControlPause())
                 return TaskResult.Canceled;
+
+            // Apply any deferred moveCollection now (with delay + retry) so data copy starts on the correct shard.
+            await EnsurePendingMoveAppliedAsync(migrationUnit, ctsToken);
 
             MigrationJobContext.AddVerboseLog($"Before StartMigrationProcessorAsync {migrationUnit.Id}");
             return await StartMigrationProcessorAsync(migrationUnit);
@@ -1761,40 +1865,35 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                     if (Helper.IsMigrationUnitValid(migrationUnit)|| IsAggrssive)
                     {
+                        // Fast-path for completed offline migration units: skip expensive source existence checks
+                        // and queue for change stream (gated on pending blocking index builds).
+                        if (await TryQueueCompletedUnitForChangeStreamAsync(migrationUnit, "start-online"))
+                        {
+                            if (clearCache)
+                            {
+                                try { MigrationJobContext.MigrationUnitsCache.RemoveMigrationUnit(migrationUnit.Id); }
+                                catch (Exception ex) { _log.WriteLine($"Error clearing cache for {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}: {ex}", LogType.Error); }
+                            }
+                            continue;
+                        }
+
                         bool valid;
-
-                        // Fast-path for completed offline migration units: skip expensive source existence checks.
-                        // This significantly reduces startup time for jobs with many collections.
-                        if (migrationUnit.DumpComplete && migrationUnit.RestoreComplete)
-                        {
-                            valid = true;
-                        }
-                        else if (MigrationJobContext.CurrentlyActiveJob.JobType== JobType.RUOptimizedCopy)
-                        {
+                        if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.RUOptimizedCopy)
                             valid = await MongoHelper.CheckRUCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
-                        }
                         else
-                        {
                             valid = await MongoHelper.CheckCollectionExistsAsync(_sourceClient!, migrationUnit.DatabaseName, migrationUnit.CollectionName);
-                        }
 
+                        // Immediate mode requires the unit to have completed offline copy. The fast-path above
+                        // already handled completed units, so anything reaching here is not yet ready.
                         if (valid && MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Immediate)
                         {
-                            if(! (migrationUnit.DumpComplete && migrationUnit.RestoreComplete))
-                            {
-                                _log.WriteLine($"Migration unit {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not ready for immediate change stream", LogType.Debug);
-                                valid = false;
-                            }
-                            
-                        }                        
+                            _log.WriteLine($"Migration unit {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} is not ready for immediate change stream", LogType.Debug);
+                            valid = false;
+                        }
 
-                        if (valid)
+                        if (valid && processor.AddCollectionToChangeStreamQueue(migrationUnit))
                         {
-                            if (processor.AddCollectionToChangeStreamQueue(migrationUnit))
-                            {
-                                _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Debug);
-                            }
-                            
+                            _log.WriteLine($"Added {migrationUnit.DatabaseName}.{migrationUnit.CollectionName} to change stream queue", LogType.Debug);
                         }
                     }
 

@@ -669,23 +669,6 @@ namespace OnlineMongoMigrationProcessor
                 .Any(mub => mub.Id == Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName)))
                 .ToList();
 
-            // TEMP: report which collections look new vs existing so we can confirm a re-added
-            // collection is treated as new and gets ResetRuntimeProgressState applied.
-            try
-            {
-                MigrationJobContext.AddTempLog($"[temp] AddMigrationUnits requested={unitsToAdd.Count} alreadyInJob={unitsToAdd.Count - newUnits.Count} new={newUnits.Count}");
-                foreach (var mu in unitsToAdd)
-                {
-                    var id = Helper.GenerateMigrationUnitId(mu.DatabaseName, mu.CollectionName);
-                    bool isNew = newUnits.Any(n => n.DatabaseName == mu.DatabaseName && n.CollectionName == mu.CollectionName);
-                    int chunks = mu.MigrationChunks?.Count ?? 0;
-                    int downloaded = mu.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? 0;
-                    int uploaded = mu.MigrationChunks?.Count(c => c.IsUploaded == true) ?? 0;
-                    MigrationJobContext.AddTempLog($"[temp] AddMigrationUnits item {mu.DatabaseName}.{mu.CollectionName} id={id} isNew={isNew} DumpComplete={mu.DumpComplete} RestoreComplete={mu.RestoreComplete} DumpPercent={mu.DumpPercent:F2} RestorePercent={mu.RestorePercent:F2} chunks={chunks} downloaded={downloaded} uploaded={uploaded}");
-                }
-            }
-            catch { }
-
             var candidateUnits = job.MigrationUnitBasics
                 .Select(mu =>
                 {
@@ -712,17 +695,6 @@ namespace OnlineMongoMigrationProcessor
                     ResetRuntimeProgressState(mu);
                     MigrationJobContext.SaveMigrationUnit(mu, false);
                     AddMigrationUnit(mu,job);
-
-                    // TEMP: verify what landed in persistence after reset+save.
-                    try
-                    {
-                        var persisted = MigrationJobContext.GetMigrationUnitFromStorage(job.Id, mu.Id);
-                        int pChunks = persisted?.MigrationChunks?.Count ?? -1;
-                        int pDownloaded = persisted?.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? -1;
-                        int pUploaded = persisted?.MigrationChunks?.Count(c => c.IsUploaded == true) ?? -1;
-                        MigrationJobContext.AddTempLog($"[temp] AddMigrationUnits PERSISTED {mu.DatabaseName}.{mu.CollectionName} id={mu.Id} DumpComplete={persisted?.DumpComplete} RestoreComplete={persisted?.RestoreComplete} DumpPercent={persisted?.DumpPercent:F2} RestorePercent={persisted?.RestorePercent:F2} chunks={pChunks} downloaded={pDownloaded} uploaded={pUploaded}");
-                    }
-                    catch { }
                 }
                 MigrationJobContext.SaveMigrationJob(job);
             }
@@ -731,16 +703,6 @@ namespace OnlineMongoMigrationProcessor
 
         private static void ResetRuntimeProgressState(MigrationUnit mu)
         {
-            // TEMP: log what we are about to wipe so any leftover state is visible.
-            try
-            {
-                int chunks = mu.MigrationChunks?.Count ?? 0;
-                int downloaded = mu.MigrationChunks?.Count(c => c.IsDownloaded == true) ?? 0;
-                int uploaded = mu.MigrationChunks?.Count(c => c.IsUploaded == true) ?? 0;
-                MigrationJobContext.AddTempLog($"[temp] ResetRuntimeProgressState BEFORE {mu.DatabaseName}.{mu.CollectionName} id={mu.Id} DumpComplete={mu.DumpComplete} RestoreComplete={mu.RestoreComplete} DumpPercent={mu.DumpPercent:F2} RestorePercent={mu.RestorePercent:F2} chunks={chunks} downloaded={downloaded} uploaded={uploaded}");
-            }
-            catch { }
-
             // A newly-added collection must start with clean runtime status.
             // This avoids stale state when a collection is removed and re-added
             // with the same generated migration-unit ID.
