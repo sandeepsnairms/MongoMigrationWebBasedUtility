@@ -400,7 +400,11 @@ namespace OnlineMongoMigrationProcessor
                     {
                         MaxTime = TimeSpan.FromSeconds(3600 * 10)
                     };
+                    log.ShowInMonitor($"Running $sample on {collection.CollectionNamespace} (size={sampleCount}); this can take several minutes for large collections...");
+                    var sampleStartedAt = DateTime.UtcNow;
                     var sampledData = collection.Aggregate<BsonDocument>(pipeline, options).ToList();
+                    var sampleElapsed = DateTime.UtcNow - sampleStartedAt;
+                    log.ShowInMonitor($"$sample on {collection.CollectionNamespace} returned {sampledData.Count} document(s) in {sampleElapsed.TotalSeconds:F1}s; computing chunk boundaries...");
                     partitionValues = sampledData
                         .Select(doc => doc.GetValue("_id", BsonNull.Value))
                         .Where(value => value != BsonNull.Value)
@@ -415,10 +419,12 @@ namespace OnlineMongoMigrationProcessor
                     if (skipDataTypeFilter)
                     {
                         log.WriteLine($"{collection.CollectionNamespace} encountered error in attempt {i} while sampling data (DataType filtering bypassed): {ex}");
+                        log.ShowInMonitor($"$sample attempt {i + 1}/10 failed for {collection.CollectionNamespace}: {ex.Message}", LogType.Warning);
                     }
                     else
                     {
                         log.WriteLine($"{collection.CollectionNamespace} encountered error in attempt {i} while sampling data where _id is {dataType}: {ex}");
+                        log.ShowInMonitor($"$sample attempt {i + 1}/10 failed for {collection.CollectionNamespace} (_id={dataType}): {ex.Message}", LogType.Warning);
                     }
                 }
             }
@@ -463,10 +469,12 @@ namespace OnlineMongoMigrationProcessor
             if (skipDataTypeFilter)
             {
                 log.WriteLine($"{collection.CollectionNamespace} total chunks: {chunkBoundaries.Boundaries.Count} (DataType filtering bypassed)");
+                log.ShowInMonitor($"Computed {chunkBoundaries.Boundaries.Count} chunk boundaries for {collection.CollectionNamespace}.");
             }
             else
             {
                 log.WriteLine($"{collection.CollectionNamespace} total chunks: {chunkBoundaries.Boundaries.Count} where _id is {dataType}");
+                log.ShowInMonitor($"Computed {chunkBoundaries.Boundaries.Count} chunk boundaries for {collection.CollectionNamespace} (_id={dataType}).");
             }
             return chunkBoundaries;
         }

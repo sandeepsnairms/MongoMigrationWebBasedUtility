@@ -238,7 +238,9 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return TaskResult.Success;
             }
 
+            _log.ShowInMonitor($"Counting documents for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}]...");
             segment.QueryDocCount = MongoHelper.GetDocumentCount(_sourceCollection, combinedFilter,null);
+            _log.ShowInMonitor($"Counted {segment.QueryDocCount} document(s) for segment {mu.DatabaseName}.{mu.CollectionName}[{migrationChunkIndex}.{segmentId}].");
             // Don't save immediately - reduces I/O overhead
 
             try
