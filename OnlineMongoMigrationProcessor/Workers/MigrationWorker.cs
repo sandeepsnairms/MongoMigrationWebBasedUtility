@@ -830,7 +830,7 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// subsequent caller for the same unit will no-op. This decouples one collection's blocking
         /// index build from the main migration loop so other collections can keep progressing.
         /// </summary>
-        private void StartBackgroundIndexBuildAndQueue(MigrationUnit mu)
+        internal void StartBackgroundIndexBuildAndQueue(MigrationUnit mu)
         {
             if (_migrationProcessor == null)
                 return;

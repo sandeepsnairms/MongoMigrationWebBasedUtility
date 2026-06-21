@@ -414,6 +414,8 @@ namespace OnlineMongoMigrationProcessor.Processors
                 return true;
             }
 
+            _log.ShowInMonitor($"Submitted {count} non-unique index build(s) for {namespaceForLog}; waiting for builds to complete on target.");
+
             if (isBlocking)
             {
                 if (_cts.Token.IsCancellationRequested)
@@ -486,6 +488,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 mu.IndexBuildComplete = true;
                                 MigrationJobContext.SaveMigrationUnit(mu, true);
                                 _log.WriteLine($"Blocking index builds completed for {namespaceForLog}");
+                                _log.ShowInMonitor($"Index builds completed for {namespaceForLog} ({builtOnTarget}/{mu.IndexesExpected}).");
                                 return true;
                             }
 
@@ -516,6 +519,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 {
                                     var failedCount = Math.Max(0, mu.IndexesExpected - builtOnTarget);
                                     _log.WriteLine($"Index builds for {namespaceForLog} stalled at {builtOnTarget}/{mu.IndexesExpected} (no active builds, no progress for {maxStallChecks} checks). Unblocking change stream; any missing indexes must be created manually on the target.", LogType.Warning);
+                                    _log.ShowInMonitor($"Index builds stalled for {namespaceForLog} at {builtOnTarget}/{mu.IndexesExpected}. {failedCount} index(es) may need to be created manually on the target.", LogType.Warning);
                                     mu.IndexesFailed = failedCount;
                                     mu.IndexBuildComplete = true;
                                     MigrationJobContext.SaveMigrationUnit(mu, true);
@@ -530,13 +534,15 @@ namespace OnlineMongoMigrationProcessor.Processors
                         stallChecks = 0;
                     }
 
-                    if (attempt % 12 == 0) // Log every ~60 seconds
-                        _log.WriteLine($"Index build in progress for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+                    // Log every poll (~1 minute)
+                    _log.WriteLine($"Index build in progress for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+                    _log.ShowInMonitor($"Index build in progress for {namespaceForLog}: {activeBuilds} active build(s), {progress:F1}% complete.");
 
                     await Task.Delay(pollIntervalMs, _cts.Token);
                 }
 
                 _log.WriteLine($"Index build monitoring timed out for {namespaceForLog}", LogType.Warning);
+                _log.ShowInMonitor($"Index build monitoring timed out for {namespaceForLog}; check target manually.", LogType.Warning);
                 return false;
             }
             catch (OperationCanceledException)
@@ -604,6 +610,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                             mu.IndexBuildComplete = true;
                             MigrationJobContext.SaveMigrationUnit(mu, true);
                             _log.WriteLine($"Non-blocking index builds completed for {namespaceForLog}");
+                            _log.ShowInMonitor($"Index builds completed for {namespaceForLog} ({builtOnTarget}/{mu.IndexesExpected}).");
                             return;
                         }
 
@@ -630,6 +637,7 @@ namespace OnlineMongoMigrationProcessor.Processors
                             {
                                 var failedCount = Math.Max(0, mu.IndexesExpected - builtOnTarget);
                                 _log.WriteLine($"Non-blocking index builds for {namespaceForLog} stalled at {builtOnTarget}/{mu.IndexesExpected} (no active builds, no progress for {maxStallChecks} checks). Ending monitor; any missing indexes must be created manually on the target.", LogType.Warning);
+                                _log.ShowInMonitor($"Index builds stalled for {namespaceForLog} at {builtOnTarget}/{mu.IndexesExpected}. {failedCount} index(es) may need to be created manually on the target.", LogType.Warning);
                                 mu.IndexesFailed = failedCount;
                                 mu.IndexBuildComplete = true;
                                 MigrationJobContext.SaveMigrationUnit(mu, true);
@@ -638,13 +646,15 @@ namespace OnlineMongoMigrationProcessor.Processors
                         }
                     }
 
-                    if (attempt % 6 == 0) // Log every ~60 seconds
-                        _log.WriteLine($"Index build in progress (non-blocking) for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+                    // Log every poll (~1 minute)
+                    _log.WriteLine($"Index build in progress (non-blocking) for {namespaceForLog}: {activeBuilds} active, {progress:F1}% complete", LogType.Debug);
+                    _log.ShowInMonitor($"Index build in progress for {namespaceForLog}: {activeBuilds} active build(s), {progress:F1}% complete.");
 
                     await Task.Delay(pollIntervalMs, _cts.Token);
                 }
 
                 _log.WriteLine($"Non-blocking index build monitoring timed out for {namespaceForLog}", LogType.Warning);
+                _log.ShowInMonitor($"Index build monitoring timed out for {namespaceForLog}; check target manually.", LogType.Warning);
             }
             catch (OperationCanceledException)
             {

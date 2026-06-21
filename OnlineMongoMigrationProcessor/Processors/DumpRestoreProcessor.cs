@@ -59,12 +59,11 @@ namespace OnlineMongoMigrationProcessor
                     return;
                 }
 
-                // Build non-unique indexes after data copy completes
-                bool canProceedToChangeStream = await BuildNonUniqueIndexesAfterCopyAsync(mu);
-
-                // Start change stream processing (gated by blocking index completion)
-                if (canProceedToChangeStream)
-                    AddCollectionToChangeStreamQueue(mu);
+                // Hand off non-unique index build (and change-stream enqueue on success) to a
+                // background task so the post-copy callback returns immediately and the coordinator
+                // can pick up the next completed unit. StopOfflineOrInvokeChangeStreams already
+                // defers final completion while pending background index builds are in flight.
+                _migrationWorker?.StartBackgroundIndexBuildAndQueue(mu);
 
                 PercentageUpdater.RemovePercentageTracker(mu.Id, false, _log);
                 PercentageUpdater.RemovePercentageTracker(mu.Id, true, _log);
