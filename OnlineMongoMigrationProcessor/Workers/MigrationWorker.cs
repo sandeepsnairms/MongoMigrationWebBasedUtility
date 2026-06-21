@@ -797,25 +797,26 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (!offlineCompleted)
                 return Task.FromResult(false);
 
-            if (_migrationProcessor == null || !Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob))
+            if (_migrationProcessor == null)
                 return Task.FromResult(true);
 
             bool indexesPending = !mu.IndexBuildComplete
                 && mu.IndexingStrategy.HasValue
                 && mu.IndexingStrategy.Value != IndexingStrategy.DontIndex;
 
+            bool isOnline = Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob);
+
             if (indexesPending)
             {
-                // Covers both first-run and resume (e.g. paused mid-build): re-enter the index-build
-                // flow so monitoring restarts. The build (and the eventual change-stream queue
-                // submission for this collection) runs in the background so it cannot block the
-                // outer migration loop from advancing to other collections. Change stream for
-                // *this* collection still waits until its own builds finish.
+                // Covers both first-run and resume (e.g. paused mid-build) for offline AND online
+                // jobs: re-enter the index-build flow so monitoring restarts. The build (and the
+                // eventual change-stream queue submission for online jobs) runs in the background
+                // so it cannot block the outer migration loop from advancing to other collections.
                 bool isBlocking = GetEffectiveBlockingIndexes(mu);
                 _log.WriteLine($"Index builds not complete for {mu.DatabaseName}.{mu.CollectionName} (blocking={isBlocking}, IndexesMigrated={mu.IndexesMigrated}/{mu.IndexesExpected}) - {(isBlocking ? "deferring change stream" : "resuming monitor")} [{logCallerTag}]", LogType.Debug);
                 StartBackgroundIndexBuildAndQueue(mu);
             }
-            else
+            else if (isOnline)
             {
                 _migrationProcessor.AddCollectionToChangeStreamQueue(mu);
             }
@@ -852,9 +853,16 @@ namespace OnlineMongoMigrationProcessor.Workers
                 finally
                 {
                     _pendingIndexBuildTasksByUnit.TryRemove(mu.Id, out Task? _);
+                    // Re-run the offline completion check now that this background task has drained.
+                    // StopOfflineOrInvokeChangeStreams may have skipped earlier because this task was
+                    // still in flight; without this nudge the job would stay InProgress forever on
+                    // offline (DumpAndRestore) jobs whose only remaining work was a resumed index build.
+                    try { _migrationProcessor?.StopOfflineOrInvokeChangeStreams(); } catch { }
                 }
             }));
         }
+
+        internal bool HasPendingIndexBuilds() => !_pendingIndexBuildTasksByUnit.IsEmpty;
 
         private async Task<TaskResult> PrepareUnitForCopyAsync(MigrationUnit mu, PartitionPrepContext context, CancellationToken _cts)
         {
@@ -1469,6 +1477,11 @@ namespace OnlineMongoMigrationProcessor.Workers
                 }
             }
 
+            // Every MU has been dispatched (or the loop broke after offline completion). Allow the
+            // coordinator to self-shutdown once its queues drain; without this it would block forever
+            // on the registration gate when the last MU finishes.
+            _migrationProcessor?.MarkAllUnitsDispatched();
+
             MigrationJobContext.AddVerboseLog($"Before WaitForMigrationProcessorCompletionAsync");
             return await WaitForMigrationProcessorCompletionAsync(ctsToken);
         }
@@ -1501,6 +1514,8 @@ namespace OnlineMongoMigrationProcessor.Workers
                     break;
                 }
             }
+
+            _migrationProcessor?.MarkAllUnitsDispatched();
 
             MigrationJobContext.AddVerboseLog($"Before WaitForMigrationProcessorCompletionAsync");
             return await WaitForMigrationProcessorCompletionAsync(ctsToken);

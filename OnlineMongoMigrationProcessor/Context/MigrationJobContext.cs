@@ -41,9 +41,12 @@ namespace OnlineMongoMigrationProcessor.Context
         // from a running job.
         public static OnlineMongoMigrationProcessor.Processors.MigrationProcessor? ActiveMigrationProcessor { get; set; }
 
-        // Track OS process IDs for mongodump and mongorestore to enable cleanup
-        public static List<int> ActiveDumpProcessIds { get; set; } = new List<int>();
-        public static List<int> ActiveRestoreProcessIds { get; set; } = new List<int>();
+        // Track OS process IDs for mongodump and mongorestore to enable cleanup.
+        // ConcurrentDictionary<int, byte> because Add/Remove are called concurrently from
+        // multiple worker threads; List<T>.Remove(item) is not thread-safe and can throw
+        // ArgumentOutOfRangeException when IndexOf/RemoveAt race against a concurrent Add/Remove.
+        public static System.Collections.Concurrent.ConcurrentDictionary<int, byte> ActiveDumpProcessIds { get; set; } = new();
+        public static System.Collections.Concurrent.ConcurrentDictionary<int, byte> ActiveRestoreProcessIds { get; set; } = new();
 
         public static string ActiveMigrationJobId { get; set; }
 
@@ -128,7 +131,7 @@ namespace OnlineMongoMigrationProcessor.Context
             int killedOrphaned = 0;
             
             // First, kill tracked processes by PID
-            foreach (int pid in ActiveDumpProcessIds.Concat(ActiveRestoreProcessIds))
+            foreach (int pid in ActiveDumpProcessIds.Keys.Concat(ActiveRestoreProcessIds.Keys))
             {
                 try
                 {

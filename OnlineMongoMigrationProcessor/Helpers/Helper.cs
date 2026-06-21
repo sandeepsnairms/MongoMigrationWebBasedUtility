@@ -1308,18 +1308,20 @@ namespace OnlineMongoMigrationProcessor
         {
             if (migrationJob == null) return true;
 
-            bool isServerLevel = migrationJob.ChangeStreamLevel == ChangeStreamLevel.Server;
+            // Any MU still in Unknown status hasn't finished initial probing/sampling yet.
+            // Block completion until every MU has resolved to a terminal status (OK / NotFound / IsView),
+            // otherwise an early-finishing MU (e.g. an empty collection) can mark the whole job complete
+            // while siblings are still being prepared.
+            foreach (var mu in migrationJob.MigrationUnitBasics)
+            {
+                if (mu.SourceStatus == CollectionStatus.Unknown)
+                    return false;
+            }
 
             if (migrationJob.IsSimulatedRun)
             {
                 foreach (var mu in migrationJob.MigrationUnitBasics)
                 {
-                    // For server-level CS, collections with Unknown status haven't been
-                    // processed yet (e.g. newly added). Treat them as not complete so
-                    // the server-level change stream waits for their restore.
-                    if (isServerLevel && mu.SourceStatus == CollectionStatus.Unknown)
-                        return false;
-
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.DumpComplete)
@@ -1334,9 +1336,6 @@ namespace OnlineMongoMigrationProcessor
 
                 foreach (var mu  in migrationJob.MigrationUnitBasics)
                 {
-                    if (isServerLevel && mu.SourceStatus == CollectionStatus.Unknown)
-                        return false;
-
                     if (Helper.IsMigrationUnitValid(mu))
                     {
                         if (!mu.RestoreComplete || !mu.DumpComplete)

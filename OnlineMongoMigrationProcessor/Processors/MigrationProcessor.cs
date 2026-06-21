@@ -662,6 +662,15 @@ namespace OnlineMongoMigrationProcessor.Processors
 
             if (!Helper.IsOnline(MigrationJobContext.CurrentlyActiveJob) && Helper.IsOfflineJobCompleted(MigrationJobContext.CurrentlyActiveJob))
             {
+                // Defer when background post-copy index builds (resumed from a prior pause) are still
+                // running; StopProcessing here would cancel _cts and abort them mid-build. The last
+                // background task to finish will call back into this method to drive the final stop.
+                if (_migrationWorker?.HasPendingIndexBuilds() == true)
+                {
+                    _log.WriteLine("Deferring offline job completion: background index builds still in progress", LogType.Debug);
+                    return;
+                }
+
                 // Don't mark as completed if this is a controlled pause
                 if (!MigrationJobContext.ControlledPauseRequested)
                 {
@@ -684,5 +693,12 @@ namespace OnlineMongoMigrationProcessor.Processors
         }
         public virtual Task<TaskResult> StartProcessAsync(string migrationUnitId, string sourceConnectionString, string targetConnectionString)
         { return Task.FromResult(TaskResult.Success); }
+
+        /// <summary>
+        /// Signals the underlying processor that the orchestrator has finished dispatching every MU.
+        /// Default no-op. DumpRestoreProcessor overrides this to close the coordinator's registration phase
+        /// so it can self-shutdown safely once queues drain.
+        /// </summary>
+        public virtual void MarkAllUnitsDispatched() { }
     }
 }

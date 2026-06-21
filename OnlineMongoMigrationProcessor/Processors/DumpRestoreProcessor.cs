@@ -201,5 +201,10 @@ namespace OnlineMongoMigrationProcessor
             
             _log.WriteLine("DumpRestoreProcessor stopped");
         }
+
+        public override void MarkAllUnitsDispatched()
+        {
+            _coordinator?.CloseRegistration();
+        }
     }
 }
