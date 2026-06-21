@@ -52,6 +52,15 @@ namespace OnlineMongoMigrationProcessor.Context
 
         public static bool ControlledPauseRequested { get; private set; } = false;
 
+        // Set true by MigrationProcessor.SignalStop(); cleared by MigrationWorker when a new
+        // processor (re)starts. In-flight async continuations
+        // (DocumentCopyWorker.UpdateProgress, CopyProcessor.ProcessSegmentAsync,
+        // MigrationWorker.UpdateDocumentCountsAsync) check this and skip MU writes so
+        // mid-cancel snapshot values are not persisted after Pause. A static (not a
+        // computed property over ActiveMigrationProcessor) because StopMigration nulls out
+        // ActiveMigrationProcessor before all in-flight continuations have drained.
+        public static volatile bool StopRequested = false;
+
 #if LEGACY_MONGODB_DRIVER
         /// <summary>
         /// Indicates the legacy MongoDB driver is in use; online migration (change streams) is not supported.
@@ -368,6 +377,34 @@ namespace OnlineMongoMigrationProcessor.Context
             {
                 if (mu == null)
                     return false;
+
+                // Reject cross-job writes. MigrationUnit.Id is deterministic from db.collection
+                // (SHA256), so a stale background task from a previous job holds an MU object
+                // whose Id collides with the freshly-added unit in the new active job. Without
+                // this guard, the code below would rebind mu.ParentJob to CurrentlyActiveJob and
+                // overwrite the new job's MigrationUnitBasics (and persisted job JSON) with the
+                // old percent/state — visibly contaminating brand-new jobs.
+                if (CurrentlyActiveJob != null
+                    && !string.IsNullOrEmpty(mu.JobId)
+                    && !string.Equals(mu.JobId, CurrentlyActiveJob.Id, StringComparison.Ordinal))
+                {
+                    AddVerboseLog($"SaveMigrationUnit: rejecting cross-job write for muId={mu.Id} (mu.JobId={mu.JobId}, activeJob.Id={CurrentlyActiveJob.Id}).");
+                    return false;
+                }
+
+                // Reject writes from stale MU instances inside the same job. After a collection
+                // is removed and re-added, the cache is rebuilt with a fresh MU instance; any
+                // pre-purge instance still held by a background worker would otherwise overwrite
+                // the new instance's persisted state with stale chunks/percent values.
+                if (MigrationUnitsCache != null && !string.IsNullOrEmpty(mu.JobId) && !string.IsNullOrEmpty(mu.Id))
+                {
+                    var canonical = MigrationUnitsCache.GetMigrationUnit(mu.Id, mu.JobId);
+                    if (canonical != null && !ReferenceEquals(canonical, mu))
+                    {
+                        AddVerboseLog($"SaveMigrationUnit: rejecting stale MU instance for jobId={mu.JobId}, muId={mu.Id} (not canonical).");
+                        return false;
+                    }
+                }
 
                 if (CurrentlyActiveJob != null)
                     mu.ParentJob = CurrentlyActiveJob;

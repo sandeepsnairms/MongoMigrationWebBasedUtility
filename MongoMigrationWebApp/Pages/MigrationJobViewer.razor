@@ -341,7 +341,7 @@
                             @(mu.SourceStatus == CollectionStatus.NotFound ? "N/A"
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "N/A"
                                                 : mu.IndexBuildComplete && mu.IndexesFailed > 0 ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
-                                                : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (100%)"
+                                                : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (Success)"
                                                 : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
                                                 : mu.DumpComplete && mu.RestoreComplete ? "Pending"
                                                 : "—")
@@ -676,7 +676,7 @@ else if (@_showLogBackupFile)
                 var indexStatus = mu.SourceStatus == CollectionStatus.NotFound ? "N/A"
                                                     : mu.SourceStatus == CollectionStatus.IsView ? "N/A"
                                                     : mu.IndexBuildComplete && mu.IndexesFailed > 0 ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
-                                                    : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (100%)"
+                                                    : mu.IndexBuildComplete || mu.IndexPercent >= 100 ? $"{displayIndexCount} indexes (Success)"
                                                     : (mu.IndexPercent > 0 || mu.IndexesExpected > 0) ? $"{displayIndexCount} indexes ({Math.Max(0, mu.IndexPercent):F1}%{failedSuffix})"
                                                     : mu.DumpComplete && mu.RestoreComplete ? "Pending"
                                                     : "—";

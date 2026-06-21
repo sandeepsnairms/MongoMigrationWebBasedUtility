@@ -188,28 +188,51 @@
                         </div>
                     }
 
-                    @* Pagination *@
-                    @if (_paginationHelper.TotalPages > 1)
+                    @* Pagination Controls *@
+                    @if (_paginationHelper.GetTotalPages() > 1)
                     {
-                        <div class="d-flex justify-content-center mt-3">
-                            <nav>
-                                <ul class="pagination pagination-sm">
-                                    <li class="page-item @(_paginationHelper.CurrentPage == 1 ? "disabled" : "")">
-                                        <button class="page-link" @onclick="@(() => _paginationHelper.CurrentPage = 1)">«</button>
+                        <nav aria-label="Collections pagination" class="mt-3">
+                            <ul class="pagination justify-content-center">
+                                <li class="page-item @(_paginationHelper.IsFirstPage() ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => _paginationHelper.GoToPage(1)" disabled="@_paginationHelper.IsFirstPage()" title="First page">
+                                        <i class="bi bi-chevron-double-left"></i>
+                                    </button>
+                                </li>
+                                <li class="page-item @(_paginationHelper.IsFirstPage() ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => _paginationHelper.GoToPage(_paginationHelper.CurrentPage - 1)" disabled="@_paginationHelper.IsFirstPage()" title="Previous page">
+                                        <i class="bi bi-chevron-left"></i>
+                                    </button>
+                                </li>
+
+                                @for (int page = _paginationHelper.GetStartPage(); page <= _paginationHelper.GetEndPage(); page++)
+                                {
+                                    var pageNumber = page;
+                                    <li class="page-item @(_paginationHelper.CurrentPage == pageNumber ? "active" : "")">
+                                        <button class="page-link" @onclick="() => _paginationHelper.GoToPage(pageNumber)" title="Go to page @pageNumber">
+                                            @pageNumber
+                                        </button>
                                     </li>
-                                    @for (int i = 1; i <= _paginationHelper.TotalPages; i++)
-                                    {
-                                        int page = i;
-                                        <li class="page-item @(page == _paginationHelper.CurrentPage ? "active" : "")">
-                                            <button class="page-link" @onclick="@(() => _paginationHelper.CurrentPage = page)">@(page)</button>
-                                        </li>
-                                    }
-                                    <li class="page-item @(_paginationHelper.CurrentPage == _paginationHelper.TotalPages ? "disabled" : "")">
-                                        <button class="page-link" @onclick="@(() => _paginationHelper.CurrentPage = _paginationHelper.TotalPages)">»</button>
-                                    </li>
-                                </ul>
-                            </nav>
-                        </div>
+                                }
+
+                                <li class="page-item @(_paginationHelper.IsLastPage() ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => _paginationHelper.GoToPage(_paginationHelper.CurrentPage + 1)" disabled="@_paginationHelper.IsLastPage()" title="Next page">
+                                        <i class="bi bi-chevron-right"></i>
+                                    </button>
+                                </li>
+                                <li class="page-item @(_paginationHelper.IsLastPage() ? "disabled" : "")">
+                                    <button class="page-link" @onclick="() => _paginationHelper.GoToPage(_paginationHelper.GetTotalPages())" disabled="@_paginationHelper.IsLastPage()" title="Last page">
+                                        <i class="bi bi-chevron-double-right"></i>
+                                    </button>
+                                </li>
+                            </ul>
+
+                            <div class="text-center mt-2">
+                                <small class="text-muted">
+                                    Page @_paginationHelper.CurrentPage of @_paginationHelper.GetTotalPages()
+                                    (@_paginationHelper.GetFilteredItemsCount() @(_paginationHelper.GetFilteredItemsCount() == 1 ? "collection" : "collections"))
+                                </small>
+                            </div>
+                        </nav>
                     }
                 </div>
                 <div class="modal-footer">

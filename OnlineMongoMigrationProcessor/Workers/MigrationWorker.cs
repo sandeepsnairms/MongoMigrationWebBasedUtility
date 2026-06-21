@@ -232,6 +232,12 @@ namespace OnlineMongoMigrationProcessor.Workers
         public void StopMigration()
         {
             MigrationJobContext.AddVerboseLog($"StopMigration: _activeJobId={_activeJobId}");
+            // Signal the processor BEFORE cancelling tokens or killing processes so that:
+            //   - DumpRestoreProcessor stops the coordinator queue (prevents re-enqueue of killed chunks).
+            //   - CopyProcessor/RUCopyProcessor in-flight async continuations (UpdateProgress,
+            //     ProcessSegmentAsync, UpdateDocumentCountsAsync) see StopRequested and skip
+            //     mid-cancel MU writes.
+            _migrationProcessor?.SignalStop();
             try
             {
                 _activeJobId=string.Empty;
@@ -239,14 +245,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                 _cts?.Cancel();
                 _compare_cts?.Cancel();
 
-                // Signal the coordinator to stop BEFORE killing processes.
-                // This prevents HandleDumpFailure/HandleRestoreFailure from re-enqueueing
-                // killed chunks for retry during the window between kill and StopCoordinatedProcessing.
-                if (_migrationProcessor is DumpRestoreProcessor drp)
-                {
-                    drp.SignalStop();
-                }
-                
                 // Kill all active mongodump and mongorestore processes
                 MigrationJobContext.KillAllMigrationProcesses();
                 
@@ -470,6 +468,9 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             _migrationProcessor.ProcessRunning = true;
             MigrationJobContext.ActiveMigrationProcessor = _migrationProcessor;
+            // Clear the stop flag now that a fresh processor is in place. Late continuations
+            // from a previous run would already have been short-circuited.
+            MigrationJobContext.StopRequested = false;
             
 #if !LEGACY_MONGODB_DRIVER
             // Set the delegate to wait for resume token tasks before processing collections
@@ -1012,6 +1013,8 @@ namespace OnlineMongoMigrationProcessor.Workers
             _ = Task.Run(() =>
             {
                 long count = MongoHelper.GetActualDocumentCount(coll, mu);
+                if (MigrationJobContext.StopRequested)
+                    return;
                 MigrationJobContext.MutateMigrationUnit(mu.Id, m => m.ActualDocCount = count, updateParent: false);
             }, _cts);
         }
@@ -1256,11 +1259,20 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return;
             }
 
-            // Get storage sizes from source (in parallel)
+            // Get storage sizes from source (throttled to avoid exhausting the driver's connection wait queue)
+            using var sizeThrottle = new SemaphoreSlim(10);
             var sizeTasks = autoUnits.Select(async mu =>
             {
-                var size = await MongoHelper.GetCollectionStorageSizeAsync(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName);
-                return (Unit: mu, Size: size);
+                await sizeThrottle.WaitAsync();
+                try
+                {
+                    var size = await MongoHelper.GetCollectionStorageSizeAsync(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName);
+                    return (Unit: mu, Size: size);
+                }
+                finally
+                {
+                    sizeThrottle.Release();
+                }
             });
 
             var sizeResults = await Task.WhenAll(sizeTasks);

@@ -182,8 +182,9 @@ namespace OnlineMongoMigrationProcessor
         /// Signals the coordinator to stop immediately (sets flags + cancels CTS)
         /// without awaiting in-flight workers. Call before KillAllMigrationProcesses.
         /// </summary>
-        public void SignalStop()
+        public override void SignalStop()
         {
+            base.SignalStop();
             _coordinator?.SignalStop();
         }
 

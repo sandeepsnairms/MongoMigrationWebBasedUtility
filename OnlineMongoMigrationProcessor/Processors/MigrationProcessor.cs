@@ -28,6 +28,12 @@ namespace OnlineMongoMigrationProcessor.Processors
         protected MigrationWorker? _migrationWorker;
 
         public bool ProcessRunning { get; set; }
+
+        // Set true by SignalStop() so in-flight async continuations in workers
+        // (DocumentCopyWorker.UpdateProgress / ProcessSegmentAsync, MigrationWorker.UpdateDocumentCountsAsync,
+        // DumpRestore coordinator queues) can skip late writes after Pause was requested.
+        public volatile bool StopRequested = false;
+
         // Add this property to the MigrationProcessor class
         public string? MongoToolsFolder { get; set; }
 
@@ -82,6 +88,12 @@ namespace OnlineMongoMigrationProcessor.Processors
         /// <summary>
         /// Signals processor to stop accepting new work but complete current tasks
         /// </summary>
+        public virtual void SignalStop()
+        {
+            StopRequested = true;
+            MigrationJobContext.StopRequested = true;
+            MigrationJobContext.AddVerboseLog($"MigrationProcessor.SignalStop: StopRequested=true");
+        }
 
         /// <summary>
         /// Stops only the change stream processor, leaving offline workers running.
