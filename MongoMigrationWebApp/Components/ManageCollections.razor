@@ -92,7 +92,7 @@
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="@(() => BulkSetSharding(ShardingStrategy.DontShard))" disabled="@AnySelectedHasOverwriteFalse()" title="@(AnySelectedHasOverwriteFalse() ? "Locked: one or more selected drafts have Overwrite = FALSE" : "Sharding: do not shard")">
                                         Sharding: None
                                     </button>
-                                    @if (AllSelectedHaveDontShard() && !AnySelectedHasOverwriteFalse())
+                                    @if (AllSelectedHaveDontShard() && !AnySelectedHasOverwriteFalse() && _clusterNodes.Count > 1)
                                     {
                                         <div class="btn-group">
                                             <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Place selected drafts on a specific shard">
@@ -648,27 +648,33 @@
         if (_formSharding == ShardingStrategy.DontShard)
         {
             var isMoveToLocked = DraftOptionRules.IsMoveToShardLocked(_formOverwrite, _formSharding, simulated);
+            var singleShardTarget = _clusterNodes.Count <= 1;
+            var moveToDisabled = isMoveToLocked || simulated || singleShardTarget;
             builder.OpenElement(56, "div");
             builder.AddAttribute(57, "class", "col-md-6");
             builder.OpenElement(58, "label");
             builder.AddAttribute(59, "class", "form-label");
             builder.AddMarkupContent(60, "Place collection on shard");
             if (isMoveToLocked) builder.AddMarkupContent(61, " <span class=\"badge bg-light text-muted border\">Locked (Overwrite = No)</span>");
+            else if (singleShardTarget) builder.AddMarkupContent(61, " <span class=\"badge bg-light text-muted border\">Locked (target has a single shard)</span>");
             builder.CloseElement();
             builder.OpenElement(62, "select");
             builder.AddAttribute(63, "class", "form-select form-select-sm");
-            builder.AddAttribute(64, "disabled", isMoveToLocked || simulated);
-            builder.AddAttribute(65, "value", _formMoveToShard ?? "");
+            builder.AddAttribute(64, "disabled", moveToDisabled);
+            builder.AddAttribute(65, "value", singleShardTarget ? "" : (_formMoveToShard ?? ""));
             builder.AddAttribute(66, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => {
                 var val = e.Value?.ToString();
                 _formMoveToShard = string.IsNullOrEmpty(val) ? null : val;
             }));
             builder.AddMarkupContent(67, "<option value=\"\">Don't move</option>");
-            builder.AddMarkupContent(68, "<option value=\"Auto\">Auto (distribute across shards by storage)</option>");
-            foreach (var node in _clusterNodes)
+            if (!singleShardTarget)
             {
-                var encoded = System.Net.WebUtility.HtmlEncode(node);
-                builder.AddMarkupContent(68, $"<option value=\"{encoded}\">{encoded}</option>");
+                builder.AddMarkupContent(68, "<option value=\"Auto\">Auto (distribute across shards by storage)</option>");
+                foreach (var node in _clusterNodes)
+                {
+                    var encoded = System.Net.WebUtility.HtmlEncode(node);
+                    builder.AddMarkupContent(68, $"<option value=\"{encoded}\">{encoded}</option>");
+                }
             }
             builder.CloseElement();
             if (simulated) builder.AddMarkupContent(69, "<small class=\"form-text text-muted\">Disabled in simulated run</small>");

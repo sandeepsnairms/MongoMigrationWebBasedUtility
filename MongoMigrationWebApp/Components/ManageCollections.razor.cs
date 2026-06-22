@@ -108,6 +108,15 @@ namespace MongoMigrationWebApp.Components
             );
         }
 
+        protected override async Task OnInitializedAsync()
+        {
+            // Preload target cluster shards so single-shard targets can immediately disable the
+            // Move-to-shard dropdown and pick the correct default before the user opens any panel.
+            await EnsureClusterNodesLoaded();
+        }
+
+        private bool IsSingleShardTarget => _clusterNodes.Count <= 1;
+
         private bool MatchesTypeFilter(object item)
         {
             return _typeFilter switch
@@ -169,7 +178,7 @@ namespace MongoMigrationWebApp.Components
             _formOverwrite = false;
             _formIndexing = IndexingStrategy.SameAsSource;
             _formSharding = ShardingStrategy.DontShard;
-            _formMoveToShard = "Auto";
+            _formMoveToShard = IsSingleShardTarget ? null : "Auto";
             _formFilter = null;
             _formDataTypeForId = null;
         }

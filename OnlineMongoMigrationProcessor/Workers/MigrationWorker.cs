@@ -717,6 +717,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             }
             
             _log.WriteLine("About to enter foreach loop for migration units", LogType.Debug);
+            _log.ShowInMonitor($"Preparing {unitsForPrep.Count} collection(s) for migration...");
 
             // Resolve "Auto" shard assignments before processing
             await ResolveAutoShardAssignmentsAsync(unitsForPrep);
@@ -726,6 +727,10 @@ namespace OnlineMongoMigrationProcessor.Workers
             {
                 unitIndex++;
                 _log.WriteLine($"Entered foreach loop - iteration {unitIndex}", LogType.Debug);
+                if (unitIndex == 1 || unitIndex % 10 == 0 || unitIndex == unitsForPrep.Count)
+                {
+                    _log.ShowInMonitor($"Preparing collection {unitIndex}/{unitsForPrep.Count}: {mu?.DatabaseName}.{mu?.CollectionName}");
+                }
                 
                 if (mu == null)
                 {
@@ -1238,6 +1243,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 return;
 
             _log.WriteLine($"Resolving auto-shard assignments for {autoUnits.Count} collection(s)", LogType.Debug);
+            _log.ShowInMonitor($"Resolving auto-shard assignments for {autoUnits.Count} collection(s) (fetching storage sizes from source)...");
 
             // Get available shards/nodes from the target using the same layered probe as the UI
             var targetConnStr = MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob!.Id];
@@ -1261,12 +1267,19 @@ namespace OnlineMongoMigrationProcessor.Workers
 
             // Get storage sizes from source (throttled to avoid exhausting the driver's connection wait queue)
             using var sizeThrottle = new SemaphoreSlim(10);
+            int sizeCompleted = 0;
+            int sizeTotal = autoUnits.Count;
             var sizeTasks = autoUnits.Select(async mu =>
             {
                 await sizeThrottle.WaitAsync();
                 try
                 {
                     var size = await MongoHelper.GetCollectionStorageSizeAsync(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName);
+                    int done = Interlocked.Increment(ref sizeCompleted);
+                    if (done == 1 || done % 10 == 0 || done == sizeTotal)
+                    {
+                        _log.ShowInMonitor($"Auto-shard: fetched storage size {done}/{sizeTotal} (last: {mu.DatabaseName}.{mu.CollectionName})");
+                    }
                     return (Unit: mu, Size: size);
                 }
                 finally
@@ -1276,6 +1289,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             });
 
             var sizeResults = await Task.WhenAll(sizeTasks);
+            _log.ShowInMonitor($"Auto-shard: assigning {sizeTotal} collection(s) to shards (greedy bin-packing)...");
 
             // Greedy bin-packing: sort by size descending, assign to shard with least storage
             var sortedUnits = sizeResults.OrderByDescending(r => r.Size).ToList();
@@ -1370,6 +1384,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             List<Task> resumeTokenTasks = new List<Task>();
             var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
             _log.WriteLine($"Processing {unitsForMigrate.Count} migration units (async partitioning pipeline)", LogType.Debug);
+            _log.ShowInMonitor($"Processing {unitsForMigrate.Count} collection(s) (async partitioning pipeline)...");
 
             // Lightweight global prerequisites only (no upfront per-collection partitioning).
             await ResolveAutoShardAssignmentsAsync(unitsForMigrate);
@@ -1393,6 +1408,10 @@ namespace OnlineMongoMigrationProcessor.Workers
                 ? MigrationJobContext.CurrentlyActiveJob.ParallelThreads
                 : Environment.ProcessorCount));
             var partitionGate = new SemaphoreSlim(maxPartitionConcurrency, maxPartitionConcurrency);
+
+            int partitionPrepared = 0;
+            int partitionTotal = unitsForMigrate.Count;
+            _log.ShowInMonitor($"Preparing {partitionTotal} collection(s) in background ({maxPartitionConcurrency} concurrent)...");
 
             var partitionTasks = unitsForMigrate.ToDictionary(
                 mu => mu.Id,
@@ -1459,9 +1478,15 @@ namespace OnlineMongoMigrationProcessor.Workers
                     finally
                     {
                         partitionGate.Release();
+                        int done = Interlocked.Increment(ref partitionPrepared);
+                        if (done == 1 || done % 10 == 0 || done == partitionTotal)
+                        {
+                            _log.ShowInMonitor($"Background preparation: {done}/{partitionTotal} collection(s) ready (last: {mu.DatabaseName}.{mu.CollectionName})");
+                        }
                     }
                 }, ctsToken));
 
+            int migrateIndex = 0;
             foreach (var migrationUnit in unitsForMigrate)
             {
                 if (_migrationCancelled)
@@ -1479,6 +1504,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var result = await MigrateUnitEndToEndAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
+
+                migrateIndex++;
+                if (migrateIndex == 1 || migrateIndex % 10 == 0 || migrateIndex == unitsForMigrate.Count)
+                {
+                    _log.ShowInMonitor($"Migration dispatch progress: {migrateIndex}/{unitsForMigrate.Count} (last: {migrationUnit.DatabaseName}.{migrationUnit.CollectionName})");
+                }
 
                 MigrationJobContext.AddVerboseLog($"Before ShouldBreakMigrationLoop, last processed {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
 
@@ -1501,8 +1532,11 @@ namespace OnlineMongoMigrationProcessor.Workers
         private async Task<TaskResult> MigrateRUOptimizedJobCollectionsAsync(bool syncBack, CancellationToken ctsToken)
         {
             List<Task> resumeTokenTasks = new List<Task>();
-            _log.WriteLine($"Processing {MigrationJobContext.CurrentlyActiveJob!.MigrationUnitBasics.Count} migration units", LogType.Debug);
+            var totalUnits = MigrationJobContext.CurrentlyActiveJob!.MigrationUnitBasics.Count;
+            _log.WriteLine($"Processing {totalUnits} migration units", LogType.Debug);
+            _log.ShowInMonitor($"Processing {totalUnits} collection(s) (RU-optimized pipeline)...");
 
+            int ruIndex = 0;
             foreach (var mub in MigrationJobContext.CurrentlyActiveJob.MigrationUnitBasics)
             {
                 if (_migrationCancelled)
@@ -1517,6 +1551,12 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var result = await MigrateUnitEndToEndAsync(migrationUnit, syncBack, ctsToken, resumeTokenTasks);
                 if (result != TaskResult.Success)
                     return result;
+
+                ruIndex++;
+                if (ruIndex == 1 || ruIndex % 10 == 0 || ruIndex == totalUnits)
+                {
+                    _log.ShowInMonitor($"Migration dispatch progress: {ruIndex}/{totalUnits} (last: {mub.DatabaseName}.{mub.CollectionName})");
+                }
 
                 MigrationJobContext.AddVerboseLog($"Before ShouldBreakMigrationLoop, last processed {mub.DatabaseName}.{mub.CollectionName}");
 
@@ -1880,9 +1920,17 @@ namespace OnlineMongoMigrationProcessor.Workers
                 var unitsForMigrate = Helper.GetMigrationUnitsToMigrate(MigrationJobContext.CurrentlyActiveJob);
 
                 _log.WriteLine($"Adding {unitsForMigrate.Count} collections to change stream queue", LogType.Debug);
+                _log.ShowInMonitor($"Preparing change stream queue for {unitsForMigrate.Count} collection(s)...");
 
+                int csIndex = 0;
                 foreach (var migrationUnit in unitsForMigrate)
                 {
+                    csIndex++;
+                    if (csIndex == 1 || csIndex % 10 == 0 || csIndex == unitsForMigrate.Count)
+                    {
+                        _log.ShowInMonitor($"Queuing change stream collection {csIndex}/{unitsForMigrate.Count}: {migrationUnit.DatabaseName}.{migrationUnit.CollectionName}");
+                    }
+
                     if (_migrationCancelled)
                         return TaskResult.Canceled;
 
@@ -1941,6 +1989,7 @@ namespace OnlineMongoMigrationProcessor.Workers
                 processor.RunChangeStreamProcessorForAllCollections();
 
                 _log.WriteLine("Change stream processor started for all collections", LogType.Debug);
+                _log.ShowInMonitor($"Change stream processor started for {unitsForMigrate.Count} collection(s).");
 
                 return TaskResult.Success;
             }
@@ -2189,6 +2238,7 @@ namespace OnlineMongoMigrationProcessor.Workers
 
 
             _log.WriteLine("Starting online change stream processor in background.", LogType.Debug);
+            _log.ShowInMonitor("Starting online change stream processor in background; warming up for 30 seconds before resuming migration loop...");
 #pragma warning disable CS4014
             StartOnlineForJobCollections(_cts.Token, _migrationProcessor!, MigrationJobContext.CurrentlyActiveJob.ChangeStreamMode == ChangeStreamMode.Aggressive, true);
 #pragma warning restore CS4014

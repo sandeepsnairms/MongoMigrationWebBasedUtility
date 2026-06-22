@@ -309,14 +309,14 @@
                 @foreach (var mu in GetFilteredAndPagedUnits())
                 {
                     <tr class="@GetCollectionRowClass(mu)">
-                        <td style="white-space: nowrap;">
+                        <td class="cell-scroll-x" style="white-space: nowrap;" title="@GetDatabaseDisplayName(mu)">
                             <i class="bi bi-info-circle-fill me-2 collection-info-icon" title="More info" style="cursor: pointer;"
                                @onclick="() => ShowCollectionDetails(mu)"></i>
                             <i class="bi bi-download me-2 collection-info-icon" title="Download JSON" style="cursor: pointer;"
                                @onclick="() => DownloadMigrationUnit(mu)"></i>
                             @GetDatabaseDisplayName(mu)
                         </td>
-                        <td>@GetCollectionDisplayName(mu)</td>
+                        <td class="cell-scroll-x" title="@GetCollectionDisplayName(mu)">@GetCollectionDisplayName(mu)</td>
                         <td>
                             @(mu.SourceStatus == CollectionStatus.NotFound ? "Skipped (404)"
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
