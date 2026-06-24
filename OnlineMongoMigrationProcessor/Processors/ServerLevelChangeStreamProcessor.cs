@@ -165,14 +165,14 @@ namespace OnlineMongoMigrationProcessor
 
             string resumeToken = GetResumeToken();
 
-            // [temp] Round-entry snapshot: what token are we about to resume from, and how many MUs are queued?
+            // [PBRT] Round-entry snapshot: what token are we about to resume from, and how many MUs are queued?
             var job = MigrationJobContext.CurrentlyActiveJob;
             string origTokenHash = ShortHash(job.GetOriginalResumeToken(_syncBack) ?? string.Empty);
             string curTokenHash = ShortHash(resumeToken);
             string curTokenTs = TryDecodeResumeTokenTimestamp(resumeToken);
             _log.WriteLine(
-                $"{_syncBackPrefix}[temp] round={loop} resumeToken[hash={curTokenHash} ts={curTokenTs}] originalToken[hash={origTokenHash}] tokenEqualsOriginal={(curTokenHash == origTokenHash)} muCount={_migrationUnitsToProcess.Count} monitorAll={_monitorAllCollections} useClientSideFilter={job.UseClientSideCSFilter} initialReplayed={GetInitialDocumentReplayedStatus()}",
-                LogType.Info);
+                $"{_syncBackPrefix}[PBRT] round={loop} resumeToken[hash={curTokenHash} ts={curTokenTs}] originalToken[hash={origTokenHash}] tokenEqualsOriginal={(curTokenHash == origTokenHash)} muCount={_migrationUnitsToProcess.Count} monitorAll={_monitorAllCollections} useClientSideFilter={job.UseClientSideCSFilter} initialReplayed={GetInitialDocumentReplayedStatus()}",
+                LogType.Debug);
 
             if (!string.IsNullOrEmpty(resumeToken))
             {
@@ -180,12 +180,12 @@ namespace OnlineMongoMigrationProcessor
                 SetTouchedCollectionsCSLastChecked(touchedMuIdsInRound);
                 await ResetCollectionsUntouchedSincePreviousRoundAsync(touchedMuIdsInRound);
 
-                // [temp] Round-exit snapshot: did the saved token actually advance? Compare new resumeToken to the one we entered with.
+                // [PBRT] Round-exit snapshot: did the saved token actually advance? Compare new resumeToken to the one we entered with.
                 string newTokenHash = ShortHash(GetResumeToken());
                 string newTokenTs = TryDecodeResumeTokenTimestamp(GetResumeToken());
                 _log.WriteLine(
-                    $"{_syncBackPrefix}[temp] round={loop} end: newResumeToken[hash={newTokenHash} ts={newTokenTs}] advanced={(newTokenHash != curTokenHash)} touchedMus={touchedMuIdsInRound.Count}",
-                    LogType.Info);
+                    $"{_syncBackPrefix}[PBRT] round={loop} end: newResumeToken[hash={newTokenHash} ts={newTokenTs}] advanced={(newTokenHash != curTokenHash)} touchedMus={touchedMuIdsInRound.Count}",
+                    LogType.Debug);
             }
             else
             {
@@ -327,10 +327,10 @@ namespace OnlineMongoMigrationProcessor
 
                 _log.WriteLine($"{_syncBackPrefix}Server-level cursor created in {cursorCreationSw.Elapsed.TotalSeconds:F1}s. Starting processing...", LogType.Debug);
 
-                // [temp] Confirm cursor was actually created and we're entering the watch loop. pipelineArray.Length tells us if a $match was attached.
+                // [PBRT] Confirm cursor was actually created and we're entering the watch loop. pipelineArray.Length tells us if a $match was attached.
                 _log.WriteLine(
-                    $"{_syncBackPrefix}[temp] Cursor created cursorCreationMs={cursorCreationSw.ElapsedMilliseconds} pipelineStages={pipelineArray.Length} namespaceFilterApplied={_namespaceFilterApplied} batchSize={GetChangeStreamBatchSize()} maxAwaitSec={maxAwaitSeconds}",
-                    LogType.Info);
+                    $"{_syncBackPrefix}[PBRT] Cursor created cursorCreationMs={cursorCreationSw.ElapsedMilliseconds} pipelineStages={pipelineArray.Length} namespaceFilterApplied={_namespaceFilterApplied} batchSize={GetChangeStreamBatchSize()} maxAwaitSec={maxAwaitSeconds}",
+                    LogType.Debug);
 
                 if (cursorCreationSw.Elapsed.TotalSeconds > GetBatchDurationInSeconds(1.0f))
                 {
@@ -383,17 +383,17 @@ namespace OnlineMongoMigrationProcessor
                                     state.LatestResumeToken = postBatchToken.ToJson();
                                     state.LatestTimestamp = DateTime.UtcNow;
 
-                                    // [temp] Idle-round postBatchResumeToken: did the server advance the token beyond what we sent in?
+                                    // [PBRT] Idle-round postBatchResumeToken: did the server advance the token beyond what we sent in?
                                     string inHash = ShortHash(tokenJson);
                                     string outHash = ShortHash(state.LatestResumeToken);
                                     string outTs = TryDecodeResumeTokenTimestamp(state.LatestResumeToken);
                                     _log.WriteLine(
-                                        $"{_syncBackPrefix}[temp] idleRound postBatchResumeToken in[hash={inHash}] out[hash={outHash} ts={outTs}] advanced={(inHash != outHash)} cursorEventsRead={state.CursorEventsRead} idleCalls={state.CursorIdleCalls} busyCalls={state.CursorBusyCalls}",
-                                        LogType.Info);
+                                        $"{_syncBackPrefix}[PBRT] idleRound postBatchResumeToken in[hash={inHash}] out[hash={outHash} ts={outTs}] advanced={(inHash != outHash)} cursorEventsRead={state.CursorEventsRead} idleCalls={state.CursorIdleCalls} busyCalls={state.CursorBusyCalls}",
+                                        LogType.Debug);
                                 }
                                 else
                                 {
-                                    _log.WriteLine($"{_syncBackPrefix}[temp] idleRound postBatchResumeToken was NULL — cursor never returned a server response. cursorEventsRead={state.CursorEventsRead} idleCalls={state.CursorIdleCalls} busyCalls={state.CursorBusyCalls}", LogType.Info);
+                                    _log.WriteLine($"{_syncBackPrefix}[PBRT] idleRound postBatchResumeToken was NULL — cursor never returned a server response. cursorEventsRead={state.CursorEventsRead} idleCalls={state.CursorIdleCalls} busyCalls={state.CursorBusyCalls}", LogType.Debug);
                                 }
                             }
                             catch (Exception ex)
@@ -695,13 +695,13 @@ namespace OnlineMongoMigrationProcessor
             state.LatestDocumentKey = change.DocumentKey?.ToJson() ?? string.Empty;
             state.LatestCollectionKey = state.CollectionKey;
 
-            // [temp] Log the first event per round so we can confirm: (a) the cursor IS yielding events, (b) what ns they come from, (c) whether queued MUs match those namespaces.
+            // [PBRT] Log the first event per round so we can confirm: (a) the cursor IS yielding events, (b) what ns they come from, (c) whether queued MUs match those namespaces.
             if (state.CursorEventsRead <= 1)
             {
                 bool isQueued = TryResolveQueuedMigrationUnit(state.CollectionKey, out _);
                 _log.WriteLine(
-                    $"{_syncBackPrefix}[temp] First event this round ns={state.CollectionKey} op={change.OperationType} isQueuedMu={isQueued} monitorAll={_monitorAllCollections} nsFilterApplied={_namespaceFilterApplied} eventTs={state.LatestTimestamp:o}",
-                    LogType.Info);
+                    $"{_syncBackPrefix}[PBRT] First event this round ns={state.CollectionKey} op={change.OperationType} isQueuedMu={isQueued} monitorAll={_monitorAllCollections} nsFilterApplied={_namespaceFilterApplied} eventTs={state.LatestTimestamp:o}",
+                    LogType.Debug);
             }
 
             // When $changeStreamSplitLargeEvent fired on the shard, only the final
@@ -738,10 +738,10 @@ namespace OnlineMongoMigrationProcessor
 
             if (!(_monitorAllCollections || _namespaceFilterApplied || TryResolveQueuedMigrationUnit(state.CollectionKey, out _)))
             {
-                // [temp] Event arrived but is being dropped \u2014 ns not in queued MUs and no server-side filter. Sample-log first few per round.
+                // [PBRT] Event arrived but is being dropped \u2014 ns not in queued MUs and no server-side filter. Sample-log first few per round.
                 if (state.CursorEventsRead <= 5)
                 {
-                    _log.WriteLine($"{_syncBackPrefix}[temp] Dropping event ns={state.CollectionKey} op={change.OperationType} reason=notQueuedAndNoFilter", LogType.Info);
+                    _log.WriteLine($"{_syncBackPrefix}[PBRT] Dropping event ns={state.CollectionKey} op={change.OperationType} reason=notQueuedAndNoFilter", LogType.Debug);
                 }
                 return !ExecutionCancelled;
             }
@@ -807,7 +807,7 @@ namespace OnlineMongoMigrationProcessor
             // $or filters were observed to freeze postBatchResumeToken on Atlas
             // sharded clusters when none of the matching namespaces had recent oplog
             // activity, while the cluster as a whole was busy.
-            _log.WriteLine($"{_syncBackPrefix}[temp] BuildServerLevelNamespaceFilterPipeline: server-side ns filter disabled by design, using client-side filtering for {_migrationUnitsToProcess.Count} collection(s).", LogType.Info);
+            _log.WriteLine($"{_syncBackPrefix}[PBRT] BuildServerLevelNamespaceFilterPipeline: server-side ns filter disabled by design, using client-side filtering for {_migrationUnitsToProcess.Count} collection(s).", LogType.Debug);
             return false;
 
 #pragma warning disable CS0162 // Unreachable code: kept for one-line revert if server-side filter is re-enabled.
@@ -847,8 +847,8 @@ namespace OnlineMongoMigrationProcessor
 
             if (orConditions.Count == 0)
             {
-                // [temp] No namespaces resolved from queued MUs — filter not applied. Stream will see EVERYTHING and client-side filtering will drop all events.
-                _log.WriteLine($"{_syncBackPrefix}[temp] BuildServerLevelNamespaceFilterPipeline: orConditions.Count=0, _migrationUnitsToProcess.Count={_migrationUnitsToProcess.Count} — no namespace filter applied.", LogType.Info);
+                // [PBRT] No namespaces resolved from queued MUs — filter not applied. Stream will see EVERYTHING and client-side filtering will drop all events.
+                _log.WriteLine($"{_syncBackPrefix}[PBRT] BuildServerLevelNamespaceFilterPipeline: orConditions.Count=0, _migrationUnitsToProcess.Count={_migrationUnitsToProcess.Count} — no namespace filter applied.", LogType.Debug);
                 return false;
             }
 
@@ -871,11 +871,11 @@ namespace OnlineMongoMigrationProcessor
                 return false;
             }
 
-            // [temp] Confirm the filter we send to the server. Log first 3 namespaces as a sanity sample so we can verify the filter matches actual oplog ns values.
+            // [PBRT] Confirm the filter we send to the server. Log first 3 namespaces as a sanity sample so we can verify the filter matches actual oplog ns values.
             var sampleNs = namespacePairs.Take(3).ToList();
             _log.WriteLine(
-                $"{_syncBackPrefix}[temp] BuildServerLevelNamespaceFilterPipeline: applied $match with {orConditions.Count} ns ($or) sizeBytes={matchStageSizeBytes} sampleNs=[{string.Join(", ", sampleNs)}]",
-                LogType.Info);
+                $"{_syncBackPrefix}[PBRT] BuildServerLevelNamespaceFilterPipeline: applied $match with {orConditions.Count} ns ($or) sizeBytes={matchStageSizeBytes} sampleNs=[{string.Join(", ", sampleNs)}]",
+                LogType.Debug);
 
             pipeline.Add(matchStage);
             return true;
@@ -1559,7 +1559,7 @@ namespace OnlineMongoMigrationProcessor
             MigrationJobContext.CurrentlyActiveJob.SetResumeTokenInfo(_syncBack, resumeToken, operationType, documentId, collectionKey);
         }
 
-        // [temp] Short stable identifier for a resume token (last 12 chars of the hex _data payload) to compare tokens across rounds without dumping the full BSON.
+        // [PBRT] Short stable identifier for a resume token (last 12 chars of the hex _data payload) to compare tokens across rounds without dumping the full BSON.
         private static string ShortHash(string token)
         {
             if (string.IsNullOrEmpty(token)) return "<empty>";
@@ -1567,7 +1567,7 @@ namespace OnlineMongoMigrationProcessor
             return len <= 12 ? token : token.Substring(len - 12);
         }
 
-        // [temp] Decode the leading 4-byte unix timestamp embedded in a v1 resume token (_data hex starts with type byte 0x82 then 4 bytes BE seconds). Returns "?" if not parseable.
+        // [PBRT] Decode the leading 4-byte unix timestamp embedded in a v1 resume token (_data hex starts with type byte 0x82 then 4 bytes BE seconds). Returns "?" if not parseable.
         private static string TryDecodeResumeTokenTimestamp(string tokenJson)
         {
             try

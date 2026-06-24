@@ -617,8 +617,12 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             // CursorUtcTimestamp to "now" and then rejects real historical changes with
             // a "Timestamp mismatch: Old is newer than New" exception. Anchor on this
             // collection's BulkCopyStartedOn - 4h so the cursor never starts before the
-            // collection's own bulk copy began.
-            if (mu.BulkCopyStartedOn.HasValue && mu.BulkCopyStartedOn.Value != DateTime.MinValue)
+            // collection's own bulk copy began. Only anchor when ChangeStreamStartedOn is
+            // unset/MinValue, so an operator-supplied push-forward (e.g. recovery script)
+            // is preserved.
+            var existingStartedOn = mu.GetChangeStreamStartedOn(syncBack);
+            bool startedOnUnset = !existingStartedOn.HasValue || existingStartedOn.Value == DateTime.MinValue;
+            if (startedOnUnset && mu.BulkCopyStartedOn.HasValue && mu.BulkCopyStartedOn.Value != DateTime.MinValue)
             {
                 mu.SetChangeStreamStartedOn(syncBack, mu.BulkCopyStartedOn.Value.ToUniversalTime().AddHours(-4));
             }

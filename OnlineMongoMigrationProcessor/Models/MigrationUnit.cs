@@ -167,6 +167,12 @@ namespace OnlineMongoMigrationProcessor
         public string? SyncBackResumeDocumentKey { get; set; }
         public DateTime? SyncBackChangeStreamStartedOn { get; set; }
 
+        // Captures the ChangeStreamStartedOn value that was in effect before the
+        // stuck-cursor self-healing path rewound it. Written once, on the first
+        // rewind, so the original boot value is preserved for audit/diagnostics.
+        public DateTime? OriginalChangeStreamStartedOn { get; set; }
+        public DateTime? SyncBackOriginalChangeStreamStartedOn { get; set; }
+
         public DateTime? GetChangeStreamStartedOn(bool syncBack)
             => syncBack ? SyncBackChangeStreamStartedOn : ChangeStreamStartedOn;
 
@@ -174,6 +180,15 @@ namespace OnlineMongoMigrationProcessor
         {
             if (syncBack) SyncBackChangeStreamStartedOn = value;
             else ChangeStreamStartedOn = value;
+        }
+
+        public DateTime? GetOriginalChangeStreamStartedOn(bool syncBack)
+            => syncBack ? SyncBackOriginalChangeStreamStartedOn : OriginalChangeStreamStartedOn;
+
+        public void SetOriginalChangeStreamStartedOn(bool syncBack, DateTime? value)
+        {
+            if (syncBack) SyncBackOriginalChangeStreamStartedOn = value;
+            else OriginalChangeStreamStartedOn = value;
         }
 
         public long EstimatedDocCount { get; set; }
