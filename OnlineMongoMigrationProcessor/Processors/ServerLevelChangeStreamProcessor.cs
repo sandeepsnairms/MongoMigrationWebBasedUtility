@@ -802,6 +802,15 @@ namespace OnlineMongoMigrationProcessor
 
         private bool BuildServerLevelNamespaceFilterPipeline(List<BsonDocument> pipeline)
         {
+            // Server-side namespace $match disabled: rely on client-side filtering
+            // (TryResolveQueuedMigrationUnit in TryProcessServerChangeAsync). Large
+            // $or filters were observed to freeze postBatchResumeToken on Atlas
+            // sharded clusters when none of the matching namespaces had recent oplog
+            // activity, while the cluster as a whole was busy.
+            _log.WriteLine($"{_syncBackPrefix}[temp] BuildServerLevelNamespaceFilterPipeline: server-side ns filter disabled by design, using client-side filtering for {_migrationUnitsToProcess.Count} collection(s).", LogType.Info);
+            return false;
+
+#pragma warning disable CS0162 // Unreachable code: kept for one-line revert if server-side filter is re-enabled.
             // In monitor-all mode, keep full stream visibility.
             if (_monitorAllCollections)
             {
@@ -870,6 +879,7 @@ namespace OnlineMongoMigrationProcessor
 
             pipeline.Add(matchStage);
             return true;
+#pragma warning restore CS0162
         }
 
         private bool TryGetMigrationUnitFromSourceNamespace(string databaseName, string collectionName, out MigrationUnit? migrationUnit)
