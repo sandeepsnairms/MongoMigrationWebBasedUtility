@@ -408,6 +408,12 @@ namespace OnlineMongoMigrationProcessor
                 if (mu == null)
                     return false;
 
+                // [temp] Capture stack frame + current resume position the moment we gate this MU out, so we can correlate with the catch site.
+                string tokAtFault = mu.GetResumeToken(_syncBack) ?? string.Empty;
+                _log.WriteLine(
+                    $"{_syncBackPrefix}[temp] HandleOpLogError fired {mu.DatabaseName}.{mu.CollectionName} errorType={errorType} tokenAtFault[hash={ShortHash(tokAtFault)} ts={TryDecodeResumeTokenTimestamp(tokAtFault)}] csLastChange={mu.GetCSLastChangeUTCTime(_syncBack):o} cursorUtc={mu.GetCursorUtcTimestamp(_syncBack):o} stack={new System.Diagnostics.StackTrace(1, false).ToString().Replace(System.Environment.NewLine, " | ")}",
+                    LogType.Info);
+
                 mu.ParentJob = MigrationJobContext.CurrentlyActiveJob;
                 mu.OpLogError = errorType;
                 string reason = errorType == ChangeStreamError.ResumeTokenExpired 
@@ -790,6 +796,18 @@ namespace OnlineMongoMigrationProcessor
             string collectionKey = $"{mu.DatabaseName}.{mu.CollectionName}";
             _log.WriteLine($"{_syncBackPrefix}WatchCollection started for {collectionKey} - Duration: {seconds}s, ResumeToken: {(!string.IsNullOrEmpty(mu.GetResumeToken(_syncBack)) ? "SET" : "NOT SET")}", LogType.Debug);
 
+            // [temp] Entry snapshot: token short-hash + decoded ts, MU error state, last-change ts. Lets us confirm what we are resuming from and verify the manual reset took effect.
+            {
+                string tokIn = mu.GetResumeToken(_syncBack) ?? string.Empty;
+                string tokInHash = ShortHash(tokIn);
+                string tokInTs = TryDecodeResumeTokenTimestamp(tokIn);
+                string csLastTok = mu.GetCSLastResumeTokenWithChange(_syncBack) ?? string.Empty;
+                string csLastHash = ShortHash(csLastTok);
+                _log.WriteLine(
+                    $"{_syncBackPrefix}[temp] WatchCollection entry {collectionKey} opLogError={mu.OpLogError} resetFlag={mu.ResetChangeStream} resumeToken[hash={tokInHash} ts={tokInTs}] csLastTokenHash={csLastHash} csLastChange={mu.GetCSLastChangeUTCTime(_syncBack):o} cursorUtc={mu.GetCursorUtcTimestamp(_syncBack):o}",
+                    LogType.Info);
+            }
+
             BsonDocument userFilterDoc = MongoHelper.GetFilterDoc(mu.UserFilter);
                         
             AccumulatedChangesTracker accumulatedChangesInColl;
@@ -853,10 +871,22 @@ namespace OnlineMongoMigrationProcessor
                     if (cursor == null)
                     {
                         MigrationJobContext.AddVerboseLog($"{_syncBackPrefix}Cursor is null for {collectionKey}");
+                        // [temp] Cursor came back null — highly unusual, surface it explicitly so we can spot why.
+                        _log.WriteLine($"{_syncBackPrefix}[temp] Cursor is NULL after CreateChangeStreamCursorAsync for {collectionKey} — returning early", LogType.Info);
                         return;
                     }
 
                     MigrationJobContext.AddVerboseLog($"{_syncBackPrefix} Cursor created for {collectionKey} in {cursorCreationSw.Elapsed.TotalSeconds:F1}s. Starting processing...");
+
+                    // [temp] Cursor created — confirm timing and which resume strategy is in effect (ResumeAfter vs StartAtOperationTime).
+                    string strat = options.ResumeAfter != null
+                        ? $"ResumeAfter[hash={ShortHash(options.ResumeAfter.ToJson())}]"
+                        : options.StartAtOperationTime != null
+                            ? $"StartAtOperationTime[{options.StartAtOperationTime}]"
+                            : "None";
+                    _log.WriteLine(
+                        $"{_syncBackPrefix}[temp] Cursor created {collectionKey} createMs={cursorCreationSw.ElapsedMilliseconds} strategy={strat} batchSize={GetChangeStreamBatchSize()} pipelineStages={pipelineArray.Length}",
+                        LogType.Info);
 
                     // 2. Process cursor with a fresh batch-duration CTS that starts NOW
                     //    (after cursor creation), so processing always gets the full batch time.
@@ -881,16 +911,22 @@ namespace OnlineMongoMigrationProcessor
                 }
                 catch(Exception ex) when (ex.Message.Contains("CollectionScan died due to position in capped collection being deleted"))
                 {
+                    // [temp] Capture the exact resume position when the cap-coll catch fires so we can correlate with oplog window.
+                    _log.WriteLine($"{_syncBackPrefix}[temp] CollectionScan-died catch fired {collectionKey} currentPos[hash={ShortHash(currentPos)} ts={TryDecodeResumeTokenTimestamp(currentPos)}] msg={ex.Message}", LogType.Info);
                     _log.WriteLine($"{_syncBackPrefix}Change stream position invalidated for {collectionKey} - oplog position was deleted. Will not be processed for Change stream.", LogType.Warning);
                     HandleOpLogError(mu); 
                 }
                 catch (Exception ex) when (ex.Message.Contains("Expired resume token or cursor")|| ex.Message.Contains("resume point may no longer be in the oplog"))
                 {
+                    // [temp] Capture decoded resume-token timestamp so we know how far behind the oplog window we were when this fired.
+                    _log.WriteLine($"{_syncBackPrefix}[temp] Expired-resume-token catch fired {collectionKey} currentPos[hash={ShortHash(currentPos)} ts={TryDecodeResumeTokenTimestamp(currentPos)}] msg={ex.Message}", LogType.Info);
                     _log.WriteLine($"{_syncBackPrefix}Expired resume token or cursor for {collectionKey} - oplog position {currentPos} was deleted. Will not be processed for Change stream.", LogType.Warning);
                     HandleOpLogError(mu);
                 }
                 catch (OperationCanceledException) when (cursorCreationTimedOut)
                 {
+                    // [temp] Cursor-creation timeout. Add resume-token snapshot for correlation.
+                    _log.WriteLine($"{_syncBackPrefix}[temp] Cursor-creation timeout catch fired {collectionKey} currentPos[hash={ShortHash(currentPos)} ts={TryDecodeResumeTokenTimestamp(currentPos)}]", LogType.Info);
                     _log.WriteLine($"{_syncBackPrefix}Cursor creation timed out (5 min) for {collectionKey}. Marking as WatchFailed.", LogType.Warning);
                     HandleOpLogError(mu, ChangeStreamError.WatchFailed);
                 }
@@ -1176,6 +1212,12 @@ namespace OnlineMongoMigrationProcessor
 
             var rawWatchSummary = CreateTempRawWatchSummary();
 
+            // [temp] Per-round counters so we can see if cursor.MoveNextAsync ever returned a non-empty batch.
+            long tmpMoveNextCalls = 0;
+            long tmpMoveNextWithBatch = 0;
+            long tmpRawEventsRead = 0;
+            bool tmpFirstEventLogged = false;
+
             using (cursor)
             {
                 try
@@ -1186,6 +1228,7 @@ namespace OnlineMongoMigrationProcessor
                     while (DateTime.UtcNow < batchDeadline && !cancellationToken.IsCancellationRequested)
                     {
                         var hasNext = await cursor.MoveNextAsync(cancellationToken);
+                        tmpMoveNextCalls++;
                         if (!hasNext)
                         {
                             readStopwatch.Stop();
@@ -1197,11 +1240,26 @@ namespace OnlineMongoMigrationProcessor
                         readStopwatch.Stop();
                         accumulatedChangesInColl.CSTotalReadDurationInMS += readStopwatch.ElapsedMilliseconds;
 
+                        int tmpBatchCount = cursor.Current?.Count() ?? 0;
+                        if (tmpBatchCount > 0)
+                        {
+                            tmpMoveNextWithBatch++;
+                            tmpRawEventsRead += tmpBatchCount;
+                        }
 
                         foreach (var change in cursor.Current)
                         {
                             // Capture every raw event as soon as it is read from the cursor.
                             AddTempRawReceivedEvent(rawWatchSummary, change);
+
+                            // [temp] First event seen this round — confirms cursor is actually yielding data and shows op type + doc key.
+                            if (!tmpFirstEventLogged)
+                            {
+                                tmpFirstEventLogged = true;
+                                _log.WriteLine(
+                                    $"{_syncBackPrefix}[temp] First event {collectionKey} op={change.OperationType} docKey={change.DocumentKey?.ToJson() ?? "<null>"} eventTokenHash={ShortHash(change.ResumeToken.ToJson())} eventTs={GetChangeTimestampUtc(change):o}",
+                                    LogType.Info);
+                            }
 
                             if (cancellationToken.IsCancellationRequested || ExecutionCancelled)
                             {
@@ -1305,6 +1363,15 @@ namespace OnlineMongoMigrationProcessor
                             string? tokenJson = postBatchToken?.ToJson();
                             var (_, currentResumeToken, _, _) = GetResumeParameters(mu);
 
+                            // [temp] Idle-round summary: did cursor produce anything? did postBatchResumeToken advance vs what we sent in?
+                            string inHash = ShortHash(currentResumeToken);
+                            string outHash = ShortHash(tokenJson ?? string.Empty);
+                            string outTs = TryDecodeResumeTokenTimestamp(tokenJson ?? string.Empty);
+                            bool willSaveToken = !string.IsNullOrEmpty(tokenJson) && tokenJson != currentResumeToken;
+                            _log.WriteLine(
+                                $"{_syncBackPrefix}[temp] idleRound {collectionKey} moveNext={tmpMoveNextCalls} withBatch={tmpMoveNextWithBatch} rawEvents={tmpRawEventsRead} postBatchToken[hash={outHash} ts={outTs}] in[hash={inHash}] advanced={(inHash != outHash)} willSaveToken={willSaveToken} postBatchNull={(postBatchToken == null)}",
+                                LogType.Info);
+
                             // Always stamp CursorUtcTimestamp = now on idle cycles so the
                             // UI reflects that the watch is alive. On a truly idle cursor
                             // postBatchResumeToken often equals the ResumeAfter token we
@@ -1327,6 +1394,14 @@ namespace OnlineMongoMigrationProcessor
                         {
                             _log.WriteLine($"{_syncBackPrefix}Could not retrieve postBatchResumeToken for {collectionKey}: {ex.Message}", LogType.Debug);
                         }
+                    }
+                    else
+                    {
+                        // [temp] Non-idle round summary: events flowed; flush has already advanced mu.ResumeToken. Confirm the new saved token.
+                        var (_, savedTok, _, _) = GetResumeParameters(mu);
+                        _log.WriteLine(
+                            $"{_syncBackPrefix}[temp] eventsRound {collectionKey} moveNext={tmpMoveNextCalls} withBatch={tmpMoveNextWithBatch} rawEvents={tmpRawEventsRead} totalEventCount={accumulatedChangesInColl.TotalEventCount} savedTokenAfterFlush[hash={ShortHash(savedTok)} ts={TryDecodeResumeTokenTimestamp(savedTok)}]",
+                            LogType.Info);
                     }
                 }
             }
@@ -1624,6 +1699,33 @@ namespace OnlineMongoMigrationProcessor
             var renderArgs = new RenderArgs<BsonDocument>(documentSerializer, serializerRegistry);
             return filter.Render(renderArgs);
 #endif
+        }
+
+        // [temp] Short stable identifier for a resume token (last 12 chars) so we can compare tokens across rounds without dumping the full BSON.
+        private static string ShortHash(string token)
+        {
+            if (string.IsNullOrEmpty(token)) return "<empty>";
+            int len = token.Length;
+            return len <= 12 ? token : token.Substring(len - 12);
+        }
+
+        // [temp] Decode the leading 4-byte unix timestamp embedded in a v1 resume token (_data hex starts with type byte 0x82 then 4 bytes BE seconds). Returns "?" if not parseable.
+        private static string TryDecodeResumeTokenTimestamp(string tokenJson)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(tokenJson)) return "?";
+                var doc = BsonDocument.Parse(tokenJson);
+                if (!doc.Contains("_data")) return "?";
+                string hex = doc["_data"].AsString;
+                if (hex.Length < 10) return "?";
+                uint seconds = Convert.ToUInt32(hex.Substring(2, 8), 16);
+                return DateTimeOffset.FromUnixTimeSeconds(seconds).UtcDateTime.ToString("o");
+            }
+            catch
+            {
+                return "?";
+            }
         }
 
     }
