@@ -400,7 +400,14 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
             }
             catch (MongoCommandException ex) when (ex.Code == 40324 || ex.Code == 59)
             {
-                log.WriteLine($"Source does not support Atlas search-index discovery for {sourceCollection.CollectionNamespace}.", LogType.Debug);
+                log.WriteLine($"Search-index discovery is not supported by the source for {sourceCollection.CollectionNamespace}.", LogType.Debug);
+                return new List<BsonDocument>();
+            }
+            catch (MongoCommandException ex) when (
+                ex.Message.Contains("requires additional configuration", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("connect to Atlas", StringComparison.OrdinalIgnoreCase))
+            {
+                log.WriteLine($"Search-index discovery is unavailable on the source for {sourceCollection.CollectionNamespace}.", LogType.Debug);
                 return new List<BsonDocument>();
             }
             catch (Exception ex)

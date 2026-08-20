@@ -43,6 +43,7 @@
                                     <option value="MongoDump and MongoRestore">MongoDump and MongoRestore</option>
                                 }
                                 <option value="MongoDB Driver">MongoDB Driver</option>
+                                <option value="Storage Validation">Storage Validation</option>
                                 @if (!MigrationJobContext.IsLegacyDriver)
                                 {
                                     <option value="MongoDB Driver (Cosmos DB RU read optimized)">MongoDB Driver (Cosmos DB RU read optimized)</option>
@@ -81,9 +82,9 @@
                         <label for="migration-mode" class="form-label" title="Online migration allows live data replication during the process.">
                             Migration Mode
                         </label>                
-                        <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode || MigrationJobContext.IsLegacyDriver)">
+                        <select id="migration-mode" value="@SelectedMode"  class="form-select" @onchange="OnModeSelectionChanged" disabled="@(!NewMode || MigrationJobContext.IsLegacyDriver || jobType == JobType.StorageValidation)">
                             <option value="Offline">Offline</option>
-                            @if (!MigrationJobContext.IsLegacyDriver)
+                            @if (!MigrationJobContext.IsLegacyDriver && jobType != JobType.StorageValidation)
                             {
                                 <option value="Online">Online</option>
                             }
@@ -116,7 +117,7 @@
                         <label for="change-stream-scope" class="form-label" title="Specify the scope of change stream monitoring during online migration.">
                             Change Stream Scope
                         </label>                
-                        <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy)">
+                        <select id="change-stream-scope" value="@SelectedChangeStreamScope" class="form-select" @onchange="OnChangeStreamScopeChanged" disabled="@(cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy || jobType == JobType.StorageValidation)">
                             <option value="Collection" title="Monitor changes at the collection level. Use when collect count is less than 200">Collection</option>
                             <option value="Server" title="Monitor changes at the server level across all databases. Recommended when migration hundreds of collections.">Server</option>
                         </select>
@@ -156,7 +157,7 @@
                         <label for="change-stream-mode" class="form-label" title="Configure when change stream processing begins during migration.">
                             Change Stream Mode
                         </label>                
-                        <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy || changeStreamLevel == ChangeStreamLevel.Server)">
+                        <select id="change-stream-mode" value="@SelectedChangeStreamMode" class="form-select" @onchange="OnChangeStreamModeChanged" disabled="@(!NewMode || cdcMode == CDCMode.Offline || jobType == JobType.RUOptimizedCopy || jobType == JobType.StorageValidation || changeStreamLevel == ChangeStreamLevel.Server)">
                             <option value="Delayed" title="Start change stream processing after all collections are completed. This mode is ideal when migrating a large number of collections.">Delayed</option>
                             <option value="Immediate" title="Start change stream processing immediately as each collection is processed.">Immediate</option>
                             <option value="Aggressive" title="Use aggressive change stream processing when the oplog is small or the write rate is very high. Avoid this mode if a large number of collections need to be migrated.">Aggressive</option>
@@ -165,14 +166,14 @@
                     <div class="mb-3 checkbox-container">
                         <div class="checkbox-group">
                             <label title="Enable syncing back to the source after migration. Helps reduce risk by allowing a rollback to the original server if needed.">
-                                <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline || isSimulatedRun)" @bind="enableSyncBack" />
+                                <input type="checkbox" id="enableSyncBack" disabled="@(!NewMode || cdcMode == CDCMode.Offline || isSimulatedRun || jobType == JobType.StorageValidation)" @bind="enableSyncBack" />
                                 Post Migration Sync Back
                             </label>
                         </div>
                     </div>
                     <div class="mb-3">
                         <label for="isSimulatedRun" class="form-label" title="Enable simulated run where no actual writes will occur on the target database.">
-                            <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode)" @bind="isSimulatedRun" @bind:after="OnSimulationModeChanged" />
+                            <input type="checkbox" id="isSimulatedRun" disabled="@(!NewMode || jobType == JobType.StorageValidation)" @bind="isSimulatedRun" @bind:after="OnSimulationModeChanged" />
                             Simulation Mode (No Writes to Target)
                         </label>
                     </div>
@@ -379,6 +380,7 @@
         {
             "MongoDump and MongoRestore" => JobType.DumpAndRestore,
             "MongoDB Driver (Cosmos DB RU read optimized)" => JobType.RUOptimizedCopy,
+            "Storage Validation" => JobType.StorageValidation,
             _ => JobType.MongoDriver
         };
 
@@ -388,6 +390,16 @@
             SelectedChangeStreamScope = "Collection"; // Set to Collection for RU optimized copy
             changeStreamMode = ChangeStreamMode.Immediate; // Force to Immediate
             changeStreamLevel = ChangeStreamLevel.Collection; // Force to Collection level
+        }
+
+        if (jobType == JobType.StorageValidation)
+        {
+            cdcMode = CDCMode.Offline;
+            SelectedMode = "Offline";
+            enableSyncBack = false;
+            isSimulatedRun = false;
+            changeStreamLevel = ChangeStreamLevel.Collection;
+            SelectedChangeStreamScope = "Collection";
         }
 
         // Sync Only is only supported for MongoDump and MongoRestore jobs. If the tool is switched
@@ -441,6 +453,7 @@
             {
                 JobType.DumpAndRestore => "MongoDump and MongoRestore",
                 JobType.RUOptimizedCopy => "MongoDB Driver (Cosmos DB RU read optimized)",
+                JobType.StorageValidation => "Storage Validation",
                 _ => "MongoDB Driver"
             };
             isSimulatedRun = Job?.IsSimulatedRun ?? false;
