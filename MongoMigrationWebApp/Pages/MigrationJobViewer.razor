@@ -364,7 +364,6 @@
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                 : mu.SourceStatus == CollectionStatus.IsTimeSeries ? "Skipped (TIMESERIES)"
                                                 : mu.SkippedDueToMaxRetries ? "Skipped (Max Retries)"
-                                                : mu.SkippedForStorageValidation ? "Skipped (not selected for drop)"
                                                 : (mu.DumpComplete ? "Success" : $"{mu.DumpPercent:F1}%"))
 
                         </td>
@@ -376,7 +375,6 @@
                                                     : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                     : mu.SourceStatus == CollectionStatus.IsTimeSeries ? "Skipped (TIMESERIES)"
                                                     : mu.SkippedDueToMaxRetries ? "Skipped (Max Retries)"
-                                                    : mu.SkippedForStorageValidation ? "Skipped (not selected for drop)"
                                                     : (mu.RestoreComplete || mu.RestorePercent == 100 ? "Success" : $"{mu.RestorePercent:F1}%"))
 
                             </td>
@@ -701,7 +699,6 @@ else if (@_showLogBackupFile)
                                                 : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                 : mu.SourceStatus == CollectionStatus.IsTimeSeries ? "Skipped (TIMESERIES)"
                                                 : mu.SkippedDueToMaxRetries ? "Skipped (Max Retries)"
-                                                : mu.SkippedForStorageValidation ? "Skipped (not selected for drop)"
                                                 : (mu.DumpComplete ? "Success" : $"{mu.DumpPercent:F1}%");
             if (sourceStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                 return true;
@@ -713,7 +710,6 @@ else if (@_showLogBackupFile)
                                                     : mu.SourceStatus == CollectionStatus.IsView ? "Skipped (VIEW)"
                                                     : mu.SourceStatus == CollectionStatus.IsTimeSeries ? "Skipped (TIMESERIES)"
                                                     : mu.SkippedDueToMaxRetries ? "Skipped (Max Retries)"
-                                                    : mu.SkippedForStorageValidation ? "Skipped (not selected for drop)"
                                                     : (mu.RestoreComplete || mu.RestorePercent == 100 ? "Success" : $"{mu.RestorePercent:F1}%");
                 if (uploadStatus.Contains(searchText, StringComparison.OrdinalIgnoreCase))
                     return true;
@@ -1364,6 +1360,37 @@ else if (@_showLogBackupFile)
         return Task.FromResult(false);
     }
 
+    private static string GetIndexStatus(MigrationUnitBasic mu)
+    {
+        if (mu.SourceStatus == CollectionStatus.NotFound
+            || mu.SourceStatus == CollectionStatus.IsView
+            || mu.SourceStatus == CollectionStatus.IsTimeSeries)
+        {
+            return "N/A";
+        }
+
+        if (mu.IndexBuildCompleteExplicit)
+        {
+            return mu.IndexesFailed > 0
+                ? $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes ({mu.IndexesFailed} failed)"
+                : $"{mu.IndexesMigrated} indexes (Success)";
+        }
+
+        if (mu.IndexPercent >= 100)
+        {
+            return mu.IndexesExpected > 0
+                ? $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes (Verification pending)"
+                : "Verification pending";
+        }
+
+        if (mu.IndexPercent > 0 || mu.IndexesExpected > 0)
+        {
+            return $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes ({Math.Max(0, mu.IndexPercent):F1}%)";
+        }
+
+        return mu.DumpComplete && mu.RestoreComplete ? "Pending" : "—";
+    }
+
     private bool CheckCutoverReadiness()
     {
         if (!Helper.IsOfflineJobCompleted(CurrentlyLoadedMigrationJob))
@@ -1389,38 +1416,6 @@ else if (@_showLogBackupFile)
         //     }
         // }
         // return true;
-    }
-
-    private static string GetIndexStatus(MigrationUnitBasic mu)
-    {
-        if (mu.SourceStatus == CollectionStatus.NotFound
-            || mu.SourceStatus == CollectionStatus.IsView
-            || mu.SourceStatus == CollectionStatus.IsTimeSeries
-            || mu.SkippedForStorageValidation)
-        {
-            return "N/A";
-        }
-
-        if (mu.IndexBuildCompleteExplicit)
-        {
-            return mu.IndexesFailed > 0
-                ? $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes ({mu.IndexesFailed} failed)"
-                : $"{mu.IndexesMigrated} indexes (Success)";
-        }
-
-        if (mu.IndexPercent >= 100)
-        {
-            return mu.IndexesExpected > 0
-                ? $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes (Verification pending)"
-                : "Verification pending";
-        }
-
-        if (mu.IndexPercent > 0 || mu.IndexesExpected > 0)
-        {
-            return $"{mu.IndexesMigrated} of {mu.IndexesExpected} indexes ({Math.Max(0, mu.IndexPercent):F1}%)";
-        }
-
-        return mu.DumpComplete && mu.RestoreComplete ? "Pending" : "—";
     }
 
     protected override async Task OnParametersSetAsync()

@@ -310,7 +310,7 @@ namespace OnlineMongoMigrationProcessor.Processors
             var targetCollectionName = mu.GetEffectiveTargetCollectionName();
             var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, targetDatabaseName, targetCollectionName);
 
-            bool isBlocking = activeJob.JobType == JobType.StorageValidation
+            bool isBlocking = !Helper.IsOnline(activeJob)
                 || mu.IndexingStrategy.Value == IndexingStrategy.SameAsSourceBlocking;
 
             // Authoritative resume check: if the target already has all expected non-unique
@@ -424,11 +424,9 @@ namespace OnlineMongoMigrationProcessor.Processors
             }
 
             // The source pre-count includes definitions that the target copier may intentionally
-            // reject as unsupported. Completion must wait for indexes actually accepted for
-            // creation, otherwise the verifier stalls waiting for indexes that will never exist.
+            // reject as unsupported. Wait only for indexes accepted for creation.
             mu.IndexesMigrated = count;
             mu.IndexesExpected = count;
-            mu.NonUniqueIndexCountsNormalized = true;
             MigrationJobContext.SaveMigrationUnit(mu, true);
 
             if (count == 0)
@@ -467,9 +465,8 @@ namespace OnlineMongoMigrationProcessor.Processors
         private async Task<bool> WaitForIndexBuildsAsync(MigrationUnit mu, string targetConnStr, string databaseName, string collectionName)
         {
             var namespaceForLog = Log.FormatNamespaceForLog(mu.DatabaseName, mu.CollectionName, databaseName, collectionName);
-            bool isStorageValidation = MigrationJobContext.CurrentlyActiveJob?.JobType == JobType.StorageValidation;
-            int pollIntervalMs = isStorageValidation ? 10000 : 60000;
-            int maxAttempts = (int)(TimeSpan.FromHours(12).TotalMilliseconds / pollIntervalMs);
+            const int pollIntervalMs = 60000;
+            const int maxAttempts = 8640; // ~12 hours at 5s intervals
             const int maxStallChecks = 3; // ~3 stall confirmations (~3-6 minutes after first stall) before we unblock
             int consecutiveZeroPolls = 0;
             int stallChecks = 0;
@@ -526,26 +523,6 @@ namespace OnlineMongoMigrationProcessor.Processors
                                 MigrationJobContext.SaveMigrationUnit(mu, true);
                                 _log.WriteLine($"Blocking index builds completed for {namespaceForLog}");
                                 _log.ShowInMonitor($"Index builds completed for {namespaceForLog} ({builtOnTarget}/{mu.IndexesExpected}).");
-                                return true;
-                            }
-
-                            if (isStorageValidation && builtOnTarget >= 0)
-                            {
-                                var failedCount = mu.NonUniqueIndexCountsNormalized
-                                    ? Math.Max(0, mu.IndexesExpected - builtOnTarget)
-                                    : 0;
-                                if (!mu.NonUniqueIndexCountsNormalized)
-                                {
-                                    mu.IndexesExpected = builtOnTarget;
-                                    mu.NonUniqueIndexCountsNormalized = true;
-                                }
-                                mu.IndexesFailed = failedCount;
-                                mu.IndexesMigrated = builtOnTarget;
-                                mu.IndexPercent = 100;
-                                mu.IndexBuildComplete = true;
-                                MigrationJobContext.SaveMigrationUnit(mu, true);
-                                _log.WriteLine($"Storage validation found no active index builds for {namespaceForLog}; {builtOnTarget}/{mu.IndexesExpected} accepted index(es) are present. Continuing with actual target index storage and recording {failedCount} failed index(es).", LogType.Warning);
-                                _log.ShowInMonitor($"Index verification completed for {namespaceForLog}: {builtOnTarget}/{mu.IndexesExpected} present, {failedCount} failed. Storage validation will use actual target index storage.", LogType.Warning);
                                 return true;
                             }
 

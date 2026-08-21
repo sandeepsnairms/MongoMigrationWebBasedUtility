@@ -77,7 +77,7 @@ namespace OnlineMongoMigrationProcessor
 
         public static bool IsMigrationUnitValid(MigrationUnitBasic mu)
         {
-            return mu.SourceStatus == CollectionStatus.OK && !mu.SkippedForStorageValidation;
+            return mu.SourceStatus == CollectionStatus.OK;
         }
 
         public static bool CanProceedWithDownloads(string directoryPath,long spaceRequiredInMb, out double folderSizeInGB, out double freeSpaceGB)

@@ -398,16 +398,9 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                     .Select(value => value.AsBsonDocument)
                     .ToList();
             }
-            catch (MongoCommandException ex) when (ex.Code == 40324 || ex.Code == 59)
+            catch (MongoCommandException ex) when (IsUnsupportedAtlasSearchDiscovery(ex))
             {
-                log.WriteLine($"Search-index discovery is not supported by the source for {sourceCollection.CollectionNamespace}.", LogType.Debug);
-                return new List<BsonDocument>();
-            }
-            catch (MongoCommandException ex) when (
-                ex.Message.Contains("requires additional configuration", StringComparison.OrdinalIgnoreCase)
-                || ex.Message.Contains("connect to Atlas", StringComparison.OrdinalIgnoreCase))
-            {
-                log.WriteLine($"Search-index discovery is unavailable on the source for {sourceCollection.CollectionNamespace}.", LogType.Debug);
+                log.WriteLine($"Source does not support Atlas search-index discovery for {sourceCollection.CollectionNamespace}.", LogType.Debug);
                 return new List<BsonDocument>();
             }
             catch (Exception ex)
@@ -415,6 +408,14 @@ namespace OnlineMongoMigrationProcessor.Helpers.Mongo
                 log.WriteLine($"Unable to discover Atlas search indexes for {sourceCollection.CollectionNamespace}: {ex.Message}", LogType.Warning);
                 return new List<BsonDocument>();
             }
+        }
+
+        private static bool IsUnsupportedAtlasSearchDiscovery(MongoCommandException exception)
+        {
+            return exception.Code == 40324
+                || exception.Code == 59
+                || exception.Message.Contains("requires additional configuration", StringComparison.OrdinalIgnoreCase)
+                || exception.Message.Contains("connect to Atlas", StringComparison.OrdinalIgnoreCase);
         }
 
         private static int CountVectorFields(BsonDocument searchIndex)

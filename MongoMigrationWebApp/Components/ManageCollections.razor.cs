@@ -193,7 +193,6 @@ namespace MongoMigrationWebApp.Components
             if (u.SourceStatus == CollectionStatus.IsView) return "Skipped (VIEW)";
             if (u.SourceStatus == CollectionStatus.IsTimeSeries) return "Skipped (TIMESERIES)";
             if (u.SkippedDueToMaxRetries) return "Skipped (Max Retries)";
-            if (u.SkippedForStorageValidation) return "Skipped (not selected for drop)";
             return u.SourceStatus.ToString();
         }
 

@@ -11,6 +11,5 @@ namespace OnlineMongoMigrationProcessor.Models
         MongoDriver,
         DumpAndRestore,
         RUOptimizedCopy,
-        StorageValidation,
     }
 }

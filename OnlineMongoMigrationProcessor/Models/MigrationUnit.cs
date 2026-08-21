@@ -92,7 +92,6 @@ namespace OnlineMongoMigrationProcessor
         /// Used for in-progress UI display while server-side blocking builds are queued/running.
         /// </summary>
         public int IndexesExpected { get; set; }
-        public bool NonUniqueIndexCountsNormalized { get; set; }
         /// <summary>
         /// Number of non-unique indexes the server failed to build (or that never appeared on the
         /// target) after the build phase was unblocked due to a stall. Surfaced in the UI alongside
@@ -118,7 +117,6 @@ namespace OnlineMongoMigrationProcessor
 
         // Skip tracking for max retries exceeded
         public bool SkippedDueToMaxRetries { get; set; } = false;
-        public bool SkippedForStorageValidation { get; set; } = false;
         public string? FailedOperation { get; set; } = null; // "Dump" or "Restore"
 
         public bool Remove()
@@ -306,8 +304,6 @@ namespace OnlineMongoMigrationProcessor
         // Used by ProcessExecutor to convert mongorestore's byte-progress output
         // into an approximate restored doc count so % completion updates mid-restore.
         public long AvgDocSizeBytes { get; set; }
-
-        public StorageValidationResult? StorageValidationResult { get; set; }
 
         public long CSDInsertEvents { get; set; }
         public long CSDeleteEvents { get; set; }

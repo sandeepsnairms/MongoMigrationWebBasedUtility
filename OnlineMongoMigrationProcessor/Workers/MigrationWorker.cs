@@ -120,9 +120,6 @@ namespace OnlineMongoMigrationProcessor.Workers
         /// </summary>
         private bool GetEffectiveBlockingIndexes(MigrationUnit mu)
         {
-            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.StorageValidation)
-                return true;
-
             if (mu.IndexingStrategy.HasValue)
                 return mu.IndexingStrategy.Value == IndexingStrategy.SameAsSourceBlocking;
 
@@ -374,14 +371,6 @@ namespace OnlineMongoMigrationProcessor.Workers
             if (_config == null)
                 _config = new MigrationSettings();
 
-            if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.StorageValidation
-                && (MigrationJobContext.CurrentlyActiveJob.CDCMode != CDCMode.Offline
-                    || MigrationJobContext.CurrentlyActiveJob.IsSimulatedRun))
-            {
-                _log.WriteLine("Storage Validation only supports offline, non-simulated jobs.", LogType.Error);
-                return TaskResult.Abort;
-            }
-
             if (string.IsNullOrWhiteSpace(MigrationJobContext.SourceConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]))
                 return TaskResult.FailedAfterRetries;
 
@@ -470,10 +459,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                 case JobType.RUOptimizedCopy:
             _migrationProcessor = new RUCopyProcessor(_log, _sourceClient!, _config, this);
                     _log.WriteLine("RUCopyProcessor created for RUOptimizedCopy job type", LogType.Debug);
-                    break;
-                case JobType.StorageValidation:
-                    _migrationProcessor = new StorageValidationProcessor(_log, _sourceClient!, _config, this);
-                    _log.WriteLine("StorageValidationProcessor created for StorageValidation job type", LogType.Debug);
                     break;
                 default:
                     _log.WriteLine($"Unknown JobType: {MigrationJobContext.CurrentlyActiveJob.JobType}. Defaulting to MongoDriver.", LogType.Error);
@@ -565,14 +550,7 @@ namespace OnlineMongoMigrationProcessor.Workers
             
             try
             {
-                if (MigrationJobContext.CurrentlyActiveJob?.JobType == JobType.StorageValidation)
-                {
-                    chunks = new List<MigrationChunk>
-                    {
-                        new MigrationChunk(string.Empty, string.Empty, DataType.Other, false, false)
-                    };
-                }
-                else if (MigrationJobContext.CurrentlyActiveJob?.JobType == JobType.RUOptimizedCopy)
+                if (MigrationJobContext.CurrentlyActiveJob?.JobType == JobType.RUOptimizedCopy)
                 {
                     _log.WriteLine($"Creating RU-optimized partitions for {mu.DatabaseName}.{mu.CollectionName}", LogType.Debug);
                     chunks=new RUPartitioner().CreatePartitions(_log, _sourceClient!, mu.DatabaseName, mu.CollectionName, _cts);
@@ -919,14 +897,6 @@ namespace OnlineMongoMigrationProcessor.Workers
                     if (processor == null)
                         return;
                     bool canProceed = await processor.BuildNonUniqueIndexesAfterCopyAsync(mu);
-                    if (canProceed && MigrationJobContext.CurrentlyActiveJob.JobType == JobType.StorageValidation)
-                    {
-                        var targetClient = MongoClientFactory.Create(
-                            _log,
-                            MigrationJobContext.TargetConnectionString[MigrationJobContext.CurrentlyActiveJob.Id]);
-                        mu.StorageValidationResult = await StorageValidationCalculator.CalculateAsync(_sourceClient!, targetClient, mu, CancellationToken.None);
-                        MigrationJobContext.SaveMigrationUnit(mu, true);
-                    }
                     if (canProceed)
                         processor.AddCollectionToChangeStreamQueue(mu);
                 }
@@ -1638,23 +1608,6 @@ namespace OnlineMongoMigrationProcessor.Workers
 
                         mu.SourceStatus = CollectionStatus.OK;
                         await UpdateDocumentCountsAsync(mu, ctsToken);
-
-                        if (MigrationJobContext.CurrentlyActiveJob.JobType == JobType.StorageValidation
-                            && mu.Overwrite != true)
-                        {
-                            mu.SkippedForStorageValidation = true;
-                            mu.DumpComplete = true;
-                            mu.DumpPercent = 100;
-                            mu.RestoreComplete = true;
-                            mu.RestorePercent = 100;
-                            mu.IndexBuildComplete = true;
-                            mu.IndexPercent = 100;
-                            MigrationJobContext.SaveMigrationUnit(mu, true);
-                            _log.WriteLine($"Skipping storage validation for {mu.DatabaseName}.{mu.CollectionName}: collection was not selected for drop.", LogType.Warning);
-                            return TaskResult.Success;
-                        }
-
-                        mu.SkippedForStorageValidation = false;
 
                         await ValidateTargetCollectionExistsAsync(mu);
 

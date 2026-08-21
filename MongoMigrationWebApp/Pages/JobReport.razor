@@ -68,19 +68,13 @@ else
                 <tr><td class="nowrap">Job Name</td><td class="wrap">@MigrationJob.Name</td></tr>
                 <tr><td class="nowrap">Job Type</td><td>@GetToolName(MigrationJob.JobType)</td></tr>
                 <tr><td class="nowrap">Started On (UTC)</td><td>@(MigrationJob.StartedOn?.ToString() ?? "N/A")</td></tr>
-                @if (MigrationJob.JobType != JobType.StorageValidation)
+                <tr><td class="nowrap">Is Online</td><td>@(Helper.IsOnline(MigrationJob) ? "Yes" : "No")</td></tr>
+                @if (Helper.IsOnline(MigrationJob))
                 {
-                    <tr><td class="nowrap">Is Online</td><td>@(Helper.IsOnline(MigrationJob) ? "Yes" : "No")</td></tr>
-                    @if (Helper.IsOnline(MigrationJob))
-                    {
-                        <tr><td class="nowrap">Change Stream Mode</td><td>@Helper.GetChangeStreamMode(MigrationJob)</td></tr>
-                    }
+                    <tr><td class="nowrap">Change Stream Mode</td><td>@Helper.GetChangeStreamMode(MigrationJob)</td></tr>
                 }
                 <tr><td class="nowrap">Is Completed</td><td>@(MigrationJob.IsCompleted ? "Yes" : "No")</td></tr>
-                @if (MigrationJob.JobType != JobType.StorageValidation)
-                {
-                    <tr><td class="nowrap">Sync Back Enabled</td><td>@(MigrationJob.SyncBackEnabled ? "Yes" : "No")</td></tr>
-                }
+                <tr><td class="nowrap">Sync Back Enabled</td><td>@(MigrationJob.SyncBackEnabled ? "Yes" : "No")</td></tr>
                 <tr><td class="nowrap">Source Endpoint</td><td class="wrap">@MigrationJob.SourceEndpoint</td></tr>
                 <tr><td class="nowrap">Target Endpoint</td><td class="wrap">@MigrationJob.TargetEndpoint</td></tr>
                 <tr><td class="nowrap">Collection Count</td><td>@(@JobManager.GetMigrationUnits(MigrationJob)?.Count ?? 0)</td></tr>
@@ -88,175 +82,8 @@ else
         </table>
     </div>
 
-    @if (MigrationJob.JobType == JobType.StorageValidation)
-    {
-        <div class="section-title">Storage Validation</div>
-
-        @foreach (var skipped in GetStorageValidationUnits().Where(mu => mu.SkippedForStorageValidation))
-        {
-            <div class="alert alert-secondary py-1 mb-1">
-                @skipped.DatabaseName.@skipped.CollectionName: Skipped (not selected for drop)
-            </div>
-        }
-
-        <table class="table table-bordered table-striped table-tight small-text">
-            <thead>
-                <tr>
-                    <th>Namespace</th>
-                    <th>Source Docs</th>
-                    <th>Source Data</th>
-                    <th>Source Indexes</th>
-                    <th>Source Total</th>
-                    <th>Target Sample Docs</th>
-                    <th>Target Sample Data</th>
-                    <th>Target Sample Indexes</th>
-                    <th>Target Sample Total</th>
-                    <th>Target Data / Doc</th>
-                    <th>Target Index / Doc</th>
-                    <th>Target Total / Doc</th>
-                    <th>Projected Target Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var mu in GetStorageValidationUnits().Where(mu => mu.StorageValidationResult != null))
-                {
-                    var result = mu.StorageValidationResult!;
-                    <tr>
-                        <td>@mu.DatabaseName.@mu.CollectionName</td>
-                        <td>@FormatLong(result.EstimatedSourceDocumentCount)</td>
-                        <td>@FormatBytes(result.SourceDataBytes)</td>
-                        <td>@FormatBytes(result.SourceIndexBytes)</td>
-                        <td>@FormatBytes(result.SourceUsedBytes)</td>
-                        <td>@FormatLong(result.SampledDocumentCount)</td>
-                        <td>@FormatBytes(result.DataBytes)</td>
-                        <td>@FormatBytes(result.IndexBytes)</td>
-                        <td>@FormatBytes(result.UsedBytes)</td>
-                        <td>@FormatBytes(result.DataBytesPerDocument)</td>
-                        <td>@FormatBytes(result.IndexBytesPerDocument)</td>
-                        <td>@FormatBytes(result.BytesPerDocument)</td>
-                        <td>@FormatBytes(result.EstimatedFullCollectionBytes)</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-
-        <div class="section-title">Source to Projected Target Growth</div>
-        <table class="table table-bordered table-striped table-tight small-text">
-            <thead>
-                <tr>
-                    <th>Namespace</th>
-                    <th>Storage Type</th>
-                    <th>Source Actual</th>
-                    <th>Projected Target</th>
-                    <th>Growth</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var mu in GetStorageValidationUnits().Where(mu => mu.StorageValidationResult != null))
-                {
-                    var result = mu.StorageValidationResult!;
-                    <tr>
-                        <td rowspan="3">@mu.DatabaseName.@mu.CollectionName</td>
-                        <td>Data</td>
-                        <td>@FormatBytes(result.SourceDataBytes)</td>
-                        <td>@FormatBytes(result.EstimatedFullCollectionDataBytes)</td>
-                        <td>@FormatGrowth(result.DataGrowthPercent, result.SampledDocumentCount)</td>
-                    </tr>
-                    <tr>
-                        <td>Indexes</td>
-                        <td>@FormatBytes(result.SourceIndexBytes)</td>
-                        <td>@FormatBytes(result.EstimatedFullCollectionIndexBytes)</td>
-                        <td>@FormatGrowth(result.IndexGrowthPercent, result.SampledDocumentCount)</td>
-                    </tr>
-                    <tr>
-                        <td>Total</td>
-                        <td>@FormatBytes(result.SourceUsedBytes)</td>
-                        <td>@FormatBytes(result.EstimatedFullCollectionBytes)</td>
-                        <td>@FormatGrowth(result.TotalGrowthPercent, result.SampledDocumentCount)</td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-
-        <div class="section-title">Source Storage by Shard</div>
-        @foreach (var shardGroup in GetSourceStorageShardRows().GroupBy(row => row.ShardName).OrderBy(group => group.Key))
-        {
-            <h5 class="mt-3">Source Shard: @shardGroup.Key</h5>
-            <table class="table table-bordered table-striped table-tight small-text">
-                <thead>
-                    <tr>
-                        <th>Namespace</th>
-                        <th>Documents</th>
-                        <th>Data Storage</th>
-                        <th>Index Storage</th>
-                        <th>Total Storage</th>
-                        <th>Data / Doc</th>
-                        <th>Index / Doc</th>
-                        <th>Total / Doc</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var row in shardGroup.OrderBy(row => row.Namespace))
-                    {
-                        <tr>
-                            <td>@row.Namespace</td>
-                            <td>@FormatLong(row.Result.SampledDocumentCount)</td>
-                            <td>@FormatBytes(row.Result.DataBytes)</td>
-                            <td>@FormatBytes(row.Result.IndexBytes)</td>
-                            <td>@FormatBytes(row.Result.UsedBytes)</td>
-                            <td>@FormatBytes(row.Result.DataBytesPerDocument)</td>
-                            <td>@FormatBytes(row.Result.IndexBytesPerDocument)</td>
-                            <td>@FormatBytes(row.Result.BytesPerDocument)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
-
-        <div class="section-title">Projected Target Storage by Shard</div>
-        @foreach (var shardGroup in GetStorageValidationShardRows().GroupBy(row => row.ShardName).OrderBy(group => group.Key))
-        {
-            <h5 class="mt-3">Target Shard: @shardGroup.Key</h5>
-            <table class="table table-bordered table-striped table-tight small-text">
-                <thead>
-                    <tr>
-                        <th>Namespace</th>
-                        <th>Sampled Docs</th>
-                        <th>Estimated Docs</th>
-                        <th>Data Used</th>
-                        <th>Indexes Used</th>
-                        <th>Total Used</th>
-                        <th>Data / Doc</th>
-                        <th>Index / Doc</th>
-                        <th>Total / Doc</th>
-                        <th>Estimated Full Size</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @foreach (var row in shardGroup.OrderBy(row => row.Namespace))
-                    {
-                        <tr>
-                            <td>@row.Namespace</td>
-                            <td>@FormatLong(row.Result.SampledDocumentCount)</td>
-                            <td>@FormatLong(row.Result.EstimatedSourceDocumentCount)</td>
-                            <td>@FormatBytes(row.Result.DataBytes)</td>
-                            <td>@FormatBytes(row.Result.IndexBytes)</td>
-                            <td>@FormatBytes(row.Result.UsedBytes)</td>
-                            <td>@FormatBytes(row.Result.DataBytesPerDocument)</td>
-                            <td>@FormatBytes(row.Result.IndexBytesPerDocument)</td>
-                            <td>@FormatBytes(row.Result.BytesPerDocument)</td>
-                            <td>@FormatBytes(row.Result.EstimatedFullCollectionBytes)</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
-    }
-
-    @if (MigrationJob.JobType != JobType.StorageValidation)
-    {
-        <div class="section-title">Collections</div>
-        <table class="table table-bordered table-striped table-tight small-text report-table">
+    <div class="section-title">Collections</div>
+    <table class="table table-bordered table-striped table-tight small-text report-table">
         <thead>
             <tr>
                 <th class="col-db">Namespace</th>
@@ -361,8 +188,7 @@ else
             </tr>
         }
         </tbody>
-        </table>
-    }
+    </table>
 }
 
 @code {
@@ -389,7 +215,6 @@ else
             OnlineMongoMigrationProcessor.Models.JobType.RUOptimizedCopy => "MongoDB Driver (Cosmos DB RU read optimized)",
             OnlineMongoMigrationProcessor.Models.JobType.MongoDriver => "MongoDB Driver",
             OnlineMongoMigrationProcessor.Models.JobType.DumpAndRestore => "MongoDump and MongoRestore",
-            OnlineMongoMigrationProcessor.Models.JobType.StorageValidation => "Storage Validation",
             _ => "NA"
         };
     }
@@ -416,61 +241,6 @@ else
    
 
     private static string FormatLong(long value) => string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:N0}", value);
-
-    private static string FormatBytes(double value)
-    {
-        string[] units = { "B", "KB", "MB", "GB", "TB" };
-        var unitIndex = 0;
-        while (value >= 1024 && unitIndex < units.Length - 1)
-        {
-            value /= 1024;
-            unitIndex++;
-        }
-        return $"{value:N2} {units[unitIndex]}";
-    }
-
-    private static string FormatGrowth(double? value, long sampledDocumentCount)
-    {
-        return sampledDocumentCount > 0 && value.HasValue
-            ? $"{value.Value:+0.00;-0.00;0.00}%"
-            : "N/A";
-    }
-
-    private List<MigrationUnit> GetStorageValidationUnits()
-    {
-        return JobManager.GetMigrationUnits(MigrationJob!) ?? new List<MigrationUnit>();
-    }
-
-    private IEnumerable<StorageValidationShardRow> GetStorageValidationShardRows()
-    {
-        return GetStorageValidationUnits()
-            .Where(mu => mu.StorageValidationResult != null)
-            .SelectMany(mu => mu.StorageValidationResult!.Shards.Select(shard => new StorageValidationShardRow
-            {
-                Namespace = $"{mu.DatabaseName}.{mu.CollectionName}",
-                ShardName = shard.ShardName,
-                Result = shard
-            }));
-    }
-
-    private IEnumerable<StorageValidationShardRow> GetSourceStorageShardRows()
-    {
-        return GetStorageValidationUnits()
-            .Where(mu => mu.StorageValidationResult != null)
-            .SelectMany(mu => mu.StorageValidationResult!.SourceShards.Select(shard => new StorageValidationShardRow
-            {
-                Namespace = $"{mu.DatabaseName}.{mu.CollectionName}",
-                ShardName = shard.ShardName,
-                Result = shard
-            }));
-    }
-
-    private sealed class StorageValidationShardRow
-    {
-        public string Namespace { get; init; } = string.Empty;
-        public string ShardName { get; init; } = string.Empty;
-        public StorageValidationShardResult Result { get; init; } = new();
-    }
 
     private static string FormatOverwrite(bool? overwrite) => overwrite switch
     {
